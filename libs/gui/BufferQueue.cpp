@@ -32,6 +32,8 @@
 #include <gui/SurfaceTexture.h>
 #include <utils/Trace.h>
 
+#include <testframework/testframework.h>
+
 // Macros for including the BufferQueue name in log messages
 #define ST_LOGV(x, ...) ALOGV("[%s] "x, mConsumerName.string(), ##__VA_ARGS__)
 #define ST_LOGD(x, ...) ALOGD("[%s] "x, mConsumerName.string(), ##__VA_ARGS__)
@@ -265,6 +267,8 @@ status_t BufferQueue::dequeueBuffer(int *outBuf, sp<Fence>& outFence,
         return BAD_VALUE;
     }
 
+    TF_PRINT(TF_EVENT_START, "BufferQueue", "Dequeue", "BufferQueue dequeue start");
+
     status_t returnFlags(OK);
     EGLDisplay dpy = EGL_NO_DISPLAY;
     EGLSyncKHR eglFence = EGL_NO_SYNC_KHR;
@@ -439,6 +443,9 @@ status_t BufferQueue::dequeueBuffer(int *outBuf, sp<Fence>& outFence,
         eglDestroySyncKHR(dpy, eglFence);
     }
 
+    TF_PRINT(TF_EVENT_STOP, "BufferQueue", "Dequeue",
+             "BufferQueue dequeue end, slot=%d", *outBuf);
+
     ST_LOGV("dequeueBuffer: returning slot=%d buf=%p flags=%#x", *outBuf,
             mSlots[*outBuf].mGraphicBuffer->handle, returnFlags);
 
@@ -487,6 +494,12 @@ status_t BufferQueue::queueBuffer(int buf,
     int scalingMode;
     int64_t timestamp;
     sp<Fence> fence;
+
+    #ifdef GFX_TESTFRAMEWORK
+    char eventID[TF_EVENT_ID_SIZE_MAX];
+    snprintf(eventID, TF_EVENT_ID_SIZE_MAX, "Queue-%d", buf);
+    TF_PRINT(TF_EVENT_START, "BufferQueue", eventID, "BufferQueue queue start");
+    #endif
 
     input.deflate(&timestamp, &crop, &scalingMode, &transform, &fence);
 
@@ -587,6 +600,12 @@ status_t BufferQueue::queueBuffer(int buf,
     if (listener != 0) {
         listener->onFrameAvailable();
     }
+
+    #ifdef GFX_TESTFRAMEWORK
+    TF_PRINT(TF_EVENT_STOP, "BufferQueue", eventID,
+             "BufferQueue Queue end");
+    #endif
+
     return OK;
 }
 
@@ -827,6 +846,12 @@ status_t BufferQueue::acquireBuffer(BufferItem *buffer) {
         Fifo::iterator front(mQueue.begin());
         int buf = *front;
 
+        #ifdef GFX_TESTFRAMEWORK
+        char eventID[TF_EVENT_ID_SIZE_MAX];
+        snprintf(eventID, TF_EVENT_ID_SIZE_MAX, "Acquire-%d", buf);
+        TF_PRINT(TF_EVENT_START, "BufferQueue", eventID, "BufferQueue acquire start");
+        #endif
+
         ATRACE_BUFFER_INDEX(buf);
 
         if (mSlots[buf].mAcquireCalled) {
@@ -850,6 +875,11 @@ status_t BufferQueue::acquireBuffer(BufferItem *buffer) {
         mQueue.erase(front);
         mDequeueCondition.broadcast();
 
+        #ifdef GFX_TESTFRAMEWORK
+        TF_PRINT(TF_EVENT_STOP, "BufferQueue", eventID,
+                 "BufferQueue acquire end");
+        #endif
+
         ATRACE_INT(mConsumerName.string(), mQueue.size());
     } else {
         return NO_BUFFER_AVAILABLE;
@@ -862,6 +892,12 @@ status_t BufferQueue::releaseBuffer(int buf, EGLDisplay display,
         EGLSyncKHR eglFence, const sp<Fence>& fence) {
     ATRACE_CALL();
     ATRACE_BUFFER_INDEX(buf);
+
+    #ifdef GFX_TESTFRAMEWORK
+    char eventID[TF_EVENT_ID_SIZE_MAX];
+    snprintf(eventID, TF_EVENT_ID_SIZE_MAX, "Release-%d", buf);
+    TF_PRINT(TF_EVENT_START, "BufferQueue", eventID, "BufferQueue Release start");
+    #endif
 
     Mutex::Autolock _l(mMutex);
 
@@ -886,6 +922,12 @@ status_t BufferQueue::releaseBuffer(int buf, EGLDisplay display,
     }
 
     mDequeueCondition.broadcast();
+
+    #ifdef GFX_TESTFRAMEWORK
+    TF_PRINT(TF_EVENT_STOP, "BufferQueue", eventID,
+             "BufferQueue Release end");
+    #endif
+
     return OK;
 }
 

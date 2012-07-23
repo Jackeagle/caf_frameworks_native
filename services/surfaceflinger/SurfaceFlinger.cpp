@@ -68,6 +68,7 @@
 #include "DisplayHardware/GraphicBufferAlloc.h"
 #include "DisplayHardware/HWComposer.h"
 
+#include <testframework/testframework.h>
 
 #define EGL_VERSION_HW_ANDROID  0x3143
 
@@ -765,12 +766,16 @@ void SurfaceFlinger::onMessageReceived(int32_t what) {
     ATRACE_CALL();
     switch (what) {
     case MessageQueue::INVALIDATE:
+        TF_PRINT(TF_EVENT_START, "SF", "Invalidate", "Composition invalidate start");
         handleMessageTransaction();
         handleMessageInvalidate();
         signalRefresh();
+        TF_PRINT(TF_EVENT_STOP, "SF", "Invalidate", "Composition invalidate end");
         break;
     case MessageQueue::REFRESH:
+        TF_PRINT(TF_EVENT_START, "SF", "CompositionRefresh", "Composition refresh start");
         handleMessageRefresh();
+        TF_PRINT(TF_EVENT_STOP, "SF", "CompositionRefresh", "Composition refresh end");
         break;
     }
 }
@@ -973,6 +978,13 @@ void SurfaceFlinger::setUpHWComposer() {
 void SurfaceFlinger::doComposition() {
     ATRACE_CALL();
     const bool repaintEverything = android_atomic_and(0, &mRepaintEverything);
+    #ifdef GFX_TESTFRAMEWORK
+    int glfinishTIme = 0;
+    int compositionTime = 0;
+    nsecs_t startTime = systemTime();
+    TF_PRINT(TF_EVENT_START, "SF", "Composition",
+             "THREAD:SurfaceFlinger compose start");
+    #endif
     for (size_t dpy=0 ; dpy<mDisplays.size() ; dpy++) {
         const sp<DisplayDevice>& hw(mDisplays[dpy]);
         if (hw->canDraw()) {
@@ -986,10 +998,29 @@ void SurfaceFlinger::doComposition() {
             hw->flip(hw->swapRegion);
             hw->swapRegion.clear();
         }
+
+        #ifdef GFX_TESTFRAMEWORK
+        nsecs_t startgf = systemTime();
+        TF_PRINT(TF_EVENT_START, "SF", "glfinish",
+                 "THREAD:SurfaceFlinger glfinish start");
+        #endif
         // inform the h/w that we're done compositing
         hw->compositionComplete();
+        #ifdef GFX_TESTFRAMEWORK
+        nsecs_t endgf = systemTime();
+        glfinishTIme = ns2ms(endgf - startgf);
+        TF_PRINT(TF_EVENT_STOP, "SF", "glfinish",
+                 "THREAD:SurfaceFlinger glfinish stop");
+        #endif
     }
     postFramebuffer();
+    #ifdef GFX_TESTFRAMEWORK
+    nsecs_t endTime = systemTime();
+    compositionTime = ns2ms(endTime - startTime);
+    TF_PRINT(TF_EVENT_STOP, "SF", "Composition",
+             "THREAD:SurfaceFlinger compose end, CompositionTime %d glFinishTime %d ",
+             compositionTime, glfinishTIme);
+    #endif
 }
 
 void SurfaceFlinger::postFramebuffer()
