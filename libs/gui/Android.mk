@@ -36,6 +36,12 @@ LOCAL_SHARED_LIBRARIES := \
 
 LOCAL_MODULE:= libgui
 
+LOCAL_C_INCLUDES += vendor/qcom/opensource/testframework/inc
+ifeq ($(TARGET_USES_TESTFRAMEWORK),true)
+LOCAL_CFLAGS += -DGFX_TESTFRAMEWORK
+LOCAL_SHARED_LIBRARIES += libtestframework
+endif
+
 ifeq ($(TARGET_BOARD_PLATFORM), omap4)
 	LOCAL_CFLAGS += -DUSE_FENCE_SYNC
 endif

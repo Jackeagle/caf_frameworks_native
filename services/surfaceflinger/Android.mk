@@ -41,6 +41,9 @@ ifeq ($(TARGET_DISABLE_TRIPLE_BUFFERING), true)
 	LOCAL_CFLAGS += -DTARGET_DISABLE_TRIPLE_BUFFERING
 endif
 
+LOCAL_C_INCLUDES += \
+    vendor/qcom/opensource/testframework/inc
+
 LOCAL_SHARED_LIBRARIES := \
 	libcutils \
 	libhardware \
@@ -60,6 +63,11 @@ ifneq ($(TARGET_BUILD_PDK), true)
 	LOCAL_SHARED_LIBRARIES += libdvm libandroid_runtime
 	LOCAL_CLFAGS += -DDDMS_DEBUGGING
 	LOCAL_SRC_FILES += DdmConnection.cpp
+endif
+
+ifeq ($(TARGET_USES_TESTFRAMEWORK),true)
+LOCAL_CFLAGS += -DGFX_TESTFRAMEWORK
+LOCAL_SHARED_LIBRARIES += libtestframework
 endif
 
 LOCAL_MODULE:= libsurfaceflinger
