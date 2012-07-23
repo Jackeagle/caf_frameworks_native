@@ -47,6 +47,8 @@
 #include <gpuformats.h>
 #endif
 
+#include <testframework.h>
+
 #define DEBUG_RESIZE    0
 
 namespace android {
@@ -639,6 +641,23 @@ void Layer::lockPageFlip(bool& recomputeVisibleRegions)
             recomputeVisibleRegions = true;
             return;
         }
+
+#ifdef GFX_TESTFRAMEWORK
+        static int TFStarted = 0;
+        char tfname[TF_EVENT_ID_SIZE_MAX];
+        tfname[0] = '\0';
+
+        if (getName().string() != NULL)
+            strlcpy(tfname, getName().string(), TF_EVENT_ID_SIZE_MAX);
+
+        if (TFStarted) {
+            TF_PRINT(TF_EVENT_STOP, "SF", tfname, "TF new buffer end");
+            TF_PRINT(TF_EVENT_START, "SF", tfname, "TF new buffer start");
+        } else {
+            TF_PRINT(TF_EVENT_START, "SF", tfname, "TF new buffer start");
+           TFStarted = 1;
+        }
+#endif
 
         // update the active buffer
         mActiveBuffer = mSurfaceTexture->getCurrentBuffer();
