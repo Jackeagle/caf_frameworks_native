@@ -49,8 +49,15 @@ LOCAL_MODULE:= libgui
 ifeq ($(TARGET_BOARD_PLATFORM), tegra)
 	LOCAL_CFLAGS += -DDONT_USE_FENCE_SYNC
 endif
+
 ifeq ($(TARGET_BOARD_PLATFORM), tegra3)
 	LOCAL_CFLAGS += -DDONT_USE_FENCE_SYNC
+endif
+
+ifeq ($(TARGET_USES_QCOM_BSP), true)
+    LOCAL_C_INCLUDES += hardware/qcom/display/libgralloc
+    LOCAL_C_INCLUDES += hardware/qcom/display/libqdutils
+    LOCAL_CFLAGS += -DQCOM_BSP
 endif
 
 include $(BUILD_SHARED_LIBRARY)
