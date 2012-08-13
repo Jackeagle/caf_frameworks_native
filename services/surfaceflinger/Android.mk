@@ -51,6 +51,10 @@ LOCAL_SHARED_LIBRARIES := \
 	libui \
 	libgui
 
+ifeq ($(BOARD_USES_QCOM_HARDWARE), true)
+    LOCAL_SHARED_LIBRARIES += libqdutils
+endif
+
 # this is only needed for DDMS debugging
 ifneq ($(TARGET_BUILD_PDK), true)
 	LOCAL_SHARED_LIBRARIES += libdvm libandroid_runtime
