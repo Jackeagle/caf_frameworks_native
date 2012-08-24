@@ -517,6 +517,9 @@ bool SurfaceTexture::isExternalFormat(uint32_t format)
     case HAL_PIXEL_FORMAT_YCbCr_422_SP:
     case HAL_PIXEL_FORMAT_YCrCb_420_SP:
     case HAL_PIXEL_FORMAT_YCbCr_422_I:
+#ifdef QCOMHW
+    case HAL_PIXEL_FORMAT_YCbCr_420_SP_VENUS:
+#endif
         return true;
     }
 
