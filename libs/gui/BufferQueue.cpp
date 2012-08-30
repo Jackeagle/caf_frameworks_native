@@ -31,6 +31,9 @@
 #include <utils/Log.h>
 #include <gui/SurfaceTexture.h>
 #include <utils/Trace.h>
+#ifdef QCOMHW
+#include <gralloc_priv.h>
+#endif // QCOMHW
 
 // This compile option causes SurfaceTexture to return the buffer that is currently
 // attached to the GL texture from dequeueBuffer when no other buffers are
@@ -81,6 +84,85 @@ static const char* scalingModeName(int scalingMode) {
     }
 }
 
+/*
+ * Checks if memory needs to be reallocated for this buffer.
+ *
+ * @param: Geometry of the current buffer.
+ * @param: Required Geometry.
+ * @param: Geometry of the updated buffer.
+ *
+ * @return True if a memory reallocation is required.
+ */
+bool needNewBuffer(const qBufGeometry currentGeometry,
+                   const qBufGeometry requiredGeometry,
+                   const qBufGeometry updatedGeometry)
+{
+    // If the current buffer info matches the updated info,
+    // we do not require any memory allocation.
+    if (updatedGeometry.width && updatedGeometry.height &&
+        updatedGeometry.format) {
+        return false;
+    }
+    if (currentGeometry.width != requiredGeometry.width ||
+        currentGeometry.height != requiredGeometry.height ||
+        currentGeometry.format != requiredGeometry.format) {
+        // Current and required geometry do not match. Allocation
+        // required.
+        return true;
+    }
+    return false;
+}
+
+/*
+ * Update the geometry of this buffer without reallocation.
+ *
+ * @param: buffer whose geometry needs to be updated.
+ * @param: Updated width
+ * @param: Updated height
+ * @param: Updated format
+ */
+int updateBufferGeometry(sp<GraphicBuffer> buffer, const qBufGeometry updatedGeometry)
+{
+    if (buffer == 0) {
+        ALOGE("updateBufferGeometry: graphic buffer is NULL");
+        return -EINVAL;
+    }
+
+    if (!updatedGeometry.width || !updatedGeometry.height ||
+        !updatedGeometry.format) {
+        // No update required. Return.
+        return 0;
+    }
+    if (buffer->width == updatedGeometry.width &&
+        buffer->height == updatedGeometry.height &&
+        buffer->format == updatedGeometry.format) {
+        // The buffer has already been updated. Return.
+        return 0;
+    }
+#ifdef QCOMHW
+    // Validate the handle
+    if (private_handle_t::validate(buffer->handle)) {
+        ALOGE("updateBufferGeometry: handle is invalid");
+        return -EINVAL;
+    }
+#endif // QCOMHW
+    buffer->width  = updatedGeometry.width;
+    buffer->height = updatedGeometry.height;
+    buffer->format = updatedGeometry.format;
+#ifdef QCOMHW
+    private_handle_t *hnd = (private_handle_t*)(buffer->handle);
+    if (hnd) {
+        hnd->width  = updatedGeometry.width;
+        hnd->height = updatedGeometry.height;
+        hnd->format = updatedGeometry.format;
+    } else {
+        ALOGE("updateBufferGeometry: hnd is NULL");
+        return -EINVAL;
+    }
+#endif // QCOMHW
+    return 0;
+}
+
 BufferQueue::BufferQueue(  bool allowSynchronousMode, int bufferCount ) :
     mDefaultWidth(1),
     mDefaultHeight(1),
@@ -110,6 +192,7 @@ BufferQueue::BufferQueue(  bool allowSynchronousMode, int bufferCount ) :
     if (mGraphicBufferAlloc == 0) {
         ST_LOGE("createGraphicBufferAlloc() failed in BufferQueue()");
     }
+    mNextBufferInfo.set(0, 0, 0);
 }
 
 BufferQueue::~BufferQueue() {
@@ -457,16 +540,25 @@ status_t BufferQueue::dequeueBuffer(int *outBuf, uint32_t w, uint32_t h,
             // keep the current (or default) format
             format = mPixelFormat;
         }
-
+        const sp<GraphicBuffer>& buffer(mSlots[buf].mGraphicBuffer);
         // buffer is now in DEQUEUED (but can also be current at the same time,
         // if we're in synchronous mode)
         mSlots[buf].mBufferState = BufferSlot::DEQUEUED;
+        qBufGeometry currentGeometry;
+        if (buffer != NULL)
+            currentGeometry.set(buffer->width, buffer->height, buffer->format);
+        else
+            currentGeometry.set(0, 0, 0);
 
-        const sp<GraphicBuffer>& buffer(mSlots[buf].mGraphicBuffer);
+        qBufGeometry requiredGeometry;
+        requiredGeometry.set(w, h, format);
+
+        qBufGeometry updatedGeometry;
+        updatedGeometry.set(mNextBufferInfo.width, mNextBufferInfo.height,
+                            mNextBufferInfo.format);
+
         if ((buffer == NULL) ||
-            (uint32_t(buffer->width)  != w) ||
-            (uint32_t(buffer->height) != h) ||
-            (uint32_t(buffer->format) != format) ||
+             needNewBuffer(currentGeometry, requiredGeometry, updatedGeometry) ||
             ((uint32_t(buffer->usage) & usage) != usage))
         {
             status_t error;
@@ -513,6 +605,13 @@ status_t BufferQueue::dequeueBuffer(int *outBuf, uint32_t w, uint32_t h,
             mSlots[*outBuf].mGraphicBuffer->handle, returnFlags);
 
     return returnFlags;
+}
+
+status_t BufferQueue::updateBuffersGeometry(int w, int h, int f) {
+    ST_LOGV("updateBuffersGeometry: w=%d h=%d f=%d", w, h, f);
+    Mutex::Autolock lock(mMutex);
+    mNextBufferInfo.set(w, h, f);
+    return NO_ERROR;
 }
 
 status_t BufferQueue::setSynchronousMode(bool enabled) {
@@ -585,6 +684,12 @@ status_t BufferQueue::queueBuffer(int buf,
                     "buffer", buf);
             return -EINVAL;
         }
+
+        // Update the buffer Geometry if required
+        qBufGeometry updatedGeometry;
+        updatedGeometry.set(mNextBufferInfo.width,
+                            mNextBufferInfo.height, mNextBufferInfo.format);
+        updateBufferGeometry(mSlots[buf].mGraphicBuffer, updatedGeometry);
 
         const sp<GraphicBuffer>& graphicBuffer(mSlots[buf].mGraphicBuffer);
         Rect bufferRect(graphicBuffer->getWidth(), graphicBuffer->getHeight());
@@ -746,6 +851,7 @@ status_t BufferQueue::disconnect(int api) {
                 if (mConnectedApi == api) {
                     drainQueueAndFreeBuffersLocked();
                     mConnectedApi = NO_CONNECTED_API;
+                    mNextBufferInfo.set(0, 0, 0);
                     mDequeueCondition.broadcast();
                     listener = mConsumerListener;
                 } else {
