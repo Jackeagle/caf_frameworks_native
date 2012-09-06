@@ -352,7 +352,7 @@ void Layer::onDraw(const Region& clip) const
         return;
     }
 #ifdef QCOMHW
-    if (!qdutils::isGPUSupportedFormat(mActiveBuffer->format)) {
+    if (!qdutils::isGPUSupportedFormat(mActiveBuffer->handle)) {
         clearWithOpenGL(clip, 0, 0, 0, 1);
         return;
     }

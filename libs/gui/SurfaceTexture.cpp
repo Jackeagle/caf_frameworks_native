@@ -258,7 +258,7 @@ status_t SurfaceTexture::updateTexImage(BufferRejecter* rejecter) {
             } else {
 #ifdef QCOMHW
                 gpuSupportedFormat = qdutils::isGPUSupportedFormat(
-                    mEGLSlots[buf].mGraphicBuffer->format);
+                   mEGLSlots[buf].mGraphicBuffer->handle);
 #endif
                 if(gpuSupportedFormat) {
                     image = createImage(dpy, mEGLSlots[buf].mGraphicBuffer);
