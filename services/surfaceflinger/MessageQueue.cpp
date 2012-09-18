@@ -133,8 +133,14 @@ status_t MessageQueue::postMessage(
 }
 
 void MessageQueue::invalidate() {
-//    mHandler->signalInvalidate();
-    mEvents->requestNextVsync();
+    /*
+     * If SF is not composing currently and last cycle was
+     * MDP composition, signal invalidate
+     */
+    if (mFlinger->isImmediateInvalidateCandidate())
+        mHandler->signalInvalidate();
+    else
+        mEvents->requestNextVsync();
 }
 
 void MessageQueue::refresh() {

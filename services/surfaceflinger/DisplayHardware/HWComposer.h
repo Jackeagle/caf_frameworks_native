@@ -110,6 +110,9 @@ public:
     void dump(String8& out, char* scratch, size_t SIZE,
             const Vector< sp<LayerBase> >& visibleLayersSortedByZ) const;
 
+    int isOverlayComposition() const;
+    void resetCompositionType() const;
+
 private:
 
     struct callbacks : public hwc_procs_t {
@@ -145,6 +148,8 @@ private:
     size_t                  mVSyncCount;
     sp<VSyncThread>         mVSyncThread;
     bool                    mDebugForceFakeVSync;
+    mutable Mutex           mLock;
+    mutable int             mCompositionType;
 };
 
 
