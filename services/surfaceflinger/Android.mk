@@ -34,6 +34,7 @@ endif
 ifeq ($(BOARD_USES_QCOM_HARDWARE), true)
     LOCAL_C_INCLUDES += hardware/qcom/display/libgralloc
     LOCAL_C_INCLUDES += hardware/qcom/display/libqdutils
+    LOCAL_C_INCLUDES += hardware/qcom/display/libhwcomposer
     LOCAL_CFLAGS += -DQCOMHW
     LOCAL_WHOLE_STATIC_LIBRARIES += libqc-surfaceflinger
 endif

@@ -383,6 +383,11 @@ void SurfaceFlinger::signalTransaction() {
     mEventQueue.invalidate();
 }
 
+int SurfaceFlinger::isCopybitComposition() const {
+    HWComposer& hwc(graphicPlane(0).displayHardware().getHwComposer());
+    return hwc.isCopybitComposition();
+}
+
 void SurfaceFlinger::signalLayerUpdate() {
     mEventQueue.invalidate();
 }
@@ -422,6 +427,7 @@ void SurfaceFlinger::onMessageReceived(int32_t what)
 
     ATRACE_CALL();
     switch (what) {
+        case MessageQueue::INVALIDATE:
         case MessageQueue::REFRESH: {
           TF_PRINT(TF_EVENT_START, "SF", "CompositionRefresh", "Composition refresh start");
 //        case MessageQueue::INVALIDATE: {
