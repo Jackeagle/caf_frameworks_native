@@ -25,6 +25,7 @@
 
 #include <utils/Errors.h>
 #include <utils/Trace.h>
+#include <testframework.h>
 
 #include "DisplayHardware/DisplayHardware.h"
 #include "EventThread.h"
@@ -216,6 +217,7 @@ bool EventThread::threadLoop() {
     } while (!displayEventConnections.size());
 
     // dispatch vsync events to listeners...
+    TF_PRINT(TF_EVENT_START, "SF", "Vsync", " Vsync Dispatch Start");
     vsync.header.type = DisplayEventReceiver::DISPLAY_EVENT_VSYNC;
     vsync.header.timestamp = timestamp;
     vsync.vsync.count = mDeliveredEvents;
@@ -244,6 +246,7 @@ bool EventThread::threadLoop() {
             removeDisplayEventConnection(displayEventConnections[i]);
         }
     }
+    TF_PRINT(TF_EVENT_STOP, "SF", "Vsync", " Vsync Dispatch end");
 
     // clear all our references without holding mLock
     displayEventConnections.clear();
