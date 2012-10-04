@@ -41,7 +41,6 @@
 #include "SurfaceFlinger.h"
 #ifdef QCOMHW
 #include "qcom_ui.h"
-#include "hwc_utils.h"
 #endif
 
 namespace android {
@@ -185,12 +184,11 @@ status_t HWComposer::prepare() const {
                     numFBLayers++;
                     break;
 #ifdef QCOMHW
-                case qhwc::HWC_USE_COPYBIT:
-                    numCopybitLayers++;
-                    break;
                 default:
-                    if(qdutils::CBUtils::isUpdatingFB((int)l.compositionType))
+                    if(qdutils::CBUtils::isUpdatingFB((int)l.compositionType)){
                         numFBLayers++;
+                        numCopybitLayers++;
+                }
 #endif
             }
         }
