@@ -56,6 +56,9 @@
 #include "LayerDim.h"
 #include "LayerScreenshot.h"
 #include "SurfaceFlinger.h"
+#ifdef QCOMHW
+#include "qcom_ui.h"
+#endif
 
 #include "DisplayHardware/DisplayHardware.h"
 #include "DisplayHardware/HWComposer.h"
@@ -64,9 +67,6 @@
 #include <private/gui/SharedBufferStack.h>
 #include <gui/BitTube.h>
 
-#ifdef QCOMHW
-#include <clear_regions.h>
-#endif
 
 #define EGL_VERSION_HW_ANDROID  0x3143
 
@@ -382,6 +382,11 @@ void SurfaceFlinger::signalTransaction() {
     mEventQueue.invalidate();
 }
 
+int SurfaceFlinger::isCopybitComposition() const {
+    HWComposer& hwc(graphicPlane(0).displayHardware().getHwComposer());
+    return hwc.isCopybitComposition();
+}
+
 void SurfaceFlinger::signalLayerUpdate() {
     mEventQueue.invalidate();
 }
@@ -414,6 +419,7 @@ void SurfaceFlinger::onMessageReceived(int32_t what)
 {
     ATRACE_CALL();
     switch (what) {
+        case MessageQueue::INVALIDATE:
         case MessageQueue::REFRESH: {
 //        case MessageQueue::INVALIDATE: {
             // if we're in a global transaction, don't do anything.
@@ -925,13 +931,24 @@ void SurfaceFlinger::composeSurfaces(const Region& dirty)
             // remove where there are opaque FB layers. however, on some
             // GPUs doing a "clean slate" glClear might be more efficient.
             // We'll revisit later if needed.
-            glClearColor(0, 0, 0, 0);
-            glClear(GL_COLOR_BUFFER_BIT);
+             const Region region(hw.bounds());
+#ifdef QCOMHW
+             if (0 != qdutils::CBUtils::qcomuiClearRegion(region,
+                                              hw.getEGLDisplay()))
+#endif
+             {
+                 glClearColor(0, 0, 0, 0);
+                 glClear(GL_COLOR_BUFFER_BIT);
+             }
         } else {
             // screen is already cleared here
             if (!mWormholeRegion.isEmpty()) {
                 // can happen with SurfaceView
-                drawWormhole();
+#ifdef QCOMHW
+                if (0 != qdutils::CBUtils::qcomuiClearRegion(mWormholeRegion,
+                                            hw.getEGLDisplay()))
+#endif
+                    drawWormhole();
             }
         }
 
@@ -951,10 +968,19 @@ void SurfaceFlinger::composeSurfaces(const Region& dirty)
                             && layer->isOpaque()) {
                         // never clear the very first layer since we're
                         // guaranteed the FB is already cleared
+#ifdef QCOMHW
+                        if (0 != qdutils::CBUtils::qcomuiClearRegion(clip,
+                                                           hw.getEGLDisplay()))
+#endif
                         layer->clearWithOpenGL(clip);
                     }
                     continue;
                 }
+#ifdef QCOMHW
+                if (cur && (cur[i].compositionType != HWC_FRAMEBUFFER))
+                    continue;
+#endif
+
                 // render the layer
                 layer->draw(clip);
             }
@@ -963,7 +989,8 @@ void SurfaceFlinger::composeSurfaces(const Region& dirty)
             const Region region(mWormholeRegion.intersect(mDirtyRegion));
             if (!region.isEmpty()) {
 #ifdef QCOMHW
-               if (0 != qdutils::qcomuiClearRegion(region, hw.getEGLDisplay()))
+                if (0 != qdutils::CBUtils::qcomuiClearRegion(region,
+                                            hw.getEGLDisplay()))
 #endif
                       drawWormhole();
         }
@@ -1023,6 +1050,9 @@ void SurfaceFlinger::drawWormhole() const
     if (region.isEmpty())
         return;
 
+    const DisplayHardware& hw(graphicPlane(0).displayHardware());
+    const int32_t height = hw.getHeight();
+
     glDisable(GL_TEXTURE_EXTERNAL_OES);
     glDisable(GL_TEXTURE_2D);
     glDisable(GL_BLEND);
@@ -1035,13 +1065,13 @@ void SurfaceFlinger::drawWormhole() const
     while (it != end) {
         const Rect& r = *it++;
         vertices[0][0] = r.left;
-        vertices[0][1] = r.top;
+        vertices[0][1] = height - r.top;
         vertices[1][0] = r.right;
-        vertices[1][1] = r.top;
+        vertices[1][1] = height - r.top;
         vertices[2][0] = r.right;
-        vertices[2][1] = r.bottom;
+        vertices[2][1] = height - r.bottom;
         vertices[3][0] = r.left;
-        vertices[3][1] = r.bottom;
+        vertices[3][1] = height - r.bottom;
         glDrawArrays(GL_TRIANGLE_FAN, 0, 4);
     }
 }

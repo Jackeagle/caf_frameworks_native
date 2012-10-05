@@ -110,6 +110,7 @@ public:
     void dump(String8& out, char* scratch, size_t SIZE,
             const Vector< sp<LayerBase> >& visibleLayersSortedByZ) const;
 
+    int isCopybitComposition() const;
 private:
 
     struct callbacks : public hwc_procs_t {
@@ -137,6 +138,7 @@ private:
     size_t                  mCapacity;
     mutable size_t          mNumOVLayers;
     mutable size_t          mNumFBLayers;
+    mutable size_t          mNumCopybitLayers;
     hwc_display_t           mDpy;
     hwc_surface_t           mSur;
     cb_context              mCBContext;
