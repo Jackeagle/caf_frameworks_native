@@ -129,6 +129,9 @@ bool EventThread::threadLoop() {
     nsecs_t timestamp;
     DisplayEventReceiver::Event vsync;
     Vector< sp<EventThread::Connection> > displayEventConnections;
+    // dummy vector of strong pointer Connection object to avoid refCount of
+    // strong pointer to become zero.
+    Vector< sp<EventThread::Connection> > connectionList;
 
     do {
         Mutex::Autolock _l(mLock);
@@ -143,6 +146,7 @@ bool EventThread::threadLoop() {
             for (size_t i=0 ; i<count ; i++) {
                 sp<Connection> connection =
                         mDisplayEventConnections.itemAt(i).promote();
+                connectionList.add(connection);
                 if (connection!=0 && connection->count >= 0) {
                     // at least one continuous mode or active one-shot event
                     waitForNextVsync = true;
@@ -247,6 +251,7 @@ bool EventThread::threadLoop() {
 
     // clear all our references without holding mLock
     displayEventConnections.clear();
+    connectionList.clear();
 
     return true;
 }
