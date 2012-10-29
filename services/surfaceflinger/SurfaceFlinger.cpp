@@ -57,6 +57,7 @@
 #include "LayerScreenshot.h"
 #include "SurfaceFlinger.h"
 #ifdef QCOMHW
+#include "profiler.h"
 #include "qcom_ui.h"
 #endif
 
@@ -1147,6 +1148,9 @@ status_t SurfaceFlinger::removeLayer_l(const sp<LayerBase>& layerBase)
 {
     sp<LayerBaseClient> lbc(layerBase->getLayerBaseClient());
     if (lbc != 0) {
+#ifdef QCOMHW
+        qdutils::VsyncMiss::getInstance().removeLayer(lbc->getIdentity());
+#endif
         mLayerMap.removeItem( lbc->getSurfaceBinder() );
     }
     ssize_t index = mCurrentState.layersSortedByZ.remove(layerBase);
@@ -1292,6 +1296,9 @@ sp<ISurface> SurfaceFlinger::createSurface(
             if (normalLayer != 0) {
                 Mutex::Autolock _l(mStateLock);
                 mLayerMap.add(layer->getSurfaceBinder(), normalLayer);
+#ifdef QCOMHW
+                qdutils::VsyncMiss::getInstance().addLayer(layer->getIdentity(), name);
+#endif
             }
         }
 
