@@ -72,7 +72,7 @@ struct CryptoPlugin {
     // the error code and the errorDetailMsg.
     // Returns a non-negative result to indicate the number of bytes written
     // to the dstPtr, or a negative result to indicate an error.
-    virtual ssize_t decrypt(
+    virtual status_t decrypt(
             bool secure,
             const uint8_t key[16],
             const uint8_t iv[16],
