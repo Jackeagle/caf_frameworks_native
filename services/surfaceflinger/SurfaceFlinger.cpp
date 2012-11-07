@@ -429,6 +429,12 @@ void SurfaceFlinger::onMessageReceived(int32_t what)
                 handleTransaction(transactionFlags);
             }
 
+            const uint32_t mask1 = eDelayedTraversalNeeded;
+            uint32_t transactionFlags1 = peekTransactionFlags(mask1);
+            if (CC_UNLIKELY(transactionFlags1)) {
+                handleDelayedTransaction(transactionFlags);
+            }
+
             // post surfaces (if needed)
             handlePageFlip();
 
@@ -489,6 +495,54 @@ void SurfaceFlinger::postFramebuffer()
     mDebugInSwapBuffers = 0;
     mSwapRegion.clear();
 }
+
+void SurfaceFlinger::handleDelayedTransaction(uint32_t transactionFlags)
+{
+    ATRACE_CALL();
+
+    Mutex::Autolock _l(mStateLock);
+    const nsecs_t now = systemTime();
+    mDebugInTransaction = now;
+
+    // Here we're guaranteed that some transaction flags are set
+    // so we can call handleTransactionLocked() unconditionally.
+    // We call getTransactionFlags(), which will also clear the flags,
+    // with mStateLock held to guarantee that mCurrentState won't change
+    // until the transaction is committed.
+
+    const uint32_t mask = eDelayedTraversalNeeded;
+    transactionFlags = getTransactionFlags(mask);
+
+
+    const LayerVector& currentLayers(mCurrentState.layersSortedByZ);
+    const size_t count = currentLayers.size();
+
+    /*
+     * Traversal of the children
+     * (perform the transaction for each of them if needed)
+     */
+
+    const bool layersNeedTransaction = transactionFlags & eDelayedTraversalNeeded;
+    if (layersNeedTransaction) {
+        for (size_t i=0 ; i<count ; i++) {
+            const sp<LayerBase>& layer = currentLayers[i];
+            uint32_t trFlags = layer->getTransactionFlags(eTransactionNeeded);
+            if (!trFlags) continue;
+
+            const uint32_t flags = layer->doTransaction(0);
+            if (flags & Layer::eVisibleRegion)
+                mVisibleRegionsDirty = true;
+        }
+    }
+
+
+
+    mLastTransactionTime = systemTime() - now;
+    mDebugInTransaction = 0;
+    invalidateHwcGeometry();
+    // here the transaction has been committed
+}
+
 
 void SurfaceFlinger::handleTransaction(uint32_t transactionFlags)
 {
@@ -1165,7 +1219,8 @@ uint32_t SurfaceFlinger::getTransactionFlags(uint32_t flags)
 uint32_t SurfaceFlinger::setTransactionFlags(uint32_t flags)
 {
     uint32_t old = android_atomic_or(flags, &mTransactionFlags);
-    if ((old & flags)==0) { // wake the server up
+    if ((flags != eDelayedTraversalNeeded) &&
+                                 ((old & flags)==0)) { // wake the server up
         signalTransaction();
     }
     return old;
@@ -1377,7 +1432,7 @@ uint32_t SurfaceFlinger::setClientStateLocked(
         const uint32_t what = s.what;
         if (what & ePositionChanged) {
             if (layer->setPosition(s.x, s.y))
-                flags |= eTraversalNeeded;
+                flags |= eDelayedTraversalNeeded;
         }
         if (what & eLayerChanged) {
             ssize_t idx = mCurrentState.layersSortedByZ.indexOf(layer);
@@ -1412,7 +1467,7 @@ uint32_t SurfaceFlinger::setClientStateLocked(
         }
         if (what & eCropChanged) {
             if (layer->setCrop(s.crop))
-                flags |= eTraversalNeeded;
+                flags |= eDelayedTraversalNeeded;
         }
     }
     return flags;
