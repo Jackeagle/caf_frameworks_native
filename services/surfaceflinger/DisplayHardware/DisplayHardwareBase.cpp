@@ -23,6 +23,7 @@
 #include <fcntl.h>
 
 #include <utils/Log.h>
+#include <cutils/properties.h>
 
 #include "DisplayHardware/DisplayHardwareBase.h"
 #include "SurfaceFlinger.h"
@@ -37,18 +38,41 @@ static char const * const kWakeFileName  = "/sys/power/wait_for_fb_wake";
 
 DisplayHardwareBase::DisplayEventThread::DisplayEventThread(
         const sp<SurfaceFlinger>& flinger)
-    : Thread(false), mFlinger(flinger) {
+    : Thread(false), mFlinger(flinger), always_on(0) {
+
+    char value[PROPERTY_VALUE_MAX];
+    int val;
+
+    if (property_get("debug.sf.fb_always_on", value, "0") > 0) {
+        val = atoi(value);
+        if (val > 0)
+            always_on = 1;
+    }
 }
 
 DisplayHardwareBase::DisplayEventThread::~DisplayEventThread() {
 }
 
 status_t DisplayHardwareBase::DisplayEventThread::initCheck() const {
+    if (always_on)
+        return NO_ERROR;
+
     return ((access(kSleepFileName, R_OK) == 0 &&
             access(kWakeFileName, R_OK) == 0)) ? NO_ERROR : NO_INIT;
 }
 
 bool DisplayHardwareBase::DisplayEventThread::threadLoop() {
+
+    if (always_on) {
+        ALOGW("Force fb always_on");
+        sp<SurfaceFlinger> flinger = mFlinger.promote();
+        if (flinger != 0)
+            flinger->screenAcquired();
+        do {
+            sleep(6000);
+        } while (1);
+        return true;
+    }
 
     if (waitForFbSleep() == NO_ERROR) {
         sp<SurfaceFlinger> flinger = mFlinger.promote();
