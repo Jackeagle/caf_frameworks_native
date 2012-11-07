@@ -172,6 +172,10 @@ public:
    // dequeue buffer.
     virtual status_t setBuffersSize(int size) = 0;
 
+    // update buffer width, height and format information from the client
+    // which will take effect in the next queue buffer.
+    virtual status_t updateBuffersGeometry(int w, int h, int f) = 0;
+
     // connect attempts to connect a client API to the SurfaceTexture.  This
     // must be called before any other ISurfaceTexture methods are called except
     // for getAllocator.
