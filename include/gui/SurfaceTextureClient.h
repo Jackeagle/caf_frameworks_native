@@ -93,6 +93,7 @@ private:
     int dispatchSetCrop(va_list args);
     int dispatchSetPostTransformCrop(va_list args);
     int dispatchSetUsage(va_list args);
+    int dispatchSetBuffersSize(va_list args);
     int dispatchLock(va_list args);
     int dispatchUnlockAndPost(va_list args);
 
@@ -103,7 +104,7 @@ protected:
     virtual int perform(int operation, va_list args);
     virtual int query(int what, int* value) const;
     virtual int setSwapInterval(int interval);
-
+    virtual int setBuffersSize(int size);
     virtual int lockBuffer_DEPRECATED(ANativeWindowBuffer* buffer);
 
     virtual int connect(int api);
@@ -160,6 +161,10 @@ private:
     // mReqUsage is the set of buffer usage flags that will be requested
     // at the next deuque operation. It is initialized to 0.
     uint32_t mReqUsage;
+
+    // mReqSize is the size of the buffer that will be requested
+    // at the next dequeue operation. It is initialized to 0.
+    uint32_t mReqSize;
 
     // mTimestamp is the timestamp that will be used for the next buffer queue
     // operation. It defaults to NATIVE_WINDOW_TIMESTAMP_AUTO, which means that
