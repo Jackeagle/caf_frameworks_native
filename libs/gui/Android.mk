@@ -58,9 +58,11 @@ ifeq ($(TARGET_BOARD_PLATFORM), tegra)
 endif
 
 ifeq ($(BOARD_USES_QCOM_HARDWARE), true)
+  ifneq ($(TARGET_BYPASS_QCUI), true)
     LOCAL_C_INCLUDES += hardware/qcom/display/libgralloc
     LOCAL_C_INCLUDES += hardware/qcom/display/libqdutils
     LOCAL_CFLAGS += -DQCOMHW
+  endif
 endif
 
 include $(BUILD_SHARED_LIBRARY)
