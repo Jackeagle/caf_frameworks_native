@@ -120,6 +120,8 @@ void HWComposer::hook_vsync(struct hwc_procs* procs, int dpy, int64_t timestamp)
 }
 
 void HWComposer::invalidate() {
+    // invalidate the HWCGeometry, as all the layers has to be redrawn
+    mFlinger->invalidateHwcGeometry();
     mFlinger->repaintEverything();
 }
 
