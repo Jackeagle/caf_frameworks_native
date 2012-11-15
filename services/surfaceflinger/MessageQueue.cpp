@@ -133,8 +133,15 @@ status_t MessageQueue::postMessage(
 }
 
 void MessageQueue::invalidate() {
-//    mHandler->signalInvalidate();
-    mEvents->requestNextVsync();
+    /*
+     * For MDP composition work immediately on frame.
+     * A frame coming just around the vsync can cause
+     * one composition to miss, avoid it in MDP composition
+     */
+    if (mFlinger->isCopybitComposition())
+        mHandler->signalInvalidate();
+    else
+        mEvents->requestNextVsync();
 }
 
 void MessageQueue::refresh() {
