@@ -55,6 +55,8 @@ private:
         virtual ~DisplayEventThread();
         virtual bool threadLoop();
         status_t initCheck() const;
+    private:
+        int always_on;
     };
 
     sp<DisplayEventThread>  mDisplayEventThread;
