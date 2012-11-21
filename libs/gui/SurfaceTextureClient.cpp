@@ -22,6 +22,7 @@
 
 #include <utils/Log.h>
 #include <utils/Trace.h>
+#include <utils/KeyedVector.h>
 
 #include <gui/ISurfaceComposer.h>
 #include <gui/SurfaceComposerClient.h>
@@ -34,6 +35,8 @@
 #endif
 
 namespace android {
+
+static KeyedVector<const SurfaceTextureClient*, int> sQueueBufferStatus;
 
 SurfaceTextureClient::SurfaceTextureClient(
         const sp<ISurfaceTexture>& surfaceTexture)
@@ -58,6 +61,8 @@ SurfaceTextureClient::~SurfaceTextureClient() {
     if (mConnectedToCpu) {
         SurfaceTextureClient::disconnect(NATIVE_WINDOW_API_CPU);
     }
+
+    sQueueBufferStatus.removeItem(this);
 }
 
 void SurfaceTextureClient::init() {
@@ -72,7 +77,7 @@ void SurfaceTextureClient::init() {
 
     const_cast<int&>(ANativeWindow::minSwapInterval) = 0;
     const_cast<int&>(ANativeWindow::maxSwapInterval) = 1;
-
+    sQueueBufferStatus.add(this, 0);
     mReqWidth = 0;
     mReqHeight = 0;
     mReqFormat = 0;
@@ -190,6 +195,7 @@ int SurfaceTextureClient::dequeueBuffer(android_native_buffer_t** buffer) {
         }
     }
     *buffer = gbuf.get();
+    sQueueBufferStatus.replaceValueFor(this, 1);
     return OK;
 }
 
@@ -202,6 +208,8 @@ int SurfaceTextureClient::cancelBuffer(android_native_buffer_t* buffer) {
         return i;
     }
     mSurfaceTexture->cancelBuffer(i);
+    // Reset the value, since the buffer has been cancelled.
+    sQueueBufferStatus.replaceValueFor(this, 0);
     return OK;
 }
 
@@ -257,6 +265,7 @@ int SurfaceTextureClient::queueBuffer(android_native_buffer_t* buffer) {
             &numPendingBuffers);
 
     mConsumerRunningBehind = (numPendingBuffers >= 2);
+    sQueueBufferStatus.replaceValueFor(this, 0);
 
     return err;
 }
@@ -292,9 +301,6 @@ int SurfaceTextureClient::query(int what, int* value) const {
             case NATIVE_WINDOW_DEFAULT_HEIGHT:
                 *value = mUserHeight ? mUserHeight : mDefaultHeight;
                 return NO_ERROR;
-            case NATIVE_WINDOW_TRANSFORM_HINT:
-                *value = mTransformHint;
-                return NO_ERROR;
             case NATIVE_WINDOW_CONSUMER_RUNNING_BEHIND: {
                 status_t err = NO_ERROR;
                 if (!mConsumerRunningBehind) {
@@ -306,6 +312,18 @@ int SurfaceTextureClient::query(int what, int* value) const {
                     }
                 }
                 return err;
+            }
+            case NATIVE_WINDOW_TRANSFORM_HINT:
+            {
+                int queueStatus = sQueueBufferStatus.valueFor(this);
+                // Check the queue status. If the value is 0, we have
+                // already done a queue and the local variable is up to
+                // date. Use the local value. (set the variable during
+                // dequeue and reset it on queue)
+                if (queueStatus == 0) {
+                    *value = mTransformHint;
+                    return NO_ERROR;
+                }
             }
         }
     }
