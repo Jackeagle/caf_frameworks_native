@@ -83,6 +83,7 @@ public:
             const sp<BufferQueue> &bufferQueue = 0);
 
     virtual ~SurfaceTexture();
+    //virtual status_t updateDirtyRegion(int bufferidx, int l, int t, int r, int b);
 
     // updateTexImage sets the image contents of the target texture to that of
     // the most recently queued buffer.
@@ -163,6 +164,10 @@ public:
 
     // getCurrentScalingMode returns the scaling mode of the current buffer.
     uint32_t getCurrentScalingMode() const;
+
+    // getDirtyRegion returns the current dirty region stored during
+    // updateTexImage
+    Rect getDirtyRegion();
 
     // isSynchronousMode returns whether the SurfaceTexture is currently in
     // synchronous mode.
@@ -412,6 +417,7 @@ private:
     // variables of SurfaceTexture objects. It must be locked whenever the
     // member variables are accessed.
     mutable Mutex mMutex;
+
 };
 
 // ----------------------------------------------------------------------------

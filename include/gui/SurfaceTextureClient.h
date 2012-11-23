@@ -95,6 +95,7 @@ protected:
     virtual int queueBuffer(ANativeWindowBuffer* buffer);
     virtual int setSwapInterval(int interval);
     virtual int setBuffersSize(int size);
+    virtual int setDirtyRegion(Rect dirty);
 
     virtual int connect(int api);
     virtual int disconnect(int api);
@@ -215,6 +216,10 @@ private:
     // GRALLOC_USAGE_PRIVATE_EXTERNAL_CC,
     // It is initialized to 0
     uint32_t mReqExtUsage;
+
+    // mDequeueIdx is the index of the most recent buffer that was dequeued.
+    // This is used to store the dirty regions in the correct slots.
+    int mDequeueIdx;
 };
 
 }; // namespace android

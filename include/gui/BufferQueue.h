@@ -161,6 +161,10 @@ public:
     // connected to the specified client API.
     virtual status_t disconnect(int api);
 
+    virtual status_t updateDirtyRegion(int bufferidx, int l, int t, int r, int b);
+    Rect getCurrentDirtyRegion();
+    virtual status_t setCurrentDirtyRegion(int bufferidx);
+
     // dump our state in a String
     virtual void dump(String8& result) const;
     virtual void dump(String8& result, const char* prefix, char* buffer, size_t SIZE) const;
@@ -488,6 +492,11 @@ private:
 
     // mTransformHint is used to optimize for screen rotations
     uint32_t mTransformHint;
+
+    //Swaprect : propagate dirty region
+    mutable Rect mDirtyRegion[BufferQueue::NUM_BUFFER_SLOTS];
+    Rect mCurrentDirtyRegion;
+
 };
 
 // ----------------------------------------------------------------------------

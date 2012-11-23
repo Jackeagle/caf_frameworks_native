@@ -33,6 +33,7 @@ namespace android {
 enum {
     REQUEST_BUFFER = IBinder::FIRST_CALL_TRANSACTION,
     SET_BUFFER_COUNT,
+    UPDATE_DIRTY_REGION,
     DEQUEUE_BUFFER,
     QUEUE_BUFFER,
     CANCEL_BUFFER,
@@ -81,6 +82,24 @@ public:
         result = reply.readInt32();
         return result;
     }
+
+    virtual status_t updateDirtyRegion (int bufferidx, int l, int t, int r, int b) {
+    Parcel data, reply;
+        data.writeInterfaceToken(ISurfaceTexture::getInterfaceDescriptor());
+        data.writeInt32(bufferidx);
+        data.writeInt32(l);
+        data.writeInt32(t);
+        data.writeInt32(r);
+        data.writeInt32(b);
+        status_t result = remote()->transact(UPDATE_DIRTY_REGION, data, &reply);
+        if (result != NO_ERROR) {
+           return result;
+        }
+        result = reply.readInt32();
+        return result;
+    }
+
+
 
     virtual status_t dequeueBuffer(int *buf, uint32_t w, uint32_t h,
             uint32_t format, uint32_t usage) {
@@ -208,6 +227,17 @@ status_t BnSurfaceTexture::onTransact(
             CHECK_INTERFACE(ISurfaceTexture, data, reply);
             int bufferCount = data.readInt32();
             int result = setBufferCount(bufferCount);
+            reply->writeInt32(result);
+            return NO_ERROR;
+        } break;
+	case UPDATE_DIRTY_REGION: {
+            CHECK_INTERFACE(ISurfaceTexture, data, reply);
+            int bufferidx = data.readInt32();
+            int l = data.readInt32();
+            int t = data.readInt32();
+            int r = data.readInt32();
+            int b = data.readInt32();
+            int result = updateDirtyRegion(bufferidx, l, t, r, b);
             reply->writeInt32(result);
             return NO_ERROR;
         } break;
