@@ -68,11 +68,14 @@ Layer::Layer(SurfaceFlinger* flinger,
         mGLExtensions(GLExtensions::getInstance()),
         mOpaqueLayer(true),
         mNeedsDithering(false),
+        mDirtyRectRepeatCount(0),
         mSecure(false),
         mProtectedByApp(false)
 {
     mCurrentCrop.makeInvalid();
     glGenTextures(1, &mTextureName);
+    Rect x(-1,-1,-1,-1);
+    mSwapDirtyRect.set(x);
 }
 
 void Layer::onLayerDisplayed() {
@@ -688,7 +691,27 @@ void Layer::lockPageFlip(bool& recomputeVisibleRegions)
 
         glTexParameterx(GL_TEXTURE_EXTERNAL_OES, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
         glTexParameterx(GL_TEXTURE_EXTERNAL_OES, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+
+        // TODO: Add logic to check for swaprect property?
+        // Use Dirty Region info passed from hwui through SurfaceTexture
+        Rect temp = mSurfaceTexture->getDirtyRegion();
+        if (temp == mSwapDirtyRect) {
+            mDirtyRectRepeatCount++;
+        } else {
+            mDirtyRectRepeatCount=0;
+            mSwapDirtyRect = temp;
+        }
+    } else {
+        if (mSwapDirtyRect.isEmpty()) {
+            mDirtyRectRepeatCount++;
+        } else {
+            mDirtyRectRepeatCount=0;
+            mSwapDirtyRect.clear();
+        }
     }
+    ALOGD("[%s] mSwapDirtyRect= [%d,%d],[%d,%d], mDirtyRectRepeatCount=%d",
+    getName().string(), mSwapDirtyRect.left, mSwapDirtyRect.top, mSwapDirtyRect.right,
+    mSwapDirtyRect.bottom, mDirtyRectRepeatCount);
 }
 
 void Layer::unlockPageFlip(
@@ -788,6 +811,56 @@ uint32_t Layer::getTransformHint() const {
         }
     }
     return orientation;
+}
+
+bool Layer::canUseSwapRect(Region& consolidateVisibleRegion, Rect& dirtyRect) const {
+    //Disable SwapRect for non-RGB layers
+    if (mActiveBuffer != NULL) {
+        switch(mActiveBuffer->getPixelFormat()) {
+            case PIXEL_FORMAT_RGBA_8888:
+            case PIXEL_FORMAT_RGBX_8888:
+            case PIXEL_FORMAT_RGB_565:
+            case PIXEL_FORMAT_BGRA_8888:
+                break;
+            default:
+                return false;
+        }
+    }
+
+    //Enable SwapRect only if all the buffers for this Layer contains same DirtyRect
+    if (mDirtyRectRepeatCount <= BufferQueue::MIN_UNDEQUEUED_BUFFERS) {
+        return false;
+    }
+
+    //If there are any overlapping visible regions, disable SwapRect
+    if (!consolidateVisibleRegion.intersect(visibleRegionScreen).isEmpty()) {
+        return false;
+    }
+    consolidateVisibleRegion.orSelf(visibleRegionScreen);
+
+    //If the dirtyrect is not within the visibleRegion, disable SwapRect
+    Region temp = visibleRegionScreen.intersect(mSwapDirtyRect);
+    if (!(temp.isRect() && temp.bounds() == mSwapDirtyRect)) {
+        return false;
+    }
+
+    //Disable SwapRect if the source crop and destination crop are different
+    Rect bufferCrop = computeBufferCrop();
+    if (bufferCrop != mTransformedBounds ) {
+        return false;
+    }
+
+    //If the dirtyrect is bigger than the layer bounds, disable SwapRect
+    const Layer::State& front(drawingState());
+    Rect layerBounds(front.active.w, front.active.h);
+    Rect intersection;
+    layerBounds.intersect(mSwapDirtyRect, &intersection);
+    if (intersection != mSwapDirtyRect) {
+        return false;
+    }
+
+    dirtyRect = mSwapDirtyRect;
+    return true;
 }
 
 // ---------------------------------------------------------------------------

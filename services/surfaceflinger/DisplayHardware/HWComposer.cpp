@@ -53,6 +53,7 @@ HWComposer::HWComposer(
         nsecs_t refreshPeriod)
     : mFlinger(flinger),
       mModule(0), mHwc(0), mList(0), mCapacity(0),
+      mListDirty(NULL), mSwapRectOn(false),
       mNumOVLayers(0), mNumFBLayers(0),
       mDpy(EGL_NO_DISPLAY), mSur(EGL_NO_SURFACE),
       mEventHandler(handler),
@@ -100,6 +101,7 @@ HWComposer::HWComposer(
 HWComposer::~HWComposer() {
     eventControl(EVENT_VSYNC, 0);
     free(mList);
+    free(mListDirty);
     if (mVSyncThread != NULL) {
         mVSyncThread->requestExitAndWait();
     }
@@ -164,6 +166,43 @@ status_t HWComposer::createWorkList(size_t numLayers) {
     }
     return NO_ERROR;
 }
+status_t HWComposer::createDirtyWorkList(int layerNum, Rect dirtyRect) {
+    if (mHwc && (layerNum >= 0 && (size_t)layerNum <= mCapacity) &&
+                dirtyRect.isValid()) {
+        if (!mListDirty) {
+            free(mListDirty);
+            size_t size = sizeof(hwc_layer_list) + 1 *sizeof(hwc_layer_t);
+            mListDirty = (hwc_layer_list_t*)malloc(size);
+        }
+        mListDirty->flags = HWC_GEOMETRY_CHANGED;
+        mListDirty->numHwLayers = 1; // TODO: remove hard coding
+
+        hwc_layer_t* const dirtyLayers( mListDirty->hwLayers);
+        hwc_layer_t* const visibleLayers( mList->hwLayers);
+
+        //TODO - is memcpy(dirtyLayers[m],visibleLayers[n]) better?
+        dirtyLayers[0].compositionType = visibleLayers[layerNum].compositionType;
+        dirtyLayers[0].flags = visibleLayers[layerNum].flags;
+        dirtyLayers[0].hints = visibleLayers[layerNum].hints;
+        dirtyLayers[0].handle = visibleLayers[layerNum].handle;
+        dirtyLayers[0].transform = visibleLayers[layerNum].transform;
+        dirtyLayers[0].sourceTransform = visibleLayers[layerNum].sourceTransform;
+        dirtyLayers[0].blending = visibleLayers[layerNum].blending;
+        dirtyLayers[0].visibleRegionScreen = visibleLayers[layerNum].visibleRegionScreen; // CHECK
+
+        dirtyLayers[0].sourceCrop.left          = dirtyRect.left;
+        dirtyLayers[0].sourceCrop.top           = dirtyRect.top;
+        dirtyLayers[0].sourceCrop.right         = dirtyRect.right;
+        dirtyLayers[0].sourceCrop.bottom        = dirtyRect.bottom;
+
+        dirtyLayers[0].displayFrame.left        = dirtyRect.left;
+        dirtyLayers[0].displayFrame.top         = dirtyRect.top;
+        dirtyLayers[0].displayFrame.right       = dirtyRect.right;
+        dirtyLayers[0].displayFrame.bottom      = dirtyRect.bottom;
+    }
+    //TODO - should we return any error code for the argument validation?
+    return NO_ERROR;
+}
 
 status_t HWComposer::prepare() const {
     int err = mHwc->prepare(mHwc, mList);
@@ -212,8 +251,10 @@ size_t HWComposer::getLayerCount(int type) const {
 }
 
 status_t HWComposer::commit() const {
-    int err = mHwc->set(mHwc, mDpy, mSur, mList);
-    if (mList) {
+    int err = mHwc->set(mHwc, mDpy, mSur, ((mSwapRectOn)?mListDirty:mList));
+    if (mSwapRectOn && mListDirty) {
+        mListDirty->flags &= ~HWC_GEOMETRY_CHANGED;
+    } else if ( mList) {
         mList->flags &= ~HWC_GEOMETRY_CHANGED;
     }
     return (status_t)err;
@@ -234,6 +275,8 @@ status_t HWComposer::disable() {
     if (mHwc) {
         free(mList);
         mList = NULL;
+        free(mListDirty);
+        mListDirty = NULL;
         int err = mHwc->prepare(mHwc, NULL);
         return (status_t)err;
     }
@@ -256,6 +299,10 @@ int HWComposer::isCopybitComposition() const {
     }
 #endif
     return 0;
+}
+void HWComposer::setSwapRectOn(bool enable)
+{
+    mSwapRectOn = enable;
 }
 
 void HWComposer::dump(String8& result, char* buffer, size_t SIZE,
@@ -282,11 +329,52 @@ void HWComposer::dump(String8& result, char* buffer, size_t SIZE,
             }
             result.appendFormat(
                     " %8s | %08x | %08x | %08x | %02x | %05x | %08x | [%5d,%5d,%5d,%5d] | [%5d,%5d,%5d,%5d] %s\n",
-                    l.compositionType ? "OVERLAY" : "FB",
+                    (l.compositionType == HWC_FRAMEBUFFER)? "FB(GPU)":
+                    (l.compositionType == HWC_OVERLAY)? "OVERLAY":
+                    (l.compositionType == qhwc::HWC_USE_COPYBIT)? "COPYBIT": "???",
                     intptr_t(l.handle), l.hints, l.flags, l.transform, l.blending, format,
                     l.sourceCrop.left, l.sourceCrop.top, l.sourceCrop.right, l.sourceCrop.bottom,
                     l.displayFrame.left, l.displayFrame.top, l.displayFrame.right, l.displayFrame.bottom,
                     layer->getName().string());
+        }
+        if(mSwapRectOn && mListDirty) {
+            // Dirty Rect Layers info if SwapRect is enabled
+            result.append(
+                    "----------+----------+----------+----------+----+-------+----------+---------------------------+--------------------------------\n"
+                    "  SwapRect Dirty layers\n");
+            result.appendFormat("    numHwLayers=%u, flags=%08x\n",
+                    mListDirty->numHwLayers, mListDirty->flags);
+            result.append(
+                    "   type   |  handle  |   hints  |   flags  | tr | blend |  format  |       source crop         |           frame           name \n"
+                    "----------+----------+----------+----------+----+-------+----------+---------------------------+--------------------------------\n");
+            //      " ________ | ________ | ________ | ________ | __ | _____ | ________ | [_____,_____,_____,_____] | [_____,_____,_____,_____]
+            for (size_t i=0 ; i<mListDirty->numHwLayers ; i++) {
+                const hwc_layer_t& ld(mListDirty->hwLayers[i]);
+                for (size_t i=0 ; i<mList->numHwLayers ; i++) {
+                    const hwc_layer_t& l(mList->hwLayers[i]);
+                    const sp<LayerBase> layer(visibleLayersSortedByZ[i]);
+                    if (ld.handle == l.handle) {
+                        int32_t format = -1;
+                        if (layer->getLayer() != NULL) {
+                            const sp<GraphicBuffer>& buffer(layer->getLayer()->getActiveBuffer());
+                            if (buffer != NULL) {
+                                format = buffer->getPixelFormat();
+                            }
+                        }
+                        result.appendFormat(
+                                " %8s | %08x | %08x | %08x | %02x | %05x | %08x | [%5d,%5d,%5d,%5d] | [%5d,%5d,%5d,%5d] %s\n",
+                                (l.compositionType == HWC_FRAMEBUFFER)? "FB(GPU)":
+                                (l.compositionType == HWC_OVERLAY)? "OVERLAY":
+                                (l.compositionType == qhwc::HWC_USE_COPYBIT)? "COPYBIT": "???",
+                                intptr_t(l.handle), l.hints, l.flags, l.transform, l.blending, format,
+                                l.sourceCrop.left, l.sourceCrop.top, l.sourceCrop.right, l.sourceCrop.bottom,
+                                l.displayFrame.left, l.displayFrame.top, l.displayFrame.right, l.displayFrame.bottom,
+                                layer->getName().string());
+                        result.append(
+                                "----------+----------+----------+----------+----+-------+----------+---------------------------+--------------------------------\n");
+                    }
+                }
+            }
         }
     }
     if (mHwc && mHwc->common.version >= HWC_DEVICE_API_VERSION_0_1 && mHwc->dump) {
