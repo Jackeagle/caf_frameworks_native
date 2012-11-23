@@ -100,7 +100,8 @@ SurfaceFlinger::SurfaceFlinger()
         mDebugInTransaction(0),
         mLastTransactionTime(0),
         mBootFinished(false),
-        mSecureFrameBuffer(0)
+        mSecureFrameBuffer(0),
+        mSwapRectEnable(false)
 {
     init();
 }
@@ -125,6 +126,9 @@ void SurfaceFlinger::init()
 
     ALOGI_IF(mDebugRegion,       "showupdates enabled");
     ALOGI_IF(mDebugDDMS,         "DDMS debugging enabled");
+
+    property_get("debug.sf.swaprect", value, "0");
+    mSwapRectEnable = atoi(value) ? true:false ;
 }
 
 void SurfaceFlinger::onFirstRef()
@@ -817,8 +821,6 @@ void SurfaceFlinger::handleRefresh()
         signalLayerUpdate();
     }
 }
-
-
 void SurfaceFlinger::handleWorkList()
 {
     mHwWorkListDirty = false;
@@ -913,6 +915,8 @@ void SurfaceFlinger::setupHardwareComposer()
     }
     status_t err = hwc.prepare();
     ALOGE_IF(err, "HWComposer::prepare failed (%s)", strerror(-err));
+
+    setupSwapRect();
 }
 
 void SurfaceFlinger::composeSurfaces(const Region& dirty)
@@ -1675,6 +1679,13 @@ void SurfaceFlinger::dumpAllLocked(
 
     snprintf(buffer, SIZE, "  transaction time: %f us\n",
             inTransactionDuration/1000.0);
+    result.append(buffer);
+
+    /*
+     * SWAPRECT state
+     */
+    snprintf(buffer, SIZE, "SWAPRECT state: %s\n",
+            mSwapRectEnable? "enabled":"disabled");
     result.append(buffer);
 
     /*
@@ -2560,6 +2571,65 @@ sp<Layer> SurfaceFlinger::getLayer(const sp<ISurface>& sur) const
 }
 
 // ---------------------------------------------------------------------------
+void SurfaceFlinger::setupSwapRect()
+{
+    /*
+     * Initialize hwc swaprect to false. It's set to true once we decide
+     * we're going to use Swaprect
+    */
+    HWComposer& hwc(graphicPlane(0).displayHardware().getHwComposer());
+    hwc.setSwapRectOn(false);
+
+    // setup only if global property is set and CopyBit composition is used
+    if (mSwapRectEnable && hwc.isCopybitComposition()) {
+        int  totalDirtyRects = 0;
+        const Vector< sp<LayerBase> >& layers(mVisibleLayersSortedByZ);
+        size_t count = layers.size();
+
+        Region consolidateVisibleRegion;
+        Rect swapDirtyRect(Rect(-1,-1,-1,-1));
+        Rect dirtyRect(Rect(-1,-1,-1,-1));
+        /* This dirtyLayerIdx is also used to check if we're not going to use
+         * swaprect after iterating all layers
+         */
+        int dirtyLayerIdx = -1;
+
+        for (size_t i=0 ; i<count ; i++) {
+            // even if one layer is not OK with SwapRect , dont enable it.
+            if (!layers[i]->canUseSwapRect(consolidateVisibleRegion, dirtyRect))
+                return;
+
+            if (!dirtyRect.isEmpty()) {
+                /*
+                 * Don't use SwapRect if there are more than one dirtyRects
+                 * TODO: should be removed once handling multiple dirtyRects
+                 * is added
+                 */
+                if (totalDirtyRects++ > 1) return;
+
+                swapDirtyRect.set(dirtyRect);
+                dirtyLayerIdx = i;
+            }
+        }
+
+        //If SwapRect is enabled, dirtyLayerIdx would be set to the layer's idx
+        if(dirtyLayerIdx != -1)  {
+            /*
+             * While using SwapRect, wormhole can be drawn only for Dirty Rect
+             * as we're not going to touch the non-Dirty parts.
+             */
+            mWormholeRegion = mWormholeRegion.intersect(swapDirtyRect);
+
+            /*
+             * Create dirty layer work list to be used by HWComposer instead of
+             * visible layer work list
+             */
+            if(hwc.createDirtyWorkList(dirtyLayerIdx, swapDirtyRect) == NO_ERROR){
+                hwc.setSwapRectOn(true);
+            }
+        }
+    }
+}
 
 Client::Client(const sp<SurfaceFlinger>& flinger)
     : mFlinger(flinger), mNameGenerator(1)

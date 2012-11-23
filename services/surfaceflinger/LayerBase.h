@@ -219,6 +219,13 @@ public:
      */
     virtual bool onPreComposition() { return false; }
 
+    /**
+     * canUseSwapRect - returns true if Layer can be composited using SwapRect
+     * dirty rectangle for SwapRect is stored and returned in dirtyRect
+     */
+    virtual bool canUseSwapRect(Region& consolidateVisibleRegion, Rect& dirtyRect)
+        const { return false; }
+
     /** always call base class first */
     virtual void dump(String8& result, char* scratch, size_t size) const;
     virtual void shortDump(String8& result, char* scratch, size_t size) const;
