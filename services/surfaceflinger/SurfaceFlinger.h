@@ -145,7 +145,8 @@ private:
 
 enum {
     eTransactionNeeded      = 0x01,
-    eTraversalNeeded        = 0x02
+    eTraversalNeeded        = 0x02,
+    eDelayedTraversalNeeded = 0x04
 };
 
 class SurfaceFlinger :
@@ -307,6 +308,7 @@ public:     // hack to work around gcc 4.0.3 bug
 private:
             void        waitForEvent();
             void        handleTransaction(uint32_t transactionFlags);
+            void        handleDelayedTransaction(uint32_t transactionFlags);
             void        handleTransactionLocked(uint32_t transactionFlags);
 
             void        computeVisibleRegions(
