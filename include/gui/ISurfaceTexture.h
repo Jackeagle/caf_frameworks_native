@@ -58,6 +58,10 @@ protected:
     // its mirrored copy of the buffer slots when calling this method.
     virtual status_t setBufferCount(int bufferCount) = 0;
 
+    // updateDirtyRegion updates the dirty region sent by the client.
+    virtual status_t updateDirtyRegion(int bufferidx, int l, int t, int r,int b) = 0;
+    //{ return NO_ERROR; };
+
     // dequeueBuffer requests a new buffer slot for the client to use. Ownership
     // of the slot is transfered to the client, meaning that the server will not
     // use the contents of the buffer associated with that slot. The slot index
