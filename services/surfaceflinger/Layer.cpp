@@ -204,7 +204,7 @@ status_t Layer::setBuffers( uint32_t w, uint32_t h,
     PixelFormatInfo displayInfo;
     getPixelFormatInfo(hw.getFormat(), &displayInfo);
     const uint32_t hwFlags = hw.getFlags();
-    
+
     mFormat = format;
 
     mSecure = (flags & ISurfaceComposer::eSecure) ? true : false;
@@ -387,8 +387,12 @@ void Layer::onDraw(const Region& clip) const
         glDisable(GL_TEXTURE_EXTERNAL_OES);
         glEnable(GL_TEXTURE_2D);
     }
-
-    drawWithOpenGL(clip);
+#ifdef QCOMHW
+    if(mS3DCompositionFormat)
+        drawS3DUIWithOpenGL(clip);
+    else
+#endif
+        drawWithOpenGL(clip);
 
     glDisable(GL_TEXTURE_EXTERNAL_OES);
     glDisable(GL_TEXTURE_2D);

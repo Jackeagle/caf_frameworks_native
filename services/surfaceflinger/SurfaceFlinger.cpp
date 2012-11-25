@@ -943,6 +943,15 @@ void SurfaceFlinger::setupHardwareComposer()
     }
     status_t err = hwc.prepare();
     ALOGE_IF(err, "HWComposer::prepare failed (%s)", strerror(-err));
+#ifdef QCOMHW
+    if(err == NO_ERROR) {
+        for (size_t i=0 ; i<count ; i++) {
+            const sp<LayerBase>& layer(layers[i]);
+            if(cur[i].compositionType == HWC_FRAMEBUFFER)
+                layer->setS3DCompositionFormat(cur[i].hints);
+        }
+    }
+#endif
 }
 
 void SurfaceFlinger::composeSurfaces(const Region& dirty)
