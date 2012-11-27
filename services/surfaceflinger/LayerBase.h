@@ -36,6 +36,9 @@
 
 #include "DisplayHardware/DisplayHardware.h"
 #include "Transform.h"
+#ifdef QCOMHW
+#include "qcom_ui.h"
+#endif
 
 namespace android {
 
@@ -64,7 +67,7 @@ public:
             Region      transparentRegionScreen;
             Region      coveredRegionScreen;
             int32_t     sequence;
-            
+
             struct Geometry {
                 uint32_t w;
                 uint32_t h;
@@ -101,14 +104,14 @@ public:
             bool setTransparentRegionHint(const Region& opaque);
             bool setFlags(uint8_t flags, uint8_t mask);
             bool setCrop(const Rect& crop);
-            
+
             void commitTransaction();
             bool requestTransaction();
             void forceVisibilityTransaction();
-            
+
             uint32_t getTransactionFlags(uint32_t flags);
             uint32_t setTransactionFlags(uint32_t flags);
-            
+
             Rect visibleBounds() const;
 
     virtual sp<LayerBaseClient> getLayerBaseClient() const { return 0; }
@@ -124,33 +127,33 @@ public:
      * draw - performs some global clipping optimizations
      * and calls onDraw().
      * Typically this method is not overridden, instead implement onDraw()
-     * to perform the actual drawing.  
+     * to perform the actual drawing.
      */
     virtual void draw(const Region& clip) const;
     virtual void drawForSreenShot();
-    
+
     /**
      * onDraw - draws the surface.
      */
     virtual void onDraw(const Region& clip) const = 0;
-    
+
     /**
      * initStates - called just after construction
      */
     virtual void initStates(uint32_t w, uint32_t h, uint32_t flags);
-    
+
     /**
      * doTransaction - process the transaction. This is a good place to figure
      * out which attributes of the surface have changed.
      */
     virtual uint32_t doTransaction(uint32_t transactionFlags);
-    
+
     /**
      * setVisibleRegion - called to set the new visible region. This gives
      * a chance to update the new visible region or record the fact it changed.
      */
     virtual void setVisibleRegion(const Region& visibleRegion);
-    
+
     /**
      * setCoveredRegion - called when the covered region changes. The covered
      * region corresponds to any area of the surface that is covered
@@ -170,7 +173,7 @@ public:
      * to figure out if the content or size of a surface has changed.
      */
     virtual void lockPageFlip(bool& recomputeVisibleRegions);
-    
+
     /**
      * unlockPageFlip - called each time the screen is redrawn. updates the
      * final dirty region wrt the planeTransform.
@@ -178,7 +181,7 @@ public:
      * correct.
      */
     virtual void unlockPageFlip(const Transform& planeTransform, Region& outDirtyRegion);
-    
+
     /**
      * isOpaque - true if this surface is opaque
      */
@@ -240,6 +243,9 @@ public:
     int32_t  getPlaneOrientation() const { return mPlaneOrientation; }
 
     void clearWithOpenGL(const Region& clip) const;
+#ifdef QCOMHW
+    void setS3DCompositionFormat(int hints);
+#endif
 
 protected:
     const GraphicPlane& graphicPlane(int dpy) const;
@@ -251,7 +257,10 @@ protected:
 
           void setFiltering(bool filtering);
           bool getFiltering() const;
-
+#ifdef QCOMHW
+          void drawS3DUIWithOpenGL(const Region& clip) const;
+          int  mS3DCompositionFormat;
+#endif
                 sp<SurfaceFlinger> mFlinger;
                 uint32_t        mFlags;
 
@@ -272,7 +281,7 @@ protected:
                 GLfloat         mVertices[4][2];
                 size_t          mNumVertices;
                 Rect            mTransformedBounds;
-            
+
                 // these are protected by an external lock
                 State           mCurrentState;
                 State           mDrawingState;
