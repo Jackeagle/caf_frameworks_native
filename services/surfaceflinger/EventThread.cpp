@@ -73,7 +73,7 @@ status_t EventThread::unregisterDisplayEventConnection(
 }
 
 void EventThread::removeDisplayEventConnection(
-        const sp<EventThread::Connection>& connection) {
+        const wp<EventThread::Connection>& connection) {
     Mutex::Autolock _l(mLock);
     mDisplayEventConnections.remove(connection);
 }
@@ -128,10 +128,10 @@ bool EventThread::threadLoop() {
 
     nsecs_t timestamp;
     DisplayEventReceiver::Event vsync;
-    Vector< sp<EventThread::Connection> > displayEventConnections;
-    // dummy vector of strong pointer Connection object to avoid refCount of
-    // strong pointer to become zero.
+    // connectionList vector of strong pointer Connection object to avoid
+    // refCount of strong pointer to become zero.
     Vector< sp<EventThread::Connection> > connectionList;
+    Vector< wp<EventThread::Connection> > displayEventConnections;
 
     do {
         Mutex::Autolock _l(mLock);
@@ -216,6 +216,8 @@ bool EventThread::threadLoop() {
             if (reportVsync) {
                 displayEventConnections.add(connection);
             }
+            // Add display event connections to the list to avoid deadlock.
+            connectionList.add(connection);
         }
     } while (!displayEventConnections.size());
 
@@ -226,7 +228,7 @@ bool EventThread::threadLoop() {
 
     const size_t count = displayEventConnections.size();
     for (size_t i=0 ; i<count ; i++) {
-        sp<Connection> conn(displayEventConnections[i]);
+        sp<Connection> conn(displayEventConnections[i].promote());
         // make sure the connection didn't die
         if (conn != NULL) {
             status_t err = conn->postEvent(vsync);
