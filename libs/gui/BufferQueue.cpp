@@ -186,6 +186,15 @@ status_t BufferQueue::setTransformHint(uint32_t hint) {
     return OK;
 }
 
+uint32_t BufferQueue::getNumBuffersUsed() const {
+    uint32_t result = 0;
+    for (int i=0 ; i<mBufferCount ; i++) {
+        const BufferSlot& slot(mSlots[i]);
+        if(slot.mTimestamp != 0) result++;
+    }
+    return result;
+}
+
 status_t BufferQueue::setCurrentDirtyRegion(int cur) {
     Mutex::Autolock lock(mMutex);
     ST_LOGV("setCurrentDirtyRegion");

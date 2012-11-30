@@ -161,6 +161,8 @@ public:
     // connected to the specified client API.
     virtual status_t disconnect(int api);
 
+    uint32_t getNumBuffersUsed() const;
+
     virtual status_t updateDirtyRegion(int bufferidx, int l, int t, int r, int b);
     Rect getCurrentDirtyRegion();
     virtual status_t setCurrentDirtyRegion(int bufferidx);
