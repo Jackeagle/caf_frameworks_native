@@ -86,6 +86,7 @@ public:
     virtual bool onPreComposition();
 
     virtual bool canUseSwapRect(Region& consolidateVisibleRegion, Rect& dirtyRect) const;
+    virtual bool isWallpaperOffset() const;
 
     // only for debugging
     inline const sp<GraphicBuffer>& getActiveBuffer() const { return mActiveBuffer; }

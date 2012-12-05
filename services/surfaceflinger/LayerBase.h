@@ -226,6 +226,7 @@ public:
     virtual bool canUseSwapRect(Region& consolidateVisibleRegion, Rect& dirtyRect)
         const { return false; }
 
+    virtual bool isWallpaperOffset() const { return false; }
     /** always call base class first */
     virtual void dump(String8& result, char* scratch, size_t size) const;
     virtual void shortDump(String8& result, char* scratch, size_t size) const;

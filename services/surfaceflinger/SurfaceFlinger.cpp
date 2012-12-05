@@ -1435,8 +1435,13 @@ uint32_t SurfaceFlinger::setClientStateLocked(
     if (layer != 0) {
         const uint32_t what = s.what;
         if (what & ePositionChanged) {
-            if (layer->setPosition(s.x, s.y))
-                flags |= eDelayedTraversalNeeded;
+            if (layer->setPosition(s.x, s.y)) {
+                if(layer->isWallpaperOffset()) {
+                    flags |= eDelayedTraversalNeeded;
+                } else {
+                    flags |= eTraversalNeeded;
+                }
+            }
         }
         if (what & eLayerChanged) {
             ssize_t idx = mCurrentState.layersSortedByZ.indexOf(layer);
@@ -1470,8 +1475,13 @@ uint32_t SurfaceFlinger::setClientStateLocked(
                 flags |= eTraversalNeeded;
         }
         if (what & eCropChanged) {
-            if (layer->setCrop(s.crop))
-                flags |= eDelayedTraversalNeeded;
+            if (layer->setCrop(s.crop)) {
+                if(layer->isWallpaperOffset()) {
+                    flags |= eDelayedTraversalNeeded;
+                } else {
+                    flags |= eTraversalNeeded;
+                }
+            }
         }
     }
     return flags;

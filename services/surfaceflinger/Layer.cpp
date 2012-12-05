@@ -174,6 +174,25 @@ sp<ISurface> Layer::createSurface()
     return sur;
 }
 
+bool Layer::isWallpaperOffset() const {
+    const Layer::State& s(drawingState());
+    Rect hwbounds(graphicPlane(0).displayHardware().bounds());
+
+    /* The Wallpaper layer width is bigger than the display width due to the
+     * handling of wallpaper pan by using setCrop & setPosition.
+     * To exclude any other layer with bigger width, we also add check for
+     * same height as the display and also the property of Wallpaper layer
+     * using only one buffer used (as Wallpaper doesn't swap buffers).
+     */
+    if(s.active.w > (uint32_t)hwbounds.width()
+            && s.active.h == (uint32_t)hwbounds.height()) {
+        if(mSurfaceTexture->getBufferQueue()->getNumBuffersUsed() == 1) {
+            return true;
+        }
+    }
+    return false;
+}
+
 wp<IBinder> Layer::getSurfaceTextureBinder() const
 {
     return mSurfaceTexture->getBufferQueue()->asBinder();
