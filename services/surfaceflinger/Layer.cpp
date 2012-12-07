@@ -45,6 +45,7 @@
 
 #ifdef QCOMHW
 #include <gpuformats.h>
+#include <profiler.h>
 #endif
 
 #include <testframework.h>
@@ -666,6 +667,9 @@ void Layer::lockPageFlip(bool& recomputeVisibleRegions)
             return;
         }
 
+#ifdef QCOMHW
+        qdutils::VsyncMiss::getInstance().pageFlipInfo(getIdentity());
+#endif
         mRefreshPending = true;
         mFrameLatencyNeeded = true;
         if (oldActiveBuffer == NULL) {
