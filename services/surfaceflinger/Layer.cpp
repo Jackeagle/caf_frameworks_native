@@ -388,10 +388,17 @@ void Layer::onDraw(const Region& clip) const
         glEnable(GL_TEXTURE_2D);
     }
 
+    if(needsDithering()) {
+        glEnable(GL_DITHER);
+    }
+
     drawWithOpenGL(clip);
 
     glDisable(GL_TEXTURE_EXTERNAL_OES);
     glDisable(GL_TEXTURE_2D);
+    if(needsDithering()) {
+        glDisable(GL_DITHER);
+    }
 }
 
 // As documented in libhardware header, formats in the range
