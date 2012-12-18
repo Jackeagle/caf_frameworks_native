@@ -128,8 +128,10 @@ bool EventThread::threadLoop() {
 
     nsecs_t timestamp;
     DisplayEventReceiver::Event vsync;
-    Vector< sp<EventThread::Connection> > connectionList;
     Vector< wp<EventThread::Connection> > displayEventConnections;
+    // dummy vector of strong pointer Connection object to avoid refCount of
+    // strong pointer to become zero.
+    Vector< sp<EventThread::Connection> > connectionList;
 
     do {
         Mutex::Autolock _l(mLock);
