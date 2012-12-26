@@ -358,7 +358,15 @@ void Layer::onDraw(const Region& clip) const
         return;
     }
 #endif
-    if (!isProtected()) {
+    bool canAllowGPU = false;
+    if(isProtected()) {
+        char property[PROPERTY_VALUE_MAX];
+        if ((property_get("persist.gralloc.cp.level3", property, NULL) > 0) &&
+                                (atoi(property) == 1)) {
+            canAllowGPU = true;
+        }
+    }
+    if ((!isProtected()) || (canAllowGPU)) {
         // TODO: we could be more subtle with isFixedSize()
         const bool useFiltering = getFiltering() || needsFiltering() || isFixedSize();
 
