@@ -383,6 +383,16 @@ void SurfaceFlinger::signalTransaction() {
     mEventQueue.invalidate();
 }
 
+/*
+ * Candidate for immediate invalidation:
+ * Last composition cycle was MDP composition
+ * and we are not composing rightnow.
+ */
+int SurfaceFlinger::isImmediateInvalidateCandidate() const {
+    HWComposer& hwc(graphicPlane(0).displayHardware().getHwComposer());
+    return hwc.isOverlayComposition();
+}
+
 void SurfaceFlinger::signalLayerUpdate() {
     mEventQueue.invalidate();
 }
@@ -422,9 +432,16 @@ void SurfaceFlinger::onMessageReceived(int32_t what)
 
     ATRACE_CALL();
     switch (what) {
+        case MessageQueue::INVALIDATE:
         case MessageQueue::REFRESH: {
+          /*
+           * Reset composition type
+           * We could do this in prepare but page-flip happens
+           * before prepare
+           */
+          HWComposer& hwc(graphicPlane(0).displayHardware().getHwComposer());
+          hwc.resetCompositionType();
           TF_PRINT(TF_EVENT_START, "SF", "CompositionRefresh", "Composition refresh start");
-//        case MessageQueue::INVALIDATE: {
             // if we're in a global transaction, don't do anything.
             const uint32_t mask = eTransactionNeeded | eTraversalNeeded;
             uint32_t transactionFlags = peekTransactionFlags(mask);
