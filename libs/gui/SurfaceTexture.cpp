@@ -269,6 +269,11 @@ status_t SurfaceTexture::updateTexImage(BufferRejecter* rejecter) {
                         err = UNKNOWN_ERROR;
                     }
                 }
+#ifdef QCOMHW
+                else {
+                    mBufferQueue->unlockLastGPUSupportedBuffer();
+                }
+#endif
             }
         }
 
@@ -281,6 +286,9 @@ status_t SurfaceTexture::updateTexImage(BufferRejecter* rejecter) {
             if(gpuSupportedFormat) {
                 glBindTexture(mTexTarget, mTexName);
                 glEGLImageTargetTexture2DOES(mTexTarget, (GLeglImageOES)image);
+#ifdef QCOMHW
+                mBufferQueue->setLastGPUSupportedBuffer(buf);
+#endif
             }
             while ((error = glGetError()) != GL_NO_ERROR) {
                 ST_LOGE("updateTexImage: error binding external texture image %p "

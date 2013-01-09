@@ -282,6 +282,12 @@ public:
     // setTransformHint bakes in rotation to buffers so overlays can be used
     status_t setTransformHint(uint32_t hint);
 
+#ifdef QCOMHW
+    void unlockLastGPUSupportedBuffer();
+
+    void setLastGPUSupportedBuffer(int buf);
+#endif
+
 private:
     // freeBufferLocked frees the resources (both GraphicBuffer and EGLImage)
     // for the given slot.
@@ -507,6 +513,9 @@ private:
 
     // mTransformHint is used to optimize for screen rotations
     uint32_t mTransformHint;
+#ifdef QCOMHW
+    int32_t mPreviousBufferSlot;
+#endif
 
     qBufGeometry mNextBufferInfo;
 };

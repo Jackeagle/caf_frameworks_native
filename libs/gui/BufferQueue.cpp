@@ -33,6 +33,7 @@
 #include <utils/Trace.h>
 #ifdef QCOMHW
 #include <gralloc_priv.h>
+#include "qcom_ui.h"
 #endif // QCOMHW
 
 // This compile option causes SurfaceTexture to return the buffer that is currently
@@ -193,11 +194,31 @@ BufferQueue::BufferQueue(  bool allowSynchronousMode, int bufferCount ) :
         ST_LOGE("createGraphicBufferAlloc() failed in BufferQueue()");
     }
     mNextBufferInfo.set(0, 0, 0);
+#ifdef QCOMHW
+    mPreviousBufferSlot = -1;
+#endif
 }
 
 BufferQueue::~BufferQueue() {
     ST_LOGV("~BufferQueue");
 }
+
+#ifdef QCOMHW
+void BufferQueue::unlockLastGPUSupportedBuffer() {
+    if (mPreviousBufferSlot >= 0 && mPreviousBufferSlot < mBufferCount) {
+        if (mNextBufferInfo.width && mNextBufferInfo.height &&
+                mNextBufferInfo.format) {
+            qdutils::CBUtils::unlock_lastGpuSupportedBuffer(
+                (void*)(mSlots[mPreviousBufferSlot].mGraphicBuffer->handle));
+            mPreviousBufferSlot = -1;
+        }
+    }
+}
+
+void BufferQueue::setLastGPUSupportedBuffer(int buf) {
+    mPreviousBufferSlot = buf;
+}
+#endif
 
 status_t BufferQueue::setBufferCountServerLocked(int bufferCount) {
     if (bufferCount > NUM_BUFFER_SLOTS)
@@ -967,6 +988,9 @@ void BufferQueue::freeAllBuffersLocked() {
     for (int i = 0; i < NUM_BUFFER_SLOTS; i++) {
         freeBufferLocked(i);
     }
+#ifdef QCOMHW
+    mPreviousBufferSlot = -1;
+#endif
 }
 
 status_t BufferQueue::acquireBuffer(BufferItem *buffer) {
@@ -1121,6 +1145,9 @@ void BufferQueue::freeAllBuffersExceptHeadLocked() {
             freeBufferLocked(i);
         }
     }
+#ifdef QCOMHW
+    mPreviousBufferSlot = -1;
+#endif
 }
 
 status_t BufferQueue::drainQueueLocked() {
