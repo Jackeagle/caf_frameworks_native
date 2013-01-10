@@ -60,7 +60,12 @@ endif
 ifeq ($(BOARD_USES_QCOM_HARDWARE), true)
     LOCAL_C_INCLUDES += hardware/qcom/display/libgralloc
     LOCAL_C_INCLUDES += hardware/qcom/display/libqdutils
+    LOCAL_C_INCLUDES += hardware/qcom/display/libgenlock
     LOCAL_CFLAGS += -DQCOMHW
+endif
+
+ifeq ($(BOARD_USES_QCOM_HARDWARE), true)
+    LOCAL_SHARED_LIBRARIES += libqdutils
 endif
 
 include $(BUILD_SHARED_LIBRARY)
