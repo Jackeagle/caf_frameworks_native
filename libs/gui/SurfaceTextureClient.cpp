@@ -1,3 +1,4 @@
+
 /*
  * Copyright (C) 2010 The Android Open Source Project
  *
@@ -32,6 +33,9 @@
 
 #include <private/gui/ComposerService.h>
 #include <testframework/testframework.h>
+#ifdef QCOMHW
+#include <gralloc_priv.h>
+#endif
 
 namespace android {
 
@@ -91,6 +95,8 @@ void SurfaceTextureClient::init() {
     mReqFormat = 0;
     mReqUsage = 0;
     mReqSize = 0;
+    mReqCustomUsage = 0;
+
     mTimestamp = NATIVE_WINDOW_TIMESTAMP_AUTO;
     mCrop.clear();
     mScalingMode = NATIVE_WINDOW_SCALING_MODE_FREEZE;
@@ -620,7 +626,31 @@ int SurfaceTextureClient::setUsage(uint32_t reqUsage)
 {
     ALOGV("SurfaceTextureClient::setUsage");
     Mutex::Autolock lock(mMutex);
-    mReqUsage = reqUsage;
+
+#ifdef QCOMHW
+    if (reqUsage & GRALLOC_USAGE_PRIVATE_EXTERNAL_ONLY) {
+        //Set explicitly, since reqUsage may have other values.
+        mReqCustomUsage = GRALLOC_USAGE_PRIVATE_EXTERNAL_ONLY;
+        //This flag is never independent. Always an add-on to
+        //GRALLOC_USAGE_EXTERNAL_ONLY
+        if(reqUsage & GRALLOC_USAGE_PRIVATE_EXTERNAL_BLOCK) {
+            mReqCustomUsage |= GRALLOC_USAGE_PRIVATE_EXTERNAL_BLOCK;
+        } else if(reqUsage & GRALLOC_USAGE_PRIVATE_EXTERNAL_CC) {
+            mReqCustomUsage |= GRALLOC_USAGE_PRIVATE_EXTERNAL_CC;
+        }
+    } else if (reqUsage & GRALLOC_USAGE_PRIVATE_SCREEN_RECORD) {
+        //Set explicitly, since reqUsage may have other values.
+        mReqCustomUsage = GRALLOC_USAGE_PRIVATE_SCREEN_RECORD;
+    }
+#endif
+
+    // For most cases mReqCustomUsage will be 0.
+    // reqUsage could come from app or driver. When it comes from app
+    // and subsequently from driver, the latter ends up overwriting
+    // the existing values. We cache certain values in mReqCustomUsage
+    // to avoid being overwritten.
+    mReqUsage = reqUsage | mReqCustomUsage;
+
     return OK;
 }
 

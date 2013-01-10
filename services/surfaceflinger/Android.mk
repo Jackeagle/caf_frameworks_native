@@ -58,6 +58,11 @@ LOCAL_CFLAGS += -DGFX_TESTFRAMEWORK
 LOCAL_SHARED_LIBRARIES += libtestframework
 endif
 
+ifeq ($(TARGET_BOARD_PLATFORM), msm8960)
+    LOCAL_C_INCLUDES += hardware/qcom/display/libgralloc
+    LOCAL_CFLAGS += -DQCOMHW
+endif
+
 LOCAL_MODULE:= libsurfaceflinger
 
 include $(BUILD_SHARED_LIBRARY)
