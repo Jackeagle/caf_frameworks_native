@@ -56,7 +56,8 @@ HWComposer::HWComposer(
       mDpy(EGL_NO_DISPLAY), mSur(EGL_NO_SURFACE),
       mEventHandler(handler),
       mRefreshPeriod(refreshPeriod),
-      mVSyncCount(0), mDebugForceFakeVSync(false)
+      mVSyncCount(0), mDebugForceFakeVSync(false),
+      mCompositionType(0)
 {
     char value[PROPERTY_VALUE_MAX];
     property_get("debug.sf.no_hw_vsync", value, "0");
@@ -209,6 +210,17 @@ size_t HWComposer::getLayerCount(int type) const {
 
 status_t HWComposer::commit() const {
     int err = mHwc->set(mHwc, mDpy, mSur, mList);
+
+    {
+        /*
+         * Acquire mutex lock and change the composition type
+         */
+        Mutex::Autolock _l(mLock);
+        mCompositionType = HWC_FRAMEBUFFER;
+        if ((mHwc && mList) && (mNumOVLayers == mList->numHwLayers))
+            mCompositionType = HWC_OVERLAY;
+    }
+
     if (mList) {
         mList->flags &= ~HWC_GEOMETRY_CHANGED;
     }
@@ -242,6 +254,28 @@ size_t HWComposer::getNumLayers() const {
 
 hwc_layer_t* HWComposer::getLayers() const {
     return mList ? mList->hwLayers : 0;
+}
+
+/*
+ * Returns true, if last composition cycle was overlay composition.
+ */
+int HWComposer::isOverlayComposition() const {
+    /*
+     * Acquire lock, HWC composition state changes in composition thread
+     */
+    Mutex::Autolock _l(mLock);
+    return (mCompositionType == HWC_OVERLAY);
+}
+
+/*
+ * Reset composition type
+ */
+void HWComposer::resetCompositionType() const {
+    /*
+     * Acquire lock before changing HWC composition state
+     */
+    Mutex::Autolock _l(mLock);
+    mCompositionType = HWC_FRAMEBUFFER;
 }
 
 void HWComposer::dump(String8& result, char* buffer, size_t SIZE,
