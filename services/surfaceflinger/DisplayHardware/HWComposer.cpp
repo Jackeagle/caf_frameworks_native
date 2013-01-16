@@ -39,6 +39,9 @@
 #include "LayerBase.h"
 #include "HWComposer.h"
 #include "SurfaceFlinger.h"
+#ifdef QCOMHW
+#include "qcom_ui.h"
+#endif
 
 namespace android {
 // ---------------------------------------------------------------------------
@@ -179,6 +182,11 @@ status_t HWComposer::prepare() const {
                 case HWC_FRAMEBUFFER:
                     numFBLayers++;
                     break;
+#ifdef QCOMHW
+                default:
+                    if(qdutils::CBUtils::isUpdatingFB((int)l.compositionType))
+                        numFBLayers++;
+#endif
             }
         }
         mNumOVLayers = numOVLayers;
