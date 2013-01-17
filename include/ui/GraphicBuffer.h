@@ -69,6 +69,10 @@ public:
 
     GraphicBuffer();
 
+    // creates buffer of bufferSize
+    GraphicBuffer(uint32_t w, uint32_t h,
+                  PixelFormat format, uint32_t usage, uint32_t bufferSize);
+
     // creates w * h buffer
     GraphicBuffer(uint32_t w, uint32_t h, PixelFormat format, uint32_t usage);
 
@@ -132,6 +136,8 @@ private:
 
     status_t initSize(uint32_t w, uint32_t h, PixelFormat format, 
             uint32_t usage);
+    status_t initSize(uint32_t w, uint32_t h, PixelFormat format,
+            uint32_t usage, uint32_t bufferSize);
 
     void free_handle();
 
