@@ -161,7 +161,8 @@ HWComposer::HWComposer(
             mNumDisplays = MAX_DISPLAYS;
         } else if (hwcHasApiVersion(mHwc, HWC_DEVICE_API_VERSION_1_1)) {
             // 1.1 adds support for multiple displays
-            mNumDisplays = HWC_NUM_DISPLAY_TYPES;
+            // support virtual displays
+            mNumDisplays = MAX_DISPLAYS;
         } else {
             mNumDisplays = 1;
         }
@@ -189,7 +190,7 @@ HWComposer::HWComposer(
         }
     } else if (mHwc) {
         // here we're guaranteed to have at least HWC 1.1
-        for (size_t i =0 ; i<HWC_NUM_DISPLAY_TYPES ; i++) {
+        for (size_t i = 0 ; i < mNumDisplays ; i++) {
             queryDisplayProperties(i);
         }
     }
@@ -297,12 +298,15 @@ void HWComposer::vsync(int disp, int64_t timestamp) {
 }
 
 void HWComposer::hotplug(int disp, int connected) {
+    // We need to perform hotplug for virtual display
+    // so that display properties get queried and
+    // updated to mDisplayData
+    queryDisplayProperties(disp);
     if (disp == HWC_DISPLAY_PRIMARY || disp >= HWC_NUM_DISPLAY_TYPES) {
         ALOGE("hotplug event received for invalid display: disp=%d connected=%d",
                 disp, connected);
         return;
     }
-    queryDisplayProperties(disp);
     mEventHandler.onHotplugReceived(disp, bool(connected));
 }
 
