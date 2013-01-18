@@ -38,6 +38,7 @@ enum {
     CANCEL_BUFFER,
     QUERY,
     SET_SYNCHRONOUS_MODE,
+    UPDATE_BUFFERS_GEOMETRY,
     SET_BUFFERS_SIZE,
     CONNECT,
     DISCONNECT,
@@ -150,6 +151,21 @@ public:
         data.writeInterfaceToken(ISurfaceTexture::getInterfaceDescriptor());
         data.writeInt32(enabled);
         status_t result = remote()->transact(SET_SYNCHRONOUS_MODE, data, &reply);
+        if (result != NO_ERROR) {
+            return result;
+        }
+        result = reply.readInt32();
+        return result;
+    }
+
+    virtual status_t updateBuffersGeometry(int w, int h, int f) {
+        Parcel data, reply;
+        data.writeInterfaceToken(ISurfaceTexture::getInterfaceDescriptor());
+        data.writeInt32(w);
+        data.writeInt32(h);
+        data.writeInt32(f);
+        status_t result = remote()->transact(UPDATE_BUFFERS_GEOMETRY,
+                                                          data, &reply);
         if (result != NO_ERROR) {
             return result;
         }
@@ -276,6 +292,15 @@ status_t BnSurfaceTexture::onTransact(
             CHECK_INTERFACE(ISurfaceTexture, data, reply);
             bool enabled = data.readInt32();
             status_t res = setSynchronousMode(enabled);
+            reply->writeInt32(res);
+            return NO_ERROR;
+        } break;
+        case UPDATE_BUFFERS_GEOMETRY: {
+            CHECK_INTERFACE(ISurfaceTexture, data, reply);
+            int w = data.readInt32();
+            int h = data.readInt32();
+            int f = data.readInt32();
+            status_t res = updateBuffersGeometry(w, h, f);
             reply->writeInt32(res);
             return NO_ERROR;
         } break;
