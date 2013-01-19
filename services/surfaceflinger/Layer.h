@@ -86,6 +86,7 @@ public:
     virtual bool onPreComposition();
 
     virtual bool canUseSwapRect(Region& consolidateVisibleRegion, Rect& dirtyRect) const;
+    virtual void resetSwapRect();
     virtual bool isWallpaperOffset() const;
 
     // only for debugging

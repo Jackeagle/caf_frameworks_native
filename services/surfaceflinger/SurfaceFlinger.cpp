@@ -2644,13 +2644,18 @@ void SurfaceFlinger::setupSwapRect()
     */
     HWComposer& hwc(graphicPlane(0).displayHardware().getHwComposer());
     hwc.setSwapRectOn(false);
-
+    static unsigned int privious_layer_count = 0;
     // setup only if global property is set and CopyBit composition is used
     if (mSwapRectEnable && hwc.isCopybitComposition()) {
         int  totalDirtyRects = 0;
         const Vector< sp<LayerBase> >& layers(mVisibleLayersSortedByZ);
         size_t count = layers.size();
-
+        if(privious_layer_count  != count) {
+          privious_layer_count = count;
+          for (size_t i=0 ; i<count ; i++)
+              layers[i]->resetSwapRect();
+          return;
+        }
         Region consolidateVisibleRegion;
         Rect swapDirtyRect(Rect(-1,-1,-1,-1));
         Rect dirtyRect(Rect(-1,-1,-1,-1));
