@@ -85,6 +85,8 @@ public:
     virtual void onLayerDisplayed();
     virtual bool onPreComposition();
 
+    virtual bool canUseSwapRect(Region& consolidateVisibleRegion, Rect& dirtyRect) const;
+
     // only for debugging
     inline const sp<GraphicBuffer>& getActiveBuffer() const { return mActiveBuffer; }
 
@@ -138,6 +140,8 @@ private:
     const GLExtensions& mGLExtensions;
     bool mOpaqueLayer;
     bool mNeedsDithering;
+    uint32_t mDirtyRectRepeatCount;
+    Rect mSwapDirtyRect;
 
     // page-flip thread (currently main thread)
     bool mSecure;         // no screenshots

@@ -59,6 +59,8 @@ public:
 
     // create a work list for numLayers layer. sets HWC_GEOMETRY_CHANGED.
     status_t createWorkList(size_t numLayers);
+    status_t createDirtyWorkList(int layerNum, Rect dirtyRect);
+    void setSwapRectOn(bool);
 
     // Asks the HAL what it can do
     status_t prepare() const;
@@ -136,6 +138,8 @@ private:
     hwc_composer_device_t*  mHwc;
     hwc_layer_list_t*       mList;
     size_t                  mCapacity;
+    hwc_layer_list_t*       mListDirty;  // to be used when SWapRect is ON
+    bool                    mSwapRectOn; // set in setSwapRectOn
     mutable size_t          mNumOVLayers;
     mutable size_t          mNumFBLayers;
     mutable size_t          mNumCopybitLayers;
