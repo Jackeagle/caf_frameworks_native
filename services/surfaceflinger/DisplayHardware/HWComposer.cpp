@@ -331,7 +331,11 @@ void HWComposer::dump(String8& result, char* buffer, size_t SIZE,
                     " %8s | %08x | %08x | %08x | %02x | %05x | %08x | [%5d,%5d,%5d,%5d] | [%5d,%5d,%5d,%5d] %s\n",
                     (l.compositionType == HWC_FRAMEBUFFER)? "FB(GPU)":
                     (l.compositionType == HWC_OVERLAY)? "OVERLAY":
-                    (l.compositionType == qhwc::HWC_USE_COPYBIT)? "COPYBIT": "???",
+#ifdef QCOMHW
+
+                    (l.compositionType == qhwc::HWC_USE_COPYBIT)? "COPYBIT":
+#endif
+                                                                      "???",
                     intptr_t(l.handle), l.hints, l.flags, l.transform, l.blending, format,
                     l.sourceCrop.left, l.sourceCrop.top, l.sourceCrop.right, l.sourceCrop.bottom,
                     l.displayFrame.left, l.displayFrame.top, l.displayFrame.right, l.displayFrame.bottom,
@@ -365,7 +369,10 @@ void HWComposer::dump(String8& result, char* buffer, size_t SIZE,
                                 " %8s | %08x | %08x | %08x | %02x | %05x | %08x | [%5d,%5d,%5d,%5d] | [%5d,%5d,%5d,%5d] %s\n",
                                 (l.compositionType == HWC_FRAMEBUFFER)? "FB(GPU)":
                                 (l.compositionType == HWC_OVERLAY)? "OVERLAY":
-                                (l.compositionType == qhwc::HWC_USE_COPYBIT)? "COPYBIT": "???",
+#ifdef QCOMHW
+                                (l.compositionType == qhwc::HWC_USE_COPYBIT)? "COPYBIT":
+#endif
+                                                                                  "???",
                                 intptr_t(l.handle), l.hints, l.flags, l.transform, l.blending, format,
                                 l.sourceCrop.left, l.sourceCrop.top, l.sourceCrop.right, l.sourceCrop.bottom,
                                 l.displayFrame.left, l.displayFrame.top, l.displayFrame.right, l.displayFrame.bottom,
