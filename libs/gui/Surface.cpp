@@ -355,7 +355,16 @@ int Surface::query(int what, int* value) const {
     }
     return SurfaceTextureClient::query(what, value);
 }
+status_t Surface::setDirtyRegion(Region* inOutDirtyRegion) {
+    //    ANativeWindow_Buffer outBuffer;
+    Rect dirty;
+    if (inOutDirtyRegion) {
+        dirty = inOutDirtyRegion->getBounds();
+    }
 
+    status_t err = SurfaceTextureClient::setDirtyRegion(dirty);
+    return err;
+}
 // ----------------------------------------------------------------------------
 
 status_t Surface::lock(SurfaceInfo* other, Region* inOutDirtyRegion) {
