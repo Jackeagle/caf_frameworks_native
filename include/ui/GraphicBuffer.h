@@ -69,6 +69,10 @@ public:
 
     GraphicBuffer();
 
+    // creates buffer of bufferSize
+    GraphicBuffer(uint32_t w, uint32_t h,
+                  PixelFormat format, uint32_t usage, uint32_t bufferSize);
+
     // creates w * h buffer
     GraphicBuffer(uint32_t w, uint32_t h, PixelFormat format, uint32_t usage);
 
@@ -94,6 +98,8 @@ public:
     status_t lock(uint32_t usage, void** vaddr);
     status_t lock(uint32_t usage, const Rect& rect, void** vaddr);
     status_t unlock();
+    status_t perform(buffer_handle_t hnd, int operation,
+                     uint32_t w, uint32_t h, PixelFormat format);
 
     ANativeWindowBuffer* getNativeBuffer() const;
     
@@ -132,6 +138,8 @@ private:
 
     status_t initSize(uint32_t w, uint32_t h, PixelFormat format, 
             uint32_t usage);
+    status_t initSize(uint32_t w, uint32_t h, PixelFormat format,
+            uint32_t usage, uint32_t bufferSize);
 
     void free_handle();
 

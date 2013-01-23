@@ -90,6 +90,7 @@ void SurfaceTextureClient::init() {
     mReqHeight = 0;
     mReqFormat = 0;
     mReqUsage = 0;
+    mReqSize = 0;
     mTimestamp = NATIVE_WINDOW_TIMESTAMP_AUTO;
     mCrop.clear();
     mScalingMode = NATIVE_WINDOW_SCALING_MODE_FREEZE;
@@ -454,6 +455,12 @@ int SurfaceTextureClient::perform(int operation, va_list args)
     case NATIVE_WINDOW_SET_BUFFERS_FORMAT:
         res = dispatchSetBuffersFormat(args);
         break;
+    case NATIVE_WINDOW_SET_BUFFERS_SIZE:
+        res = dispatchSetBuffersSize(args);
+        break;
+    case NATIVE_WINDOW_UPDATE_BUFFERS_GEOMETRY:
+        res = dispatchUpdateBuffersGeometry(args);
+        break;
     case NATIVE_WINDOW_LOCK:
         res = dispatchLock(args);
         break;
@@ -505,6 +512,7 @@ int SurfaceTextureClient::dispatchSetBuffersGeometry(va_list args) {
     int w = va_arg(args, int);
     int h = va_arg(args, int);
     int f = va_arg(args, int);
+
     int err = setBuffersDimensions(w, h);
     if (err != 0) {
         return err;
@@ -515,6 +523,7 @@ int SurfaceTextureClient::dispatchSetBuffersGeometry(va_list args) {
 int SurfaceTextureClient::dispatchSetBuffersDimensions(va_list args) {
     int w = va_arg(args, int);
     int h = va_arg(args, int);
+
     return setBuffersDimensions(w, h);
 }
 
@@ -527,6 +536,18 @@ int SurfaceTextureClient::dispatchSetBuffersUserDimensions(va_list args) {
 int SurfaceTextureClient::dispatchSetBuffersFormat(va_list args) {
     int f = va_arg(args, int);
     return setBuffersFormat(f);
+}
+
+int SurfaceTextureClient::dispatchSetBuffersSize(va_list args) {
+    int size = va_arg(args, int);
+    return setBuffersSize(size);
+}
+
+int SurfaceTextureClient::dispatchUpdateBuffersGeometry(va_list args) {
+    int w = va_arg(args, int);
+    int h = va_arg(args, int);
+    int f = va_arg(args, int);
+    return updateBuffersGeometry(w, h, f);
 }
 
 int SurfaceTextureClient::dispatchSetScalingMode(va_list args) {
@@ -584,6 +605,7 @@ int SurfaceTextureClient::disconnect(int api) {
         mReqWidth = 0;
         mReqHeight = 0;
         mReqUsage = 0;
+        mReqSize = 0;
         mCrop.clear();
         mScalingMode = NATIVE_WINDOW_SCALING_MODE_FREEZE;
         mTransform = 0;
@@ -682,6 +704,38 @@ int SurfaceTextureClient::setBuffersFormat(int format)
     Mutex::Autolock lock(mMutex);
     mReqFormat = format;
     return NO_ERROR;
+}
+
+int SurfaceTextureClient::setBuffersSize(int size)
+{
+    ATRACE_CALL();
+    ALOGV("SurfaceTextureClient::setBuffersSize");
+
+    if (size<0)
+        return BAD_VALUE;
+
+    Mutex::Autolock lock(mMutex);
+    if(mReqSize != (uint32_t)size) {
+        mReqSize = size;
+        return mSurfaceTexture->setBuffersSize(size);
+    }
+    return NO_ERROR;
+}
+
+int SurfaceTextureClient::updateBuffersGeometry(int w, int h, int f)
+{
+    ATRACE_CALL();
+    ALOGV("SurfaceTextureClient::updateBuffersGeometry");
+
+    if (w<0 || h<0 || f<0)
+        return BAD_VALUE;
+
+    if ((w && !h) || (!w && h))
+        return BAD_VALUE;
+
+    Mutex::Autolock lock(mMutex);
+    status_t err = mSurfaceTexture->updateBuffersGeometry(w, h, f);
+    return err;
 }
 
 int SurfaceTextureClient::setScalingMode(int mode)

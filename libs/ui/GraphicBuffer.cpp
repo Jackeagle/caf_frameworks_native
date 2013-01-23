@@ -61,6 +61,20 @@ GraphicBuffer::GraphicBuffer(uint32_t w, uint32_t h,
 }
 
 GraphicBuffer::GraphicBuffer(uint32_t w, uint32_t h,
+        PixelFormat reqFormat, uint32_t reqUsage, uint32_t bufferSize)
+    : BASE(), mOwner(ownData), mBufferMapper(GraphicBufferMapper::get()),
+      mInitCheck(NO_ERROR), mIndex(-1)
+{
+    width  =
+    height =
+    stride =
+    format =
+    usage  = 0;
+    handle = NULL;
+    mInitCheck = initSize(w, h, reqFormat, reqUsage, bufferSize);
+}
+
+GraphicBuffer::GraphicBuffer(uint32_t w, uint32_t h,
         PixelFormat inFormat, uint32_t inUsage,
         uint32_t inStride, native_handle_t* inHandle, bool keepOwnership)
     : BASE(), mOwner(keepOwnership ? ownHandle : ownNone),
@@ -154,6 +168,21 @@ status_t GraphicBuffer::initSize(uint32_t w, uint32_t h, PixelFormat format,
     return err;
 }
 
+status_t GraphicBuffer::initSize(uint32_t w, uint32_t h, PixelFormat format,
+                                 uint32_t reqUsage, uint32_t bufferSize)
+{
+    GraphicBufferAllocator& allocator = GraphicBufferAllocator::get();
+    status_t err = allocator.alloc(w, h, format,
+                                   reqUsage, &handle, &stride, bufferSize);
+    if (err == NO_ERROR) {
+        this->width  = w;
+        this->height = h;
+        this->format = format;
+        this->usage  = reqUsage;
+    }
+    return err;
+}
+
 status_t GraphicBuffer::lock(uint32_t usage, void** vaddr)
 {
     const Rect lockBounds(width, height);
@@ -177,6 +206,14 @@ status_t GraphicBuffer::lock(uint32_t usage, const Rect& rect, void** vaddr)
 status_t GraphicBuffer::unlock()
 {
     status_t res = getBufferMapper().unlock(handle);
+    return res;
+}
+
+status_t GraphicBuffer::perform(buffer_handle_t hnd, int operation,
+                                uint32_t w, uint32_t h, PixelFormat format)
+{
+    status_t res = getBufferMapper().perform(hnd,
+                   GRALLOC_MODULE_PERFORM_UPDATE_BUFFER_GEOMETRY, w, h, format);
     return res;
 }
 
