@@ -890,6 +890,12 @@ bool Layer::canUseSwapRect(Region& consolidateVisibleRegion, Rect& dirtyRect) co
     return true;
 }
 
+void Layer::resetSwapRect() {
+       mDirtyRectRepeatCount = 0;
+       mSwapDirtyRect.clear();
+}
+
+
 // ---------------------------------------------------------------------------
 
 
