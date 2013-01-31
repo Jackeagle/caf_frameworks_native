@@ -1019,6 +1019,8 @@ void SurfaceFlinger::debugFlashRegions()
     glDisable(GL_TEXTURE_EXTERNAL_OES);
     glDisable(GL_TEXTURE_2D);
     glDisable(GL_BLEND);
+    glColor4f(0, 0, 0, 1);
+    glClear(GL_COLOR_BUFFER_BIT);
 
     static int toggle = 0;
     toggle = 1 - toggle;
