@@ -146,7 +146,7 @@ bool EventThread::threadLoop() {
             for (size_t i=0 ; i<count ; i++) {
                 sp<Connection> connection =
                         mDisplayEventConnections.itemAt(i).promote();
-		connectionList.add(connection);
+                connectionList.add(connection);
                 if (connection!=0 && connection->count >= 0) {
                     // at least one continuous mode or active one-shot event
                     waitForNextVsync = true;
