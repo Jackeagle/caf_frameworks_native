@@ -957,6 +957,22 @@ void SurfaceFlinger::setUpHWComposer() {
             sp<const DisplayDevice> hw(mDisplays[dpy]);
             const int32_t id = hw->getHwcDisplayId();
             if (id >= 0) {
+                // Get the layers in the current drawying state
+                const LayerVector& layers(mDrawingState.layersSortedByZ);
+                bool freezeSurfacePresent = false;
+                const size_t layerCount = layers.size();
+                for (size_t i = 0 ; i < layerCount ; ++i) {
+                    static int screenShotLen = strlen("LayerScreenshot");
+                    const sp<LayerBase>& layer(layers[i]);
+                    if(!strncmp(layer->getTypeId(), "LayerScreenshot",
+                                screenShotLen)) {
+                        // Screenshot layer is present, and animation in
+                        // progress
+                        freezeSurfacePresent = true;
+                        break;
+                    }
+                }
+
                 const Vector< sp<LayerBase> >& currentLayers(
                     hw->getVisibleLayersSortedByZ());
                 const size_t count = currentLayers.size();
@@ -969,6 +985,26 @@ void SurfaceFlinger::setUpHWComposer() {
                      */
                     const sp<LayerBase>& layer(currentLayers[i]);
                     layer->setPerFrameData(hw, *cur);
+                    if(freezeSurfacePresent) {
+                        // if freezeSurfacePresent, set ANIMATING flag
+                        cur->setAnimating(true);
+                    } else {
+                        const KeyedVector<wp<IBinder>, DisplayDeviceState>&
+                                                draw(mDrawingState.displays);
+                        size_t dc = draw.size();
+                        for (size_t i=0 ; i<dc ; i++) {
+                            if (draw[i].isMainDisplay()) {
+                                HWComposer& hwc(getHwComposer());
+                                if (hwc.initCheck() == NO_ERROR)
+                                    // Pass the current orientation to HWC
+                                    // which will be used to block animation
+                                    // on external
+                                    hwc.eventControl(HWC_DISPLAY_PRIMARY,
+                                            SurfaceFlinger::EVENT_ORIENTATION,
+                                            uint32_t(draw[i].orientation));
+                            }
+                        }
+                    }
                 }
             }
         }
