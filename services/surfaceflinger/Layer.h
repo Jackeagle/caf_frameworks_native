@@ -92,7 +92,7 @@ public:
 
     // Updates the transform hint in our SurfaceTexture to match
     // the current orientation of the default display device.
-    virtual void updateTransformHint() const;
+    virtual void updateTransformHint(const sp<const DisplayDevice>& hw) const;
 #ifdef QCOMHW
     virtual bool getUsage(uint32_t *usage) const;
 #endif
