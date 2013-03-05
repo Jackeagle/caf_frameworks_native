@@ -41,6 +41,10 @@ LOCAL_CFLAGS += -DGFX_TESTFRAMEWORK
 LOCAL_SHARED_LIBRARIES += libtestframework
 endif
 
+ifeq ($(call is-vendor-board-platform,QCOM),true)
+    LOCAL_CFLAGS += -DQCOM_BSP
+endif
+
 LOCAL_MODULE:= libui
 
 include $(BUILD_SHARED_LIBRARY)
