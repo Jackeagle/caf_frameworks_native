@@ -889,8 +889,14 @@ void SurfaceFlinger::rebuildLayerStacks() {
         ATRACE_CALL();
         mVisibleRegionsDirty = false;
         invalidateHwcGeometry();
+        const sp<DisplayDevice>& hwPrimary(mDisplays[0]);
 
         const LayerVector& currentLayers(mDrawingState.layersSortedByZ);
+        Vector<bool> isLayerAddedForPrimary;
+        uint32_t layerStackPrimary = hwPrimary->getLayerStack();
+        // Initialize layer added for primary flag to zero
+        isLayerAddedForPrimary.insertAt(false, 0, currentLayers.size());
+
         for (size_t dpy=0 ; dpy<mDisplays.size() ; dpy++) {
             Region opaqueRegion;
             Region dirtyRegion;
@@ -899,8 +905,13 @@ void SurfaceFlinger::rebuildLayerStacks() {
             const Transform& tr(hw->getTransform());
             const Rect bounds(hw->getBounds());
             if (hw->canDraw()) {
-                SurfaceFlinger::computeVisibleRegions(currentLayers,
-                        hw->getLayerStack(), dirtyRegion, opaqueRegion);
+                // calculate visible region for primary display always and
+                // calculate visible region for external display only if the
+                // layer stack is different from the primary layer stack.
+                if(!dpy || (layerStackPrimary != hw->getLayerStack())) {
+                    SurfaceFlinger::computeVisibleRegions(currentLayers,
+                            hw->getLayerStack(), dirtyRegion, opaqueRegion);
+                }
 
                 const size_t count = currentLayers.size();
                 for (size_t i=0 ; i<count ; i++) {
@@ -910,7 +921,17 @@ void SurfaceFlinger::rebuildLayerStacks() {
                         Region drawRegion(tr.transform(
                                 layer->visibleNonTransparentRegion));
                         drawRegion.andSelf(bounds);
-                        if (!drawRegion.isEmpty()) {
+                        // Add all layers to external list from primary list if
+                        // the layer stacks are same otherwise add the layers
+                        // to external list based on visible region.
+                        if (!drawRegion.isEmpty() && !dpy) {
+                            layersSortedByZ.add(layer);
+                            isLayerAddedForPrimary.replaceAt(true, i);
+                        } else if(hw->getLayerStack() == layerStackPrimary) {
+                            if(isLayerAddedForPrimary[i]) {
+                                layersSortedByZ.add(layer);
+                            }
+                        } else if(!drawRegion.isEmpty()) {
                             layersSortedByZ.add(layer);
                         }
                     }
