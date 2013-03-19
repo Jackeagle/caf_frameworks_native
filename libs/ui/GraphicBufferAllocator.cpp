@@ -215,17 +215,14 @@ status_t GraphicBufferAllocator::alloc(uint32_t w, uint32_t h,
     // by the android.opengl.cts.GLSurfaceViewTest CTS test.
     BufferLiberatorThread::maybeWaitForLiberation();
 
-    if(bufferSize) {
-        err = mAllocDev->allocSize(mAllocDev, w, h,
+    err = mAllocDev->allocSize(mAllocDev, w, h,
                                format, usage, handle, stride, bufferSize);
-    } else {
-        err = mAllocDev->alloc(mAllocDev, w, h, format, usage, handle, stride);
-    }
 
     if (err != NO_ERROR) {
         ALOGW("WOW! gralloc alloc failed, waiting for pending frees!");
         BufferLiberatorThread::waitForLiberation();
-        err = mAllocDev->alloc(mAllocDev, w, h, format, usage, handle, stride);
+        err = mAllocDev->allocSize(mAllocDev, w, h,
+                               format, usage, handle, stride, bufferSize);
     }
 
     ALOGW_IF(err, "alloc(%u, %u, %d, %08x, %d ...) failed %d (%s)",
