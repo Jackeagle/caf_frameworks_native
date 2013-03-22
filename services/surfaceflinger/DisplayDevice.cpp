@@ -165,9 +165,15 @@ void DisplayDevice::init(EGLConfig config)
             mDisplayName = "Virtual Screen";    // e.g. Overlay #n
             break;
     }
+    char property[PROPERTY_VALUE_MAX];
+    int panelOrientation = DisplayState::eOrientationDefault;
+    // Set the panel orientation from the property.
+    if(property_get("persist.panel.orientation", property, NULL) > 0) {
+        panelOrientation = atoi(property) / 90;
+    }
 
     // initialize the display orientation transform.
-    setProjection(DisplayState::eOrientationDefault, mViewport, mFrame);
+    setProjection(panelOrientation, mViewport, mFrame);
 }
 
 void DisplayDevice::setDisplayName(const String8& displayName) {
