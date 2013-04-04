@@ -22,7 +22,6 @@
 
 #include <utils/Log.h>
 #include <utils/Trace.h>
-#include <utils/KeyedVector.h>
 
 #include <gui/ISurfaceComposer.h>
 #include <gui/SurfaceComposerClient.h>
@@ -45,8 +44,6 @@ namespace android {
     static nsecs_t sQueueStartTime[BufferQueue::NUM_BUFFER_SLOTS];
     static nsecs_t sQueueEndTime[BufferQueue::NUM_BUFFER_SLOTS];
 #endif
-
-static KeyedVector<const SurfaceTextureClient*, int> sQueueBufferStatus;
 
 SurfaceTextureClient::SurfaceTextureClient(
         const sp<ISurfaceTexture>& surfaceTexture)
@@ -71,8 +68,6 @@ SurfaceTextureClient::~SurfaceTextureClient() {
     if (mConnectedToCpu) {
         SurfaceTextureClient::disconnect(NATIVE_WINDOW_API_CPU);
     }
-
-    sQueueBufferStatus.removeItem(this);
 }
 
 void SurfaceTextureClient::init() {
@@ -87,7 +82,7 @@ void SurfaceTextureClient::init() {
 
     const_cast<int&>(ANativeWindow::minSwapInterval) = 0;
     const_cast<int&>(ANativeWindow::maxSwapInterval) = 1;
-    sQueueBufferStatus.add(this, 0);
+
     mReqWidth = 0;
     mReqHeight = 0;
     mReqFormat = 0;
@@ -209,7 +204,6 @@ int SurfaceTextureClient::dequeueBuffer(android_native_buffer_t** buffer) {
         }
     }
     *buffer = gbuf.get();
-    sQueueBufferStatus.replaceValueFor(this, 1);
 #ifdef GFX_TESTFRAMEWORK
     sDequeueEndTime[buf] = systemTime();
     sDequeueStartTime[buf] = startTime;
@@ -230,8 +224,6 @@ int SurfaceTextureClient::cancelBuffer(android_native_buffer_t* buffer) {
         return i;
     }
     mSurfaceTexture->cancelBuffer(i);
-    // Reset the value, since the buffer has been cancelled.
-    sQueueBufferStatus.replaceValueFor(this, 0);
     return OK;
 }
 
@@ -302,7 +294,7 @@ int SurfaceTextureClient::queueBuffer(android_native_buffer_t* buffer) {
             &numPendingBuffers);
 
     mConsumerRunningBehind = (numPendingBuffers >= 2);
-    sQueueBufferStatus.replaceValueFor(this, 0);
+
 #ifdef GFX_TESTFRAMEWORK
     sQueueEndTime[i] = systemTime();
     TF_PRINT(TF_EVENT_STOP, "STClient", eventID, "BUFFER:STC queue end, buffer=%p",
@@ -365,18 +357,6 @@ int SurfaceTextureClient::query(int what, int* value) const {
                     }
                 }
                 return err;
-            }
-            case NATIVE_WINDOW_TRANSFORM_HINT:
-            {
-                int queueStatus = sQueueBufferStatus.valueFor(this);
-                // Check the queue status. If the value is 0, we have
-                // already done a queue and the local variable is up to
-                // date. Use the local value. (set the variable during
-                // dequeue and reset it on queue)
-                if (queueStatus == 0) {
-                    *value = mTransformHint;
-                    return NO_ERROR;
-                }
             }
         }
     }
