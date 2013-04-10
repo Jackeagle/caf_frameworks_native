@@ -253,6 +253,10 @@ public:
     virtual void shortDump(String8& result, char* scratch, size_t size) const;
     virtual void dumpStats(String8& result, char* buffer, size_t SIZE) const;
     virtual void clearStats();
+#ifdef QCOM_BSP
+    virtual bool isExtOnly() const { return false; }
+    virtual bool isIntOnly() const { return false; }
+#endif
 
 
     enum { // flags for doTransaction()
