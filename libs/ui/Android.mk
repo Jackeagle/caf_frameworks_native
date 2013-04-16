@@ -41,7 +41,7 @@ LOCAL_CFLAGS += -DGFX_TESTFRAMEWORK
 LOCAL_SHARED_LIBRARIES += libtestframework
 endif
 
-ifeq ($(call is-vendor-board-platform,QCOM),true)
+ifeq ($(TARGET_USES_QCOM_BSP),true)
     LOCAL_CFLAGS += -DQCOM_BSP
 endif
 
