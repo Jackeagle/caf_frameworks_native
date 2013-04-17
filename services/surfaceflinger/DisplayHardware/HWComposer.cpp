@@ -924,7 +924,7 @@ void HWComposer::dump(String8& result, char* buffer, size_t SIZE) const {
     if (mHwc) {
         result.appendFormat("Hardware Composer state (version %8x):\n", hwcApiVersion(mHwc));
         result.appendFormat("  mDebugForceFakeVSync=%d\n", mDebugForceFakeVSync);
-        for (size_t i=0 ; i<mNumDisplays ; i++) {
+        for (size_t i=0 ; i<(mNumDisplays-1) ; i++) {
             const DisplayData& disp(mDisplayData[i]);
 
             const Vector< sp<LayerBase> >& visibleLayersSortedByZ =
