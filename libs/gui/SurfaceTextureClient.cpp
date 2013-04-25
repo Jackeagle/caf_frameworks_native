@@ -209,7 +209,8 @@ int SurfaceTextureClient::dequeueBuffer(android_native_buffer_t** buffer) {
         }
     }
     *buffer = gbuf.get();
-    sQueueBufferStatus.replaceValueFor(this, 1);
+    ssize_t index = sQueueBufferStatus.indexOfKey(this);
+    sQueueBufferStatus.replaceValueAt(index, 1);
 #ifdef GFX_TESTFRAMEWORK
     sDequeueEndTime[buf] = systemTime();
     sDequeueStartTime[buf] = startTime;
@@ -231,7 +232,8 @@ int SurfaceTextureClient::cancelBuffer(android_native_buffer_t* buffer) {
     }
     mSurfaceTexture->cancelBuffer(i);
     // Reset the value, since the buffer has been cancelled.
-    sQueueBufferStatus.replaceValueFor(this, 0);
+    ssize_t index = sQueueBufferStatus.indexOfKey(this);
+    sQueueBufferStatus.replaceValueAt(index, 0);
     return OK;
 }
 
@@ -302,7 +304,8 @@ int SurfaceTextureClient::queueBuffer(android_native_buffer_t* buffer) {
             &numPendingBuffers);
 
     mConsumerRunningBehind = (numPendingBuffers >= 2);
-    sQueueBufferStatus.replaceValueFor(this, 0);
+    ssize_t index = sQueueBufferStatus.indexOfKey(this);
+    sQueueBufferStatus.replaceValueAt(index, 0);
 #ifdef GFX_TESTFRAMEWORK
     sQueueEndTime[i] = systemTime();
     TF_PRINT(TF_EVENT_STOP, "STClient", eventID, "BUFFER:STC queue end, buffer=%p",
