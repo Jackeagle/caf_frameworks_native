@@ -1931,7 +1931,9 @@ status_t SurfaceFlinger::renderScreenToTextureLocked(DisplayID dpy,
     const size_t count = layers.size();
     for (size_t i=0 ; i<count ; ++i) {
         const sp<LayerBase>& layer(layers[i]);
-        layer->drawForSreenShot();
+        if(!layer->isProtected()) {
+            layer->drawForSreenShot();
+        }
     }
 
     hw.compositionComplete();
@@ -2483,7 +2485,9 @@ status_t SurfaceFlinger::captureScreenImplLocked(DisplayID dpy,
             if (!(flags & ISurfaceComposer::eLayerHidden)) {
                 const uint32_t z = layer->drawingState().z;
                 if (z >= minLayerZ && z <= maxLayerZ) {
-                    layer->drawForSreenShot();
+                    if(!layer->isProtected()) {
+                        layer->drawForSreenShot();
+                    }
                 }
             }
         }
