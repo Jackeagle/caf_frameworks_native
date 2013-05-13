@@ -295,6 +295,15 @@ void LayerBase::setGeometry(
 
     // scaling is already applied in transformedBounds
     layer.setFrame(transformedBounds);
+#ifdef QCOM_BSP
+    // set dest_rect to frame buffer width and height, if external_only flag
+    // for the layer is enabled.
+    if(isExtOnly()) {
+        uint32_t w = hw->getWidth();
+        uint32_t h = hw->getHeight();
+        layer.setFrame(Rect(w,h));
+    }
+#endif
     layer.setCrop(transformedBounds.getBounds());
 }
 
