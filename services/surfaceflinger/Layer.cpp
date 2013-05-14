@@ -358,8 +358,15 @@ void Layer::onDraw(const Region& clip) const
     }
 #endif
     if (!isProtected()) {
+
+        bool useFiltering = false;
+#ifdef QCOMHW
+    if(mS3DCompositionFormat)
+        useFiltering = true;
+    else
+#endif
         // TODO: we could be more subtle with isFixedSize()
-        const bool useFiltering = getFiltering() || needsFiltering() || isFixedSize();
+        useFiltering = getFiltering() || needsFiltering() || isFixedSize();
 
         // Query the texture matrix given our current filtering mode.
         float textureMatrix[16];
