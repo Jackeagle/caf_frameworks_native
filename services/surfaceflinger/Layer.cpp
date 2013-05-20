@@ -46,6 +46,10 @@
 
 #include <testframework/testframework.h>
 
+#ifdef QCOM_BSP
+#include <gralloc_priv.h>
+#endif
+
 #define DEBUG_RESIZE    0
 
 namespace android {
@@ -802,6 +806,29 @@ void Layer::updateTransformHint(const sp<const DisplayDevice>& hw) const {
     mSurfaceTexture->setTransformHint(orientation);
 }
 
+#ifdef QCOM_BSP
+bool Layer::isExtOnly() const
+{
+    const sp<GraphicBuffer>& activeBuffer(mActiveBuffer);
+    if (activeBuffer != 0) {
+        uint32_t usage = activeBuffer->getUsage();
+        if(usage & GRALLOC_USAGE_PRIVATE_EXTERNAL_ONLY)
+            return true;
+    }
+    return false;
+}
+
+bool Layer::isIntOnly() const
+{
+    const sp<GraphicBuffer>& activeBuffer(mActiveBuffer);
+    if (activeBuffer != 0) {
+        uint32_t usage = activeBuffer->getUsage();
+        if(usage & GRALLOC_USAGE_PRIVATE_INTERNAL_ONLY)
+            return true;
+    }
+    return false;
+}
+#endif
 // ---------------------------------------------------------------------------
 
 

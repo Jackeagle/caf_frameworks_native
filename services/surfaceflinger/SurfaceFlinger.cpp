@@ -895,8 +895,9 @@ void SurfaceFlinger::rebuildLayerStacks() {
             const sp<DisplayDevice>& hw(mDisplays[dpy]);
             const Transform& tr(hw->getTransform());
             const Rect bounds(hw->getBounds());
+            int dpyId = hw->getHwcDisplayId();
             if (hw->canDraw()) {
-                SurfaceFlinger::computeVisibleRegions(currentLayers,
+                SurfaceFlinger::computeVisibleRegions(dpyId, currentLayers,
                         hw->getLayerStack(), dirtyRegion, opaqueRegion);
 
                 const size_t count = currentLayers.size();
@@ -954,6 +955,22 @@ void SurfaceFlinger::setUpHWComposer() {
             sp<const DisplayDevice> hw(mDisplays[dpy]);
             const int32_t id = hw->getHwcDisplayId();
             if (id >= 0) {
+                // Get the layers in the current drawying state
+                const LayerVector& layers(mDrawingState.layersSortedByZ);
+                bool freezeSurfacePresent = false;
+                const size_t layerCount = layers.size();
+                for (size_t i = 0 ; i < layerCount ; ++i) {
+                    static int screenShotLen = strlen("LayerScreenshot");
+                    const sp<LayerBase>& layer(layers[i]);
+                    if(!strncmp(layer->getTypeId(), "LayerScreenshot",
+                                screenShotLen)) {
+                        // Screenshot layer is present, and animation in
+                        // progress
+                        freezeSurfacePresent = true;
+                        break;
+                    }
+                }
+
                 const Vector< sp<LayerBase> >& currentLayers(
                     hw->getVisibleLayersSortedByZ());
                 const size_t count = currentLayers.size();
@@ -966,6 +983,30 @@ void SurfaceFlinger::setUpHWComposer() {
                      */
                     const sp<LayerBase>& layer(currentLayers[i]);
                     layer->setPerFrameData(hw, *cur);
+                    if(freezeSurfacePresent) {
+                        char value[PROPERTY_VALUE_MAX];
+                        property_get("sys.disable_animation", value, "0");
+                        if(atoi(value)) {
+                            // if freezeSurfacePresent, set ANIMATING flag
+                            cur->setAnimating(true);
+                        }
+                    } else {
+                        const KeyedVector<wp<IBinder>, DisplayDeviceState>&
+                                                draw(mDrawingState.displays);
+                        size_t dc = draw.size();
+                        for (size_t i=0 ; i<dc ; i++) {
+                            if (draw[i].isMainDisplay()) {
+                                HWComposer& hwc(getHwComposer());
+                                if (hwc.initCheck() == NO_ERROR)
+                                    // Pass the current orientation to HWC
+                                    // which will be used to block animation
+                                    // on external
+                                    hwc.eventControl(HWC_DISPLAY_PRIMARY,
+                                            SurfaceFlinger::EVENT_ORIENTATION,
+                                            uint32_t(draw[i].orientation));
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -1346,7 +1387,7 @@ void SurfaceFlinger::commitTransaction()
     mTransactionCV.broadcast();
 }
 
-void SurfaceFlinger::computeVisibleRegions(
+void SurfaceFlinger::computeVisibleRegions(size_t dpy,
         const LayerVector& currentLayers, uint32_t layerStack,
         Region& outDirtyRegion, Region& outOpaqueRegion)
 {
@@ -1357,7 +1398,7 @@ void SurfaceFlinger::computeVisibleRegions(
     Region dirty;
 
     outDirtyRegion.clear();
-
+    bool bIgnoreLayers = false;
     size_t i = currentLayers.size();
     while (i--) {
         const sp<LayerBase>& layer = currentLayers[i];
@@ -1365,8 +1406,34 @@ void SurfaceFlinger::computeVisibleRegions(
         // start with the whole surface at its current location
         const Layer::State& s(layer->drawingState());
 
+#ifdef QCOM_BSP
+        if(bIgnoreLayers) {
+            // Ignore all other layers except the layers marked as ext_only
+            // by setting visible non transparent region empty.
+            Region visibleNonTransRegion;
+            visibleNonTransRegion.set(Rect(0,0));
+            layer->setVisibleNonTransparentRegion(visibleNonTransRegion);
+            continue;
+        }
+        // Only add the layer marked as "external_only" to external list and
+        // only remove the layer marked as "external_only" from primary list
+        // and do not add the layer marked as "internal_only" to external list
+        if ((dpy && layer->isExtOnly())) {
+            bIgnoreLayers = true;
+        } else if(layer->isExtOnly() || (dpy && layer->isIntOnly())) {
+            // Ignore only ext_only layers for primary by setting
+            // visible non transparent region empty.
+            Region visibleNonTransRegion;
+            visibleNonTransRegion.set(Rect(0,0));
+            layer->setVisibleNonTransparentRegion(visibleNonTransRegion);
+            continue;
+        }
+#endif
+
         // only consider the layers on the given later stack
-        if (s.layerStack != layerStack)
+        // Override layers created using presentation class by the layers having
+        // ext_only flag enabled
+        if (s.layerStack != layerStack && !bIgnoreLayers)
             continue;
 
         /*
