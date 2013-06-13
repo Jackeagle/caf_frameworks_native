@@ -46,7 +46,7 @@
 
 #include <testframework/testframework.h>
 
-#ifdef QCOM_BSP
+#ifdef QCOM_DISP_EXT
 #include <gralloc_priv.h>
 #endif
 
@@ -806,7 +806,7 @@ void Layer::updateTransformHint(const sp<const DisplayDevice>& hw) const {
     mSurfaceTexture->setTransformHint(orientation);
 }
 
-#ifdef QCOM_BSP
+#ifdef QCOM_DISP_EXT
 bool Layer::isExtOnly() const
 {
     const sp<GraphicBuffer>& activeBuffer(mActiveBuffer);
