@@ -93,7 +93,7 @@ public:
     // Updates the transform hint in our SurfaceTexture to match
     // the current orientation of the display device.
     virtual void updateTransformHint(const sp<const DisplayDevice>& hw) const;
-#ifdef QCOM_BSP
+#ifdef QCOM_DISP_EXT
     virtual bool isExtOnly() const;
     virtual bool isIntOnly() const;
 #endif
