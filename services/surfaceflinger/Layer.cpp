@@ -352,8 +352,7 @@ void Layer::onDraw(const sp<const DisplayDevice>& hw, const Region& clip) const
     bool blackOutLayer = isProtected() || (isSecure() && !hw->isSecure());
 
     if (!blackOutLayer) {
-        // TODO: we could be more subtle with isFixedSize()
-        const bool useFiltering = getFiltering() || needsFiltering(hw) || isFixedSize();
+        bool useFiltering = true;
 
         // Query the texture matrix given our current filtering mode.
         float textureMatrix[16];
@@ -366,8 +365,11 @@ void Layer::onDraw(const sp<const DisplayDevice>& hw, const Region& clip) const
         if (useFiltering) {
             filter = GL_LINEAR;
         }
-        glTexParameterx(GL_TEXTURE_EXTERNAL_OES, GL_TEXTURE_MAG_FILTER, filter);
-        glTexParameterx(GL_TEXTURE_EXTERNAL_OES, GL_TEXTURE_MIN_FILTER, filter);
+
+        glTexParameterx(GL_TEXTURE_EXTERNAL_OES, GL_TEXTURE_MAG_FILTER,
+                        GL_LINEAR);
+        glTexParameterx(GL_TEXTURE_EXTERNAL_OES, GL_TEXTURE_MIN_FILTER,
+                        GL_LINEAR_MIPMAP_LINEAR);
         glMatrixMode(GL_TEXTURE);
         glLoadMatrixf(textureMatrix);
         glMatrixMode(GL_MODELVIEW);
