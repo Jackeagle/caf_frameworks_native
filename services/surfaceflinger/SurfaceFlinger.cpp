@@ -1413,7 +1413,7 @@ void SurfaceFlinger::computeVisibleRegions(size_t dpy,
         // start with the whole surface at its current location
         const Layer::State& s(layer->drawingState());
 
-#ifdef QCOM_DISP_EXT
+#ifdef QCOM_BSP
         if(bIgnoreLayers) {
             // Ignore all other layers except the layers marked as ext_only
             // by setting visible non transparent region empty.
