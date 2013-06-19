@@ -261,8 +261,7 @@ status_t BufferQueue::setBufferCount(int bufferCount) {
 status_t BufferQueue::setBuffersSize(int size) {
     ST_LOGV("setBuffersSize: size=%d", size);
     Mutex::Autolock lock(mMutex);
-    mGraphicBufferAlloc->setGraphicBufferSize(size);
-    return NO_ERROR;
+    return BAD_VALUE;
 }
 
 int BufferQueue::query(int what, int* outValue)
