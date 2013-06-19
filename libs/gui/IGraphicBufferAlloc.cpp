@@ -64,14 +64,6 @@ public:
         *error = result;
         return graphicBuffer;
     }
-
-    virtual void setGraphicBufferSize(int size) {
-        Parcel data, reply;
-        data.writeInterfaceToken(
-                IGraphicBufferAlloc::getInterfaceDescriptor());
-        data.writeInt32(size);
-        remote()->transact(SET_GRAPHIC_BUFFER_SIZE, data, &reply);
-    }
 };
 
 IMPLEMENT_META_INTERFACE(GraphicBufferAlloc, "android.ui.IGraphicBufferAlloc");
@@ -115,12 +107,6 @@ status_t BnGraphicBufferAlloc::onTransact(
                 // that do not use file-descriptors to track their buffers.
                 reply->writeStrongBinder( new BufferReference(result) );
             }
-            return NO_ERROR;
-        } break;
-        case SET_GRAPHIC_BUFFER_SIZE: {
-            CHECK_INTERFACE(IGraphicBufferAlloc, data, reply);
-            int size = data.readInt32();
-            setGraphicBufferSize(size);
             return NO_ERROR;
         } break;
         default:
