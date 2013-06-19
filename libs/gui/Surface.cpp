@@ -683,7 +683,7 @@ int Surface::setBuffersSize(int size)
     Mutex::Autolock lock(mMutex);
     if(mReqSize != (uint32_t)size) {
         mReqSize = size;
-        mGraphicBufferProducer->setBuffersSize(size);
+        return BAD_VALUE; //mGraphicBufferProducer->setBuffersSize(size);
     }
     return NO_ERROR;
 }

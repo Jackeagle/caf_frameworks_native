@@ -267,7 +267,7 @@ status_t BnGraphicBufferProducer::onTransact(
         case SET_BUFFERS_SIZE: {
             CHECK_INTERFACE(IGraphicBufferProducer, data, reply);
             int size = data.readInt32();
-            status_t res = setBuffersSize(size);
+            status_t res = BAD_VALUE; // setBuffersSize(size);
             reply->writeInt32(res);
             return NO_ERROR;
         } break;
