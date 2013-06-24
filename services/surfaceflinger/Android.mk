@@ -58,9 +58,9 @@ LOCAL_CFLAGS += -DGFX_TESTFRAMEWORK
 LOCAL_SHARED_LIBRARIES += libtestframework
 endif
 
-ifeq ($(TARGET_USES_QCOM_DISPLAY_EXTENSIONS), true)
+ifeq ($(TARGET_USES_QCOM_BSP), true)
     LOCAL_C_INCLUDES += hardware/qcom/display/libgralloc
-    LOCAL_CFLAGS += -DQCOM_DISP_EXT
+    LOCAL_CFLAGS += -DQCOM_BSP
 endif
 
 LOCAL_MODULE:= libsurfaceflinger
