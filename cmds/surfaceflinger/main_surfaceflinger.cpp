@@ -20,6 +20,7 @@
 using namespace android;
 
 int main(int argc, char** argv) {
+	  sleep(6);
     SurfaceFlinger::publishAndJoinThreadPool(true);
     // When SF is launched in its own process, limit the number of
     // binder threads to 4.
