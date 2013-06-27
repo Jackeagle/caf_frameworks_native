@@ -369,7 +369,7 @@ void Layer::onDraw(const sp<const DisplayDevice>& hw, const Region& clip) const
         glTexParameterx(GL_TEXTURE_EXTERNAL_OES, GL_TEXTURE_MAG_FILTER,
                         GL_LINEAR);
         glTexParameterx(GL_TEXTURE_EXTERNAL_OES, GL_TEXTURE_MIN_FILTER,
-                        GL_LINEAR_MIPMAP_LINEAR);
+                        GL_LINEAR);
         glMatrixMode(GL_TEXTURE);
         glLoadMatrixf(textureMatrix);
         glMatrixMode(GL_MODELVIEW);
