@@ -302,7 +302,8 @@ void HWComposer::hotplug(int disp, int connected) {
     // so that display properties get queried and
     // updated to mDisplayData
     queryDisplayProperties(disp);
-    if (disp == HWC_DISPLAY_PRIMARY || disp >= HWC_NUM_DISPLAY_TYPES) {
+    if (disp == HWC_DISPLAY_PRIMARY || disp == HWC_DISPLAY_VIRTUAL ||
+        disp >= HWC_NUM_DISPLAY_TYPES) {
         ALOGE("hotplug event received for invalid display: disp=%d connected=%d",
                 disp, connected);
         return;
