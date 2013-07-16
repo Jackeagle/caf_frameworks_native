@@ -63,6 +63,11 @@ ifeq ($(TARGET_BOARD_PLATFORM), msm8960)
 	LOCAL_CFLAGS += -DUSE_NATIVE_FENCE_SYNC
 endif
 
+ifeq ($(TARGET_USES_QCOM_BSP), true)
+    LOCAL_C_INCLUDES += hardware/qcom/display/libgralloc
+    LOCAL_CFLAGS += -DQCOM_BSP
+endif
+
 include $(BUILD_SHARED_LIBRARY)
 
 ifeq (,$(ONE_SHOT_MAKEFILE))
