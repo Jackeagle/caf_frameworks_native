@@ -33,6 +33,10 @@
 #include <private/gui/ComposerService.h>
 #include <testframework/testframework.h>
 
+#ifdef QCOM_BSP
+#include <gralloc_priv.h>
+#endif
+
 namespace android {
 
 #ifdef GFX_TESTFRAMEWORK
@@ -852,8 +856,14 @@ status_t SurfaceTextureClient::lock(
         }
         // we're intending to do software rendering from this point
         // Do not overwrite the mReqUsage flag which was set by the client.
-        setUsage(mReqUsage | GRALLOC_USAGE_SW_READ_OFTEN |
-                                  GRALLOC_USAGE_SW_WRITE_OFTEN);
+#ifdef QCOM_BSP
+        setUsage(mReqUsage & GRALLOC_USAGE_PRIVATE_EXTERNAL_ONLY |
+                mReqUsage & GRALLOC_USAGE_PRIVATE_INTERNAL_ONLY |
+                GRALLOC_USAGE_SW_READ_OFTEN |
+                GRALLOC_USAGE_SW_WRITE_OFTEN);
+#else
+        setUsage(GRALLOC_USAGE_SW_READ_OFTEN | GRALLOC_USAGE_SW_WRITE_OFTEN);
+#endif
     }
 
     ANativeWindowBuffer* out;
