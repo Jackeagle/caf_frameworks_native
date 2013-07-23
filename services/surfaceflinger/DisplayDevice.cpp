@@ -98,6 +98,11 @@ DisplayDevice::~DisplayDevice() {
     if (mSurface != EGL_NO_SURFACE) {
         eglDestroySurface(mDisplay, mSurface);
         mSurface = EGL_NO_SURFACE;
+        if(mType == DISPLAY_VIRTUAL) {
+            // Perform teardown sequence for virtual display
+            HWComposer& hwc = mFlinger->getHwComposer();
+            hwc.disconnectDisplay(mType);
+        }
     }
 }
 
@@ -147,7 +152,7 @@ void DisplayDevice::init(EGLConfig config)
     mFrame.makeInvalid();
 
     // external displays are always considered enabled
-    mScreenAcquired = (mType >= DisplayDevice::NUM_DISPLAY_TYPES);
+    mScreenAcquired = (mType >= DisplayDevice::DISPLAY_VIRTUAL);
 
     // get an h/w composer ID
     mHwcDisplayId = mFlinger->allocateHwcDisplayId(mType);
