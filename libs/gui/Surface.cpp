@@ -34,6 +34,10 @@
 
 #include <private/gui/ComposerService.h>
 
+#ifdef QCOM_BSP
+#include <gralloc_priv.h>
+#endif
+
 namespace android {
 
 Surface::Surface(
@@ -205,7 +209,7 @@ int Surface::dequeueBuffer(android_native_buffer_t** buffer,
         }
     }
 
-    if (fence->isValid()) {
+    if ((fence != NULL) && fence->isValid()) {
         *fenceFd = fence->dup();
         if (*fenceFd == -1) {
             ALOGE("dequeueBuffer: error duping fence: %d", errno);
@@ -774,8 +778,15 @@ status_t Surface::lock(
             return err;
         }
         // we're intending to do software rendering from this point
-        setUsage(mReqUsage | GRALLOC_USAGE_SW_READ_OFTEN |
-                GRALLOC_USAGE_SW_WRITE_OFTEN);
+        // Do not overwrite the mReqUsage flag which was set by the client
+#ifdef QCOM_BSP
+        setUsage(mReqUsage & GRALLOC_USAGE_PRIVATE_EXTERNAL_ONLY |
+                mReqUsage & GRALLOC_USAGE_PRIVATE_INTERNAL_ONLY |
+                    GRALLOC_USAGE_SW_READ_OFTEN |
+                    GRALLOC_USAGE_SW_WRITE_OFTEN);
+#else
+        setUsage(GRALLOC_USAGE_SW_READ_OFTEN | GRALLOC_USAGE_SW_WRITE_OFTEN);
+#endif
     }
 
     ANativeWindowBuffer* out;
