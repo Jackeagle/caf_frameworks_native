@@ -32,7 +32,6 @@ namespace android {
 
 enum {
     CREATE_GRAPHIC_BUFFER = IBinder::FIRST_CALL_TRANSACTION,
-    SET_GRAPHIC_BUFFER_SIZE,
 };
 
 class BpGraphicBufferAlloc : public BpInterface<IGraphicBufferAlloc>
