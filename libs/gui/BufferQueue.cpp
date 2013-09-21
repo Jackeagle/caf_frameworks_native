@@ -195,12 +195,6 @@ status_t BufferQueue::setBufferCount(int bufferCount) {
     return NO_ERROR;
 }
 
-status_t BufferQueue::setBuffersSize(int size) {
-    ST_LOGV("setBuffersSize: size=%d", size);
-    Mutex::Autolock lock(mMutex);
-    return BAD_VALUE;
-}
-
 int BufferQueue::query(int what, int* outValue)
 {
     ATRACE_CALL();
