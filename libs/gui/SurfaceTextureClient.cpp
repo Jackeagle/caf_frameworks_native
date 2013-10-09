@@ -524,7 +524,11 @@ int SurfaceTextureClient::dispatchSetBuffersGeometry(va_list args) {
     if (err != 0) {
         return err;
     }
-    return setBuffersFormat(f);
+    err = setBuffersFormat(f);
+    if (err != 0) {
+        return err;
+    }
+    return updateBuffersGeometry(0,0,0);
 }
 
 int SurfaceTextureClient::dispatchSetBuffersDimensions(va_list args) {
