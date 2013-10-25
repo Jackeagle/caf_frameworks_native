@@ -114,9 +114,12 @@ int Surface::hook_queueBuffer(ANativeWindow* window,
 int Surface::hook_dequeueBuffer_DEPRECATED(ANativeWindow* window,
         ANativeWindowBuffer** buffer) {
     Surface* c = getSelf(window);
-    ANativeWindowBuffer* buf;
+    ANativeWindowBuffer* buf = NULL;
     int fenceFd = -1;
     int result = c->dequeueBuffer(&buf, &fenceFd);
+
+    if (result != NO_ERROR) return result;
+
     sp<Fence> fence(new Fence(fenceFd));
     int waitResult = fence->waitForever("dequeueBuffer_DEPRECATED");
     if (waitResult != OK) {
@@ -446,7 +449,11 @@ int Surface::dispatchSetBuffersGeometry(va_list args) {
     if (err != 0) {
         return err;
     }
-    return setBuffersFormat(f);
+    err = setBuffersFormat(f);
+    if (err != 0) {
+        return err;
+    }
+    return updateBuffersGeometry(0,0,0);
 }
 
 int Surface::dispatchSetBuffersDimensions(va_list args) {

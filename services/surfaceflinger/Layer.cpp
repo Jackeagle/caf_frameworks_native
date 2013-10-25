@@ -495,9 +495,20 @@ void Layer::onDraw(const sp<const DisplayDevice>& hw, const Region& clip) const
         // is probably going to have something visibly wrong.
     }
 
+    bool canAllowGPU = false;
+#ifdef QCOM_BSP
+    if(isProtected()) {
+        char property[PROPERTY_VALUE_MAX];
+        if ((property_get("persist.gralloc.cp.level3", property, NULL) > 0) &&
+                (atoi(property) == 1)) {
+            canAllowGPU = true;
+        }
+    }
+#endif
+
     bool blackOutLayer = isProtected() || (isSecure() && !hw->isSecure());
 
-    if (!blackOutLayer) {
+    if (!blackOutLayer || (canAllowGPU)) {
         // TODO: we could be more subtle with isFixedSize()
         const bool useFiltering = getFiltering() || needsFiltering(hw) || isFixedSize();
 
@@ -1289,6 +1300,18 @@ bool Layer::isIntOnly() const
     }
     return false;
 }
+
+bool Layer::isSecureDisplay() const
+{
+    const sp<GraphicBuffer>& activeBuffer(mActiveBuffer);
+    if (activeBuffer != 0) {
+        uint32_t usage = activeBuffer->getUsage();
+        if(usage & GRALLOC_USAGE_PRIVATE_SECURE_DISPLAY)
+            return true;
+    }
+    return false;
+}
+
 #endif
 // ---------------------------------------------------------------------------
 
