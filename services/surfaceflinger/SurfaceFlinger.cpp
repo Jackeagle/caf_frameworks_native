@@ -2980,7 +2980,6 @@ status_t SurfaceFlinger::captureScreenImplLocked(
         return BAD_VALUE;
     }
 
-    eglMakeCurrent(mEGLDisplay, NULL, NULL, mEGLContext);
     eglDestroySurface(mEGLDisplay, eglSurface);
 
     return NO_ERROR;
