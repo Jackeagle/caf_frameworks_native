@@ -200,48 +200,37 @@ void DisplayDevice::flip(const Region& dirty) const
     EGLDisplay dpy = mDisplay;
     EGLSurface surface = mSurface;
 
-#ifdef EGL_ANDROID_swap_rectangle    
+#ifdef EGL_ANDROID_swap_rectangle
     if (mFlags & SWAP_RECTANGLE) {
         const Region newDirty(dirty.intersect(bounds()));
         const Rect b(newDirty.getBounds());
         eglSetSwapRectangleANDROID(dpy, surface,
                 b.left, b.top, b.width(), b.height());
-    } 
+    }
 #endif
 
     mPageFlipCount++;
 }
 
 void DisplayDevice::swapBuffers(HWComposer& hwc) const {
-    EGLBoolean success = EGL_TRUE;
-    if (hwc.initCheck() != NO_ERROR) {
-        // no HWC, we call eglSwapBuffers()
-        success = eglSwapBuffers(mDisplay, mSurface);
-    } else {
-        // We have a valid HWC, but not all displays can use it, in particular
-        // the virtual displays are on their own.
-        // TODO: HWC 1.2 will allow virtual displays
-        if (mType >= DisplayDevice::DISPLAY_VIRTUAL) {
-            // always call eglSwapBuffers() for virtual displays
-            success = eglSwapBuffers(mDisplay, mSurface);
-        } else if (hwc.supportsFramebufferTarget()) {
-            // as of hwc 1.1 we always call eglSwapBuffers if we have some
-            // GLES layers
-            if (hwc.hasGlesComposition(mType)) {
-                success = eglSwapBuffers(mDisplay, mSurface);
-            }
-        } else {
-            // HWC doesn't have the framebuffer target, we don't call
-            // eglSwapBuffers(), since this is handled by HWComposer::commit().
-        }
-    }
-
-    if (!success) {
-        EGLint error = eglGetError();
-        if (error == EGL_CONTEXT_LOST ||
-                mType == DisplayDevice::DISPLAY_PRIMARY) {
-            LOG_ALWAYS_FATAL("eglSwapBuffers(%p, %p) failed with 0x%08x",
+    // We need to call eglSwapBuffers() unless
+    // (a) there was no GLES composition on this frame, or
+    // (b) we're using a legacy HWC with no framebuffer target
+    //     support (in which case HWComposer::commit() handles things).
+    if ((hwc.initCheck() != NO_ERROR) ||
+        (hwc.hasGlesComposition(mType) &&
+            hwc.supportsFramebufferTarget())) {
+        EGLBoolean success = eglSwapBuffers(mDisplay, mSurface);
+        if (!success) {
+            EGLint error = eglGetError();
+            if (error == EGL_CONTEXT_LOST ||
+                    mType == DisplayDevice::DISPLAY_PRIMARY) {
+                LOG_ALWAYS_FATAL("eglSwapBuffers(%p, %p) failed with 0x%08x",
                     mDisplay, mSurface, error);
+            } else {
+                ALOGE("eglSwapBuffers(%p, %p) failed with 0x%08x",
+                    mDisplay, mSurface, error);
+            }
         }
     }
 }
