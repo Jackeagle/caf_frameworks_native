@@ -46,6 +46,7 @@
 
 #ifdef QCOM_BSP
 #include <gralloc_priv.h>
+#include <gpuformats.h>
 #endif
 
 #define DEBUG_RESIZE    0
@@ -485,6 +486,12 @@ void Layer::onDraw(const sp<const DisplayDevice>& hw, const Region& clip) const
         }
         return;
     }
+#ifdef QCOM_BSP
+    if (!qdutils::isGPUSupportedFormat(mActiveBuffer->handle)) {
+        clearWithOpenGL(hw,clip, 0, 0, 0, 1);
+        return;
+    }
+#endif
 
     // Bind the current buffer to the GL texture, and wait for it to be
     // ready for us to draw into.
