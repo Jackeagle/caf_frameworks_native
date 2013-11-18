@@ -16,6 +16,9 @@
 
 #include <ui/PixelFormat.h>
 #include <hardware/hardware.h>
+#ifdef QCOM_BSP
+#include "gralloc_priv.h"
+#endif
 
 // ----------------------------------------------------------------------------
 namespace android {
@@ -106,6 +109,11 @@ status_t getPixelFormatInfo(PixelFormat format, PixelFormatInfo* info)
     case HAL_PIXEL_FORMAT_YCrCb_420_SP:
     case HAL_PIXEL_FORMAT_YV12:
         info->bitsPerPixel = 12;
+#ifdef QCOM_BSP
+    case HAL_PIXEL_FORMAT_YCrCb_444_I:
+    case HAL_PIXEL_FORMAT_YCbCr_444_I:
+        info->bitsPerPixel = 24;
+#endif
      done:
         info->format = format;
         info->components = COMPONENT_YUV;
