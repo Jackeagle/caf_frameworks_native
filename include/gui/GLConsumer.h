@@ -419,6 +419,9 @@ private:
     // It is set to false by detachFromContext, and then set to true again by
     // attachToContext.
     bool mAttached;
+
+    // Check format supported or not
+    bool mGpuSupportedFormat;
 };
 
 // ----------------------------------------------------------------------------

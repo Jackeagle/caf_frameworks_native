@@ -40,6 +40,10 @@
 #include <utils/String8.h>
 #include <utils/Trace.h>
 
+#ifdef QCOM_BSP
+#include <gpuformats.h>
+#endif
+
 namespace android {
 
 // Macros for including the GLConsumer name in log messages
@@ -222,14 +226,22 @@ status_t GLConsumer::releaseAndUpdateLocked(const BufferQueue::BufferItem& item)
     // means the buffer was previously acquired), if we destroyed the
     // EGLImage when detaching from a context but the buffer has not been
     // re-allocated.
-    if (mEglSlots[buf].mEglImage == EGL_NO_IMAGE_KHR) {
-        EGLImageKHR image = createImage(mEglDisplay, mSlots[buf].mGraphicBuffer);
-        if (image == EGL_NO_IMAGE_KHR) {
-            ST_LOGW("releaseAndUpdate: unable to createImage on display=%p slot=%d",
-                  mEglDisplay, buf);
-            return UNKNOWN_ERROR;
+
+#ifdef QCOM_BSP
+    mGpuSupportedFormat = qdutils::isGPUSupportedFormat(
+        mSlots[buf].mGraphicBuffer->handle);
+#endif
+
+    if(mGpuSupportedFormat) {
+        if (mEglSlots[buf].mEglImage == EGL_NO_IMAGE_KHR) {
+            EGLImageKHR image = createImage(mEglDisplay, mSlots[buf].mGraphicBuffer);
+            if (image == EGL_NO_IMAGE_KHR) {
+               ST_LOGW("releaseAndUpdate: unable to createImage on display=%p slot=%d",
+                   mEglDisplay, buf);
+                   return UNKNOWN_ERROR;
+            } 
+            mEglSlots[buf].mEglImage = image;
         }
-        mEglSlots[buf].mEglImage = image;
     }
 
     // Do whatever sync ops we need to do before releasing the old slot.
@@ -296,8 +308,9 @@ status_t GLConsumer::bindTextureImageLocked() {
     } else {
         EGLImageKHR image = mEglSlots[mCurrentTexture].mEglImage;
 
-        glEGLImageTargetTexture2DOES(mTexTarget, (GLeglImageOES)image);
-
+        if(mGpuSupportedFormat) {
+            glEGLImageTargetTexture2DOES(mTexTarget, (GLeglImageOES)image);
+        }
         while ((error = glGetError()) != GL_NO_ERROR) {
             ST_LOGE("bindTextureImage: error binding external texture image %p"
                     ": %#04x", image, error);
@@ -461,7 +474,9 @@ status_t GLConsumer::bindUnslottedBufferLocked(EGLDisplay dpy) {
     }
 
     // Attach the current buffer to the GL texture.
-    glEGLImageTargetTexture2DOES(mTexTarget, (GLeglImageOES)image);
+    if(mGpuSupportedFormat) {
+        glEGLImageTargetTexture2DOES(mTexTarget, (GLeglImageOES)image);
+    }
 
     GLint error;
     status_t err = OK;
