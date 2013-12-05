@@ -213,6 +213,9 @@ int Surface::dequeueBuffer(android_native_buffer_t** buffer, int* fenceFd) {
         if (result != NO_ERROR) {
             ALOGE("dequeueBuffer: IGraphicBufferProducer::requestBuffer failed: %d", result);
             return result;
+        } else if (gbuf == 0) {
+            ALOGE("dequeueBuffer: Buffer is null return");
+            return INVALID_OPERATION;
         }
     }
 
@@ -351,6 +354,16 @@ int Surface::query(int what, int* value) const {
                     }
                 }
                 return err;
+            }
+            case NATIVE_WINDOW_CONSUMER_USAGE_BITS: {
+                status_t err = NO_ERROR;
+                err = mGraphicBufferProducer->query(what, value);
+                if(err == NO_ERROR) {
+                    *value |= mReqUsage;
+                    return NO_ERROR;
+                } else {
+                    return err;
+                }
             }
         }
     }
