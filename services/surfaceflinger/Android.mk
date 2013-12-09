@@ -1,6 +1,7 @@
 LOCAL_PATH:= $(call my-dir)
 include $(CLEAR_VARS)
 
+
 LOCAL_SRC_FILES:= \
     Client.cpp                              \
     DisplayDevice.cpp                       \
@@ -32,6 +33,10 @@ endif
 ifeq ($(TARGET_BOARD_PLATFORM),s5pc110)
 	LOCAL_CFLAGS += -DHAS_CONTEXT_PRIORITY
 	LOCAL_CFLAGS += -DNEVER_DEFAULT_TO_ASYNC_MODE
+endif
+
+ifeq ($(AUTOPLAT_001),true)
+#	LOCAL_CFLAGS += -DAUTOPLAT_001
 endif
 
 ifeq ($(TARGET_DISABLE_TRIPLE_BUFFERING),true)

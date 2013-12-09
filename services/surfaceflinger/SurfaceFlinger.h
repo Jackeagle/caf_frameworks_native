@@ -458,6 +458,10 @@ private:
      */
 
     sp<IBinder> mExtDisplayToken;
+#if defined(AUTOPLAT_001)
+    bool shouldUnblankScreen();
+#endif /* AUTOPLAT_001 */
+
 };
 
 // ---------------------------------------------------------------------------

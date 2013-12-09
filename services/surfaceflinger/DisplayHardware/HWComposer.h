@@ -126,6 +126,9 @@ public:
     int fbPost(int32_t id, const sp<Fence>& acquireFence, const sp<GraphicBuffer>& buf);
     int fbCompositionComplete();
     void fbDump(String8& result);
+#if defined(AUTOPLAT_001)
+    void setEnterRearMode(int disp, bool enter);
+#endif /* AUTOPLAT_001 */
 
     /*
      * Interface to hardware composer's layers functionality.
@@ -260,6 +263,9 @@ public:
 
     // for debugging ----------------------------------------------------------
     void dump(String8& out, char* scratch, size_t SIZE) const;
+#if defined(AUTOPLAT_001)
+    void setFakeVsync(bool enable);
+#endif /* AUTOPLAT_001 */
 
 private:
     void loadHwcModule();

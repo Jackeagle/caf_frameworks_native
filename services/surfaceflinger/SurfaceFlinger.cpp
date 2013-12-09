@@ -83,6 +83,62 @@ const String16 sReadFramebuffer("android.permission.READ_FRAME_BUFFER");
 const String16 sDump("android.permission.DUMP");
 
 // ---------------------------------------------------------------------------
+#if defined(AUTOPLAT_001)
+static bool mWaitFirstFrame = true;
+static bool mRearFromPowerOn = false;
+static const char* REAR_STAT_PATH = "/sys/class/switch/reverse/state";
+static const char* REAR_COMMAND_PATH = "/sys/class/switch/reverse/continues";
+
+static int readFromFile(const char* path, char* buf, size_t size)
+{
+    if (!path)
+        return -1;
+    int fd = open(path, O_RDONLY, 0);
+    if (fd == -1) {
+        ALOGE("Could not open '%s'", path);
+        return -1;
+    }
+
+    ssize_t count = read(fd, buf, size);
+    if (count > 0) {
+        while (count > 0 && buf[count-1] == '\n')
+            count--;
+        buf[count] = '\0';
+    } else {
+        buf[0] = '\0';
+    }
+
+    close(fd);
+    return count;
+}
+static int writeBufToFile(const char* path, const char* buf, size_t size) {
+    if (!path) return -1;
+    int fd = open(path, O_RDWR);
+    if (fd == -1) {
+        ALOGE("Could not open '%s'", path);
+        return -1;
+    }
+    ssize_t count = write(fd, buf, size);
+    close(fd);
+    return count;
+}
+static int queryRearMode() {
+    char buf[20];
+    int ret = readFromFile(REAR_STAT_PATH,buf,20);
+    if (ret > 0) {
+        return atoi(buf);
+    }
+    return ret;
+}
+static void setContinueRearEvent() {
+    writeBufToFile(REAR_COMMAND_PATH,"1",1);
+}
+static void setShowAndroid() {
+    ALOGI("set %s %s",REAR_COMMAND_PATH,"show");
+    //notify clear kernel logo
+    writeBufToFile(REAR_COMMAND_PATH,"show",4);
+}
+#endif /* AUTOPLAT_001 */
 
 SurfaceFlinger::SurfaceFlinger()
     :   BnSurfaceComposer(), Thread(false),
@@ -224,6 +280,17 @@ void SurfaceFlinger::bootFinished()
     // formerly we would just kill the process, but we now ask it to exit so it
     // can choose where to stop the animation.
     property_set("service.bootanim.exit", "1");
+#if defined(AUTOPLAT_001)
+    setShowAndroid();
+    unblank(mDefaultDisplays[DisplayDevice::DISPLAY_PRIMARY]);
+    /*
+    if (queryRearMode() != 1) {
+        mRearFromPowerOn = false;
+        unblank(mDefaultDisplays[DisplayDevice::DISPLAY_PRIMARY]);
+    } else {
+        mRearFromPowerOn = true;
+    }*/
+#endif /* AUTOPLAT_001 */
 }
 
 void SurfaceFlinger::deleteTextureAsync(GLuint texture) {
@@ -534,6 +601,10 @@ status_t SurfaceFlinger::readyToRun()
 
     // start boot animation
     startBootAnim();
+#if defined(AUTOPLAT_001)
+    //fake vsync first
+    mHwc->setFakeVsync(true);
+#endif /* AUTOPLAT_001 */
 
     return NO_ERROR;
 }
@@ -2083,6 +2154,12 @@ status_t SurfaceFlinger::onLayerDestroyed(const wp<LayerBaseClient>& layer)
 }
 
 // ---------------------------------------------------------------------------
+#if defined(AUTOPLAT_001)
+bool SurfaceFlinger::shouldUnblankScreen() {
+    //we should not unblank screen first time
+    return !mWaitFirstFrame || mBootFinished;
+}
+#endif /* AUTOPLAT_001 */
 
 void SurfaceFlinger::onInitializeDisplays() {
     // reset screen orientation
@@ -2096,7 +2173,9 @@ void SurfaceFlinger::onInitializeDisplays() {
     d.viewport.makeInvalid();
     displays.add(d);
     setTransactionState(state, displays, 0);
+#if !defined(AUTOPLAT_001)
     onScreenAcquired(getDefaultDisplayDevice());
+#endif /* AUTOPLAT_001 */
 }
 
 void SurfaceFlinger::initializeDisplays() {
@@ -2115,7 +2194,11 @@ void SurfaceFlinger::initializeDisplays() {
 
 
 void SurfaceFlinger::onScreenAcquired(const sp<const DisplayDevice>& hw) {
+#if !defined(AUTOPLAT_001)
     ALOGD("Screen acquired, type=%d flinger=%p", hw->getDisplayType(), this);
+#else
+    ALOGD("Screen acquired, type=%d flinger=%p mWaitFirstFrame=%d", hw->getDisplayType(), this, mWaitFirstFrame);
+#endif /* AUTOPLAT_001 */
     if (hw->isScreenAcquired()) {
         // this is expected, e.g. when power manager wakes up during boot
         ALOGD(" screen was previously acquired");
@@ -2123,6 +2206,9 @@ void SurfaceFlinger::onScreenAcquired(const sp<const DisplayDevice>& hw) {
     }
 
     hw->acquireScreen();
+#if defined(AUTOPLAT_001)
+    if (mWaitFirstFrame) return;
+#endif /* AUTOPLAT_001 */
     int32_t type = hw->getDisplayType();
     if (type < DisplayDevice::NUM_DISPLAY_TYPES) {
         // built-in display, tell the HWC
@@ -2173,11 +2259,20 @@ void SurfaceFlinger::unblank(const sp<IBinder>& display) {
             } else if (hw->getDisplayType() >= DisplayDevice::NUM_DISPLAY_TYPES) {
                 ALOGW("Attempt to unblank virtual display");
             } else {
+#if defined(AUTOPLAT_001)
+                mFlinger.getHwComposer().setFakeVsync(false);
+                mWaitFirstFrame = false;
+#endif /* AUTOPLAT_001 */
                 mFlinger.onScreenAcquired(hw);
             }
             return true;
         }
     };
+#if defined(AUTOPLAT_001)
+    if (!shouldUnblankScreen()) {
+        return;
+    }
+#endif /* AUTOPLAT_001 */
     sp<MessageBase> msg = new MessageScreenAcquired(*this, display);
     postMessageSync(msg);
 }
@@ -2597,6 +2692,33 @@ status_t SurfaceFlinger::onTransact(
                 Mutex::Autolock _l(mStateLock);
                 sp<const DisplayDevice> hw(getDefaultDisplayDevice());
                 reply->writeInt32(hw->getPageFlipCount());
+#if defined(AUTOPLAT_001)
+                return NO_ERROR;
+            }
+            case 2000: {
+                //TODO,it's better run on surfaceflinger thread, not binder thread
+                //get informed of rear camera enter/exit working
+                n = data.readInt32();
+                if (mHwc != NULL) {
+                    mHwc->setEnterRearMode(DisplayDevice::DISPLAY_PRIMARY,n==1?true:false);
+                }
+                if (n == 0) {
+                    //exit rear camera, just force flush buffer
+                    if (!mRearFromPowerOn) {
+                        mWaitFirstFrame = false;
+                        mVisibleRegionsDirty = true;
+                        repaintEverything();
+                        ALOGI("exit gear mode refresh everything");
+                        signalRefresh();
+                    } else {
+                        mRearFromPowerOn = false;
+                        unblank(mDefaultDisplays[DisplayDevice::DISPLAY_PRIMARY]);
+                    }
+                }  /*else if (n == 1) {
+                    mWaitFirstFrame = true;
+                }*/
+                return NO_ERROR;
+#endif /* AUTOPLAT_001 */
             }
             return NO_ERROR;
         }
@@ -2609,7 +2731,7 @@ void SurfaceFlinger::repaintEverything() {
     signalTransaction();
 }
 
-// ---------------------------------------------------------------------------
+/* ---------------------------------------------------------------------------*/
 
 status_t SurfaceFlinger::renderScreenToTexture(uint32_t layerStack,
         GLuint* textureName, GLfloat* uOut, GLfloat* vOut)
@@ -2637,7 +2759,7 @@ status_t SurfaceFlinger::renderScreenToTextureLocked(uint32_t layerStack,
     // make sure to clear all GL error flags
     while ( glGetError() != GL_NO_ERROR ) ;
 
-    // create a FBO
+    /* create a FBO*/
     GLuint name, tname;
     glGenTextures(1, &tname);
     glBindTexture(GL_TEXTURE_2D, tname);
@@ -2708,7 +2830,7 @@ status_t SurfaceFlinger::captureScreenImplLocked(const sp<IBinder>& display,
     const uint32_t hw_w = hw->getWidth();
     const uint32_t hw_h = hw->getHeight();
 
-    // if we have secure windows on this display, never allow the screen capture
+    /* if we have secure windows on this display, never allow the screen capture*/
     if (hw->getSecureLayerVisible()) {
         ALOGW("FB is protected: PERMISSION_DENIED");
         return PERMISSION_DENIED;
@@ -2724,10 +2846,10 @@ status_t SurfaceFlinger::captureScreenImplLocked(const sp<IBinder>& display,
     const size_t size = sw * sh * 4;
     const bool filtering = sw != hw_w || sh != hw_h;
 
-//    ALOGD("screenshot: sw=%d, sh=%d, minZ=%d, maxZ=%d",
-//            sw, sh, minLayerZ, maxLayerZ);
+/*    ALOGD("screenshot: sw=%d, sh=%d, minZ=%d, maxZ=%d",
+            sw, sh, minLayerZ, maxLayerZ);*/
 
-    // make sure to clear all GL error flags
+    /* make sure to clear all GL error flags*/
     while ( glGetError() != GL_NO_ERROR ) ;
 
     // create a FBO
@@ -2745,7 +2867,7 @@ status_t SurfaceFlinger::captureScreenImplLocked(const sp<IBinder>& display,
 
     if (status == GL_FRAMEBUFFER_COMPLETE_OES) {
 
-        // invert everything, b/c glReadPixel() below will invert the FB
+        /* invert everything, b/c glReadPixel() below will invert the FB*/
         GLint  viewport[4];
         glGetIntegerv(GL_VIEWPORT, viewport);
         glViewport(0, 0, sw, sh);
@@ -2755,7 +2877,7 @@ status_t SurfaceFlinger::captureScreenImplLocked(const sp<IBinder>& display,
         glOrthof(0, hw_w, hw_h, 0, 0, 1);
         glMatrixMode(GL_MODELVIEW);
 
-        // redraw the screen entirely...
+        /* redraw the screen entirely...*/
         glClearColor(0,0,0,1);
         glClear(GL_COLOR_BUFFER_BIT);
 
@@ -2771,7 +2893,7 @@ status_t SurfaceFlinger::captureScreenImplLocked(const sp<IBinder>& display,
             }
         }
 
-        // check for errors and return screen capture
+        /* check for errors and return screen capture*/
         if (glGetError() != GL_NO_ERROR) {
             // error while rendering
             result = INVALID_OPERATION;
@@ -2804,14 +2926,14 @@ status_t SurfaceFlinger::captureScreenImplLocked(const sp<IBinder>& display,
         result = BAD_VALUE;
     }
 
-    // release FBO resources
+    /* release FBO resources*/
     glBindFramebufferOES(GL_FRAMEBUFFER_OES, 0);
     glDeleteRenderbuffersOES(1, &tname);
     glDeleteFramebuffersOES(1, &name);
 
     hw->compositionComplete();
 
-//    ALOGD("screenshot: result = %s", result<0 ? strerror(result) : "OK");
+/*    ALOGD("screenshot: result = %s", result<0 ? strerror(result) : "OK");*/
 
     return result;
 }
@@ -2884,7 +3006,7 @@ SurfaceFlinger::LayerVector::LayerVector(const LayerVector& rhs)
 int SurfaceFlinger::LayerVector::do_compare(const void* lhs,
     const void* rhs) const
 {
-    // sort layers per layer-stack, then by z-order and finally by sequence
+    /* sort layers per layer-stack, then by z-order and finally by sequence*/
     const sp<LayerBase>& l(*reinterpret_cast<const sp<LayerBase>*>(lhs));
     const sp<LayerBase>& r(*reinterpret_cast<const sp<LayerBase>*>(rhs));
 
@@ -2901,7 +3023,7 @@ int SurfaceFlinger::LayerVector::do_compare(const void* lhs,
     return l->sequence - r->sequence;
 }
 
-// ---------------------------------------------------------------------------
+/* ---------------------------------------------------------------------------*/
 
 SurfaceFlinger::DisplayDeviceState::DisplayDeviceState()
     : type(DisplayDevice::DISPLAY_ID_INVALID) {
