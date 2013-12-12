@@ -248,6 +248,8 @@ void HWComposer::loadHwcModule()
 // Load and prepare the FB HAL, which uses the gralloc module.  Sets mFbDev.
 void HWComposer::loadFbHalModule()
 {
+#if !defined(AUTOPLAT_001)
+	/* Commented this to avoid conflict with parking lines */
     hw_module_t const* module;
 
     if (hw_get_module(GRALLOC_HARDWARE_MODULE_ID, &module) != 0) {
@@ -260,6 +262,7 @@ void HWComposer::loadFbHalModule()
         ALOGE("framebuffer_open failed (%s)", strerror(-err));
         return;
     }
+#endif /* AUTOPLAT_001 */
 }
 
 status_t HWComposer::initCheck() const {
@@ -481,10 +484,11 @@ void HWComposer::eventControl(int disp, int event, int enabled) {
         ALOGE_IF(err, "eventControl(%d, %d) failed %s",
                 event, enabled, strerror(-err));
     }
-
+#if !defined (AUTOPLAT_001)
     if (err == NO_ERROR && mVSyncThread != NULL) {
         mVSyncThread->setEnabled(enabled);
     }
+#endif /* AUTOPLAT_001 */
 }
 
 status_t HWComposer::createWorkList(int32_t id, size_t numLayers) {
@@ -1045,6 +1049,22 @@ bool HWComposer::VSyncThread::threadLoop() {
 
     return true;
 }
+#if defined(AUTOPLAT_001)
+void HWComposer::setFakeVsync(bool enable) {
+    if (mVSyncThread == NULL) {
+        if (enable) {
+            mVSyncThread = new VSyncThread(*this);
+            mVSyncThread->setEnabled(true);
+        }
+    } else {
+        mVSyncThread->setEnabled(enable);
+        if (!enable) {
+            mVSyncThread->requestExitAndWait();
+            mVSyncThread = NULL;
+        }
+    }
+}
+#endif /* AUTOPLAT_001 */
 
 // ---------------------------------------------------------------------------
 }; // namespace android
