@@ -121,47 +121,50 @@ bool needNewBuffer(const qBufGeometry currentGeometry,
  * @param: Updated width
  * @param: Updated height
  * @param: Updated format
+ *
+ * @return True if a buffer is updated with new attributes.
  */
-int updateBufferGeometry(sp<GraphicBuffer> buffer, const qBufGeometry updatedGeometry)
+bool updateBufferGeometry(sp<GraphicBuffer> buffer,
+                          const qBufGeometry updatedGeometry)
 {
     if (buffer == 0) {
-        ALOGE("updateBufferGeometry: graphic buffer is NULL");
-        return -EINVAL;
+        ALOGW("updateBufferGeometry: graphic buffer is NULL");
+        return false;
     }
 
     if (!updatedGeometry.width || !updatedGeometry.height ||
         !updatedGeometry.format) {
         // No update required. Return.
-        return 0;
+        return false;
     }
     if (buffer->width == updatedGeometry.width &&
         buffer->height == updatedGeometry.height &&
         buffer->format == updatedGeometry.format) {
         // The buffer has already been updated. Return.
-        return 0;
+        return false;
     }
 #ifdef QCOMHW
     // Validate the handle
     if (private_handle_t::validate(buffer->handle)) {
-        ALOGE("updateBufferGeometry: handle is invalid");
-        return -EINVAL;
+        ALOGW("updateBufferGeometry: handle is invalid");
+        return false;
     }
-#endif // QCOMHW
-    buffer->width  = updatedGeometry.width;
-    buffer->height = updatedGeometry.height;
-    buffer->format = updatedGeometry.format;
-#ifdef QCOMHW
     private_handle_t *hnd = (private_handle_t*)(buffer->handle);
     if (hnd) {
         hnd->width  = updatedGeometry.width;
         hnd->height = updatedGeometry.height;
         hnd->format = updatedGeometry.format;
     } else {
-        ALOGE("updateBufferGeometry: hnd is NULL");
-        return -EINVAL;
+        ALOGW("updateBufferGeometry: hnd is NULL");
+        return false;
     }
+    buffer->width  = updatedGeometry.width;
+    buffer->height = updatedGeometry.height;
+    buffer->format = updatedGeometry.format;
+
+    return true;
 #endif // QCOMHW
-    return 0;
+    return false;
 }
 
 BufferQueue::BufferQueue(  bool allowSynchronousMode, int bufferCount ) :
@@ -713,9 +716,14 @@ status_t BufferQueue::queueBuffer(int buf,
         qBufGeometry updatedGeometry;
         updatedGeometry.set(mNextBufferInfo.width,
                             mNextBufferInfo.height, mNextBufferInfo.format);
-        updateBufferGeometry(mSlots[buf].mGraphicBuffer, updatedGeometry);
 
         const sp<GraphicBuffer>& graphicBuffer(mSlots[buf].mGraphicBuffer);
+        if(updateBufferGeometry(graphicBuffer, updatedGeometry)) {
+            // set flags to destroy old eglImage and create new eglImage.
+            mSlots[buf].mAcquireCalled = false;
+            mSlots[buf].mEglDisplay = EGL_NO_DISPLAY;
+        }
+
         Rect bufferRect(graphicBuffer->getWidth(), graphicBuffer->getHeight());
         Rect croppedCrop;
         crop.intersect(bufferRect, &croppedCrop);
