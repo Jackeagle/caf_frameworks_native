@@ -305,7 +305,13 @@ Rect Layer::computeCrop(const sp<const DisplayDevice>& hw) const {
     // this operation will map to full pixels in the buffer.
     // NOTE: should we revert to GL composition if a scaling is involved
     // since it cannot be represented in the HWC API?
-    Rect activeCrop(s.transform.transform(s.active.crop));
+
+    Rect activeCrop(s.active.w, s.active.h);
+    if (!s.active.crop.isEmpty()) {
+        activeCrop = s.active.crop;
+    }
+    activeCrop = s.transform.transform(activeCrop);
+
     activeCrop.intersect(hw->getViewport(), &activeCrop);
     activeCrop = s.transform.inverse().transform(activeCrop);
 
