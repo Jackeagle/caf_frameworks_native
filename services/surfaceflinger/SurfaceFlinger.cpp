@@ -1116,8 +1116,10 @@ void SurfaceFlinger::setVirtualDisplayData(
     EGLint w, h;
     EGLDisplay display = eglGetDisplay(EGL_DEFAULT_DISPLAY);
     surface = eglCreateWindowSurface(display, mEGLConfig, window, NULL);
-    eglQuerySurface(display, surface, EGL_WIDTH,  &w);
-    eglQuerySurface(display, surface, EGL_HEIGHT, &h);
+    if (surface != NULL) {
+        eglQuerySurface(display, surface, EGL_WIDTH,  &w);
+        eglQuerySurface(display, surface, EGL_HEIGHT, &h);
+    }
 
     mHwc->setVirtualDisplayProperties(hwcDisplayId, w, h, format);
 }
