@@ -1700,8 +1700,12 @@ void SurfaceFlinger::doComposeSurfaces(const sp<const DisplayDevice>& hw, const 
 
             // screen is already cleared here
             if (!region.isEmpty()) {
-                // can happen with SurfaceView
-                drawWormhole(hw, region);
+                if (cur != end) {
+                    if (cur->getCompositionType() != HWC_BLIT)
+                        // can happen with SurfaceView
+                        drawWormhole(hw, region);
+                } else
+                    drawWormhole(hw, region);
             }
         }
 
@@ -1739,9 +1743,10 @@ void SurfaceFlinger::doComposeSurfaces(const sp<const DisplayDevice>& hw, const 
             if (!clip.isEmpty()) {
                 switch (cur->getCompositionType()) {
                     case HWC_OVERLAY: {
+                        const Layer::State& state(layer->drawingState());
                         if ((cur->getHints() & HWC_HINT_CLEAR_FB)
                                 && i
-                                && layer->isOpaque()
+                                && layer->isOpaque() && (state.alpha == 0xFF)
                                 && hasGlesComposition) {
                             // never clear the very first layer since we're
                             // guaranteed the FB is already cleared
