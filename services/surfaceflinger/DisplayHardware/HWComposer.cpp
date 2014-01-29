@@ -323,6 +323,31 @@ static float getDefaultDensity(uint32_t height) {
     else                return ACONFIGURATION_DENSITY_TV;
 }
 
+static float roundDensity(float density) {
+    int i;
+    float densityLut[] = {
+        ACONFIGURATION_DENSITY_LOW,
+        ACONFIGURATION_DENSITY_MEDIUM,
+        ACONFIGURATION_DENSITY_TV,
+        ACONFIGURATION_DENSITY_HIGH,
+        ACONFIGURATION_DENSITY_XHIGH,
+        ACONFIGURATION_DENSITY_XXHIGH,
+        ACONFIGURATION_DENSITY_XXXHIGH,
+        ACONFIGURATION_DENSITY_NONE,
+    };
+
+    for (i = 0; densityLut[i] != ACONFIGURATION_DENSITY_NONE; i++) {
+        if (density <= densityLut[i]) {
+            if ((density - densityLut[i - 1]) < (densityLut[i] - density)) {
+                i--;
+            }
+            break;
+        }
+    }
+
+    return densityLut[i];
+}
+
 static const uint32_t DISPLAY_ATTRIBUTES[] = {
     HWC_DISPLAY_VSYNC_PERIOD,
     HWC_DISPLAY_WIDTH,
@@ -459,11 +484,11 @@ uint32_t HWComposer::getFormat(int disp) const {
 }
 
 float HWComposer::getDpiX(int disp) const {
-    return mDisplayData[disp].xdpi;
+    return roundDensity(mDisplayData[disp].xdpi);
 }
 
 float HWComposer::getDpiY(int disp) const {
-    return mDisplayData[disp].ydpi;
+    return roundDensity(mDisplayData[disp].ydpi);
 }
 
 bool HWComposer::isConnected(int disp) const {
