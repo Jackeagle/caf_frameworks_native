@@ -712,18 +712,18 @@ status_t SurfaceFlinger::getDisplayInfo(const sp<IBinder>& display, DisplayInfo*
     };
 
     if (type == DisplayDevice::DISPLAY_PRIMARY) {
-        // The density of the device is provided by a build property
         float density = Density::getBuildDensity() / 160.0f;
-        if (density == 0) {
-            // the build doesn't provide a density -- this is wrong!
-            // use xdpi instead
-            ALOGE("ro.sf.lcd_density must be defined as a build property");
+        if (xdpi > 0) {
             density = xdpi / 160.0f;
         }
         if (Density::getEmuDensity()) {
             // if "qemu.sf.lcd_density" is specified, it overrides everything
             xdpi = ydpi = density = Density::getEmuDensity();
             density /= 160.0f;
+        }
+        if (density == 0) {
+            // the build doesn't provide a density -- this is wrong!
+            ALOGE("ro.sf.lcd_density must be defined as a build property");
         }
         info->density = density;
 
