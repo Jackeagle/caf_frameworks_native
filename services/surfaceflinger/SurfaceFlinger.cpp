@@ -128,6 +128,10 @@ const String16 sReadFramebuffer("android.permission.READ_FRAME_BUFFER");
 const String16 sDump("android.permission.DUMP");
 
 // ---------------------------------------------------------------------------
+// Initialize extendedMode to false
+#ifdef QCOM_BSP
+bool SurfaceFlinger::sExtendedMode = false;
+#endif
 
 SurfaceFlinger::SurfaceFlinger()
     :   BnSurfaceComposer(),
@@ -632,6 +636,23 @@ int32_t SurfaceFlinger::allocateHwcDisplayId(DisplayDevice::DisplayType type) {
             type : mHwc->allocateDisplayId();
 }
 
+bool SurfaceFlinger::isNonWfdVirtualDisplayDevice(
+                                        const DisplayDeviceState& state) {
+
+    /* Though the property persist.sys.wfd.virtual can be used to
+       detect if virtual wfd is connected, there is no way to
+       determine if a given virtual display is wfd or not. Hence for now,
+       we are relying on other virtual display adaptors to make this
+       decision */
+
+    if (!strncmp(state.displayName.string(), "Overlay", 7)){
+        return true;
+    } else if(!strncmp(state.displayName.string(), "ScreenRecorder", 14)){
+        return true;
+    }
+    return false;
+}
+
 void SurfaceFlinger::startBootAnim() {
     // start boot animation
     mBootFinished = false;
@@ -852,6 +873,13 @@ void SurfaceFlinger::onHotplugReceived(int type, bool connected) {
         } else {
             mCurrentState.displays.removeItem(mBuiltinDisplays[type]);
             mBuiltinDisplays[type].clear();
+#ifdef QCOM_BSP
+            // if extended_mode is set, and set mVisibleRegionsDirty
+            // as we need to rebuildLayerStack
+            if(isExtendedMode()) {
+                mVisibleRegionsDirty = true;
+            }
+#endif
         }
         setTransactionFlags(eDisplayTransactionNeeded);
 
@@ -1000,6 +1028,11 @@ void SurfaceFlinger::postComposition()
 }
 
 void SurfaceFlinger::rebuildLayerStacks() {
+#ifdef QCOM_BSP
+    char prop[PROPERTY_VALUE_MAX];
+    property_get("sys.extended_mode", prop, "0");
+    sExtendedMode = atoi(prop) ? true : false;
+#endif
     // rebuild the visible layer list per screen
     if (CC_UNLIKELY(mVisibleRegionsDirty)) {
         ATRACE_CALL();
@@ -1078,24 +1111,29 @@ void SurfaceFlinger::setUpHWComposer() {
             if (id >= 0) {
                 // Get the layers in the current drawying state
                 const LayerVector& layers(mDrawingState.layersSortedByZ);
+#ifdef QCOM_BSP
                 bool freezeSurfacePresent = false;
                 const size_t layerCount = layers.size();
                 char value[PROPERTY_VALUE_MAX];
                 property_get("sys.disable_ext_animation", value, "0");
-                if(atoi(value)) {
+                if(atoi(value) && (id != HWC_DISPLAY_PRIMARY)) {
                     for (size_t i = 0 ; i < layerCount ; ++i) {
                         static int screenShotLen = strlen("ScreenshotSurface");
                         const sp<Layer>& layer(layers[i]);
-                        if(!strncmp(layer->getName(), "ScreenshotSurface",
+                        const Layer::State& s(layer->getDrawingState());
+                        // check the layers associated with external display
+                        if(s.layerStack == hw->getLayerStack()) {
+                            if(!strncmp(layer->getName(), "ScreenshotSurface",
                                     screenShotLen)) {
-                            // Screenshot layer is present, and animation in
-                            // progress
-                            freezeSurfacePresent = true;
-                            break;
+                                // Screenshot layer is present, and animation in
+                                // progress
+                                freezeSurfacePresent = true;
+                                break;
+                            }
                         }
                     }
                 }
-
+#endif
                 const Vector< sp<Layer> >& currentLayers(
                     hw->getVisibleLayersSortedByZ());
                 const size_t count = currentLayers.size();
@@ -1108,6 +1146,7 @@ void SurfaceFlinger::setUpHWComposer() {
                      */
                     const sp<Layer>& layer(currentLayers[i]);
                     layer->setPerFrameData(hw, *cur);
+#ifdef QCOM_BSP
                     if(freezeSurfacePresent) {
                         // if freezeSurfacePresent, set ANIMATING flag
                         cur->setAnimating(true);
@@ -1117,17 +1156,14 @@ void SurfaceFlinger::setUpHWComposer() {
                         size_t dc = draw.size();
                         for (size_t i=0 ; i<dc ; i++) {
                             if (draw[i].isMainDisplay()) {
-                                HWComposer& hwc(getHwComposer());
-                                if (hwc.initCheck() == NO_ERROR)
-                                    // Pass the current orientation to HWC
-                                    // which will be used to block animation
-                                    // on external
-                                    hwc.eventControl(HWC_DISPLAY_PRIMARY,
-                                            SurfaceFlinger::EVENT_ORIENTATION,
-                                            uint32_t(draw[i].orientation));
+                                 // Pass the current orientation to HWC
+                                 hwc.eventControl(HWC_DISPLAY_PRIMARY,
+                                         SurfaceFlinger::EVENT_ORIENTATION,
+                                         uint32_t(draw[i].orientation));
                             }
                         }
                     }
+#endif
                 }
             }
         }
@@ -1376,7 +1412,7 @@ void SurfaceFlinger::handleTransactionLocked(uint32_t transactionFlags)
                     sp<IGraphicBufferProducer> producer;
                     sp<BufferQueue> bq = new BufferQueue(new GraphicBufferAlloc());
 
-                    int32_t hwcDisplayId = -1;
+                    int32_t hwcDisplayId = NO_MEMORY;
                     if (state.isVirtualDisplay()) {
                         // Virtual displays without a surface are dormant:
                         // they have external state (layer stack, projection,
@@ -1384,10 +1420,10 @@ void SurfaceFlinger::handleTransactionLocked(uint32_t transactionFlags)
                         if (state.surface != NULL) {
 
                             char value[PROPERTY_VALUE_MAX];
-                            hwcDisplayId = allocateHwcDisplayId(state.type);
                             property_get("persist.sys.wfd.virtual", value, "0");
                             int wfdVirtual = atoi(value);
-                            if(!wfdVirtual) {
+
+                            if((!wfdVirtual) or (isNonWfdVirtualDisplayDevice(state))) {
                                 sp<VirtualDisplaySurface> vds =
                                               new VirtualDisplaySurface(
                                     *mHwc, hwcDisplayId, state.surface, bq,
@@ -1396,11 +1432,19 @@ void SurfaceFlinger::handleTransactionLocked(uint32_t transactionFlags)
                                 if (hwcDisplayId >= 0) {
                                    producer = vds;
                                 } else {
-                                  // There won't be any interaction with HWC for this virtual display,
-                                  // so the GLES driver can pass buffers directly to the sink.
+                                /* hwcDisplayId is -ve at this point.
+                                   Since only one Virtual Display can be supported by HWC,
+                                   and WFD can be connected at any point of time, always
+                                   use GLES to compose ScreenRecorder and Simulated Display
+                                   usecases.
+                                */
+                                /* There won't be any interaction with HWC for this virtual display,
+                                   so the GLES driver can pass buffers directly to the sink.
+                                */
                                   producer = state.surface;
                                 }
                             } else {
+                                hwcDisplayId = allocateHwcDisplayId(state.type);
                                 //Read virtual display properties and create a
                                 //rendering surface for it inorder to be handled
                                 //by hwc.
@@ -1588,9 +1632,11 @@ void SurfaceFlinger::computeVisibleRegions(size_t dpy,
                 indexLOI = i;
             break;
         }
-
-        if (dpy && layer->isExtOnly()) {
-            bIgnoreLayers = true;
+        // iterate through the layer list to find ext_only layers or yuv
+        // layer(extended_mode) and store the index
+        if ((dpy && (layer->isExtOnly() ||
+                     (isExtendedMode() && layer->isYuvLayer())))) {
+            bIgnoreLayers= true;
             indexLOI = i;
         }
     }
@@ -1603,14 +1649,17 @@ void SurfaceFlinger::computeVisibleRegions(size_t dpy,
         const Layer::State& s(layer->getDrawingState());
 
 #ifdef QCOM_BSP
-        // Only add the layer marked as "external_only" to external list and
-        // only remove the layer marked as "external_only" from primary list
+        // Only add the layer marked as "external_only" or yuvLayer
+        // (extended_mode) to external list and
+        // only remove the layer marked as "external_only" or yuvLayer in
+        // extended_mode from primary list
         // and do not add the layer marked as "internal_only" to external list
         // Add secure UI layers to primary and remove other layers from internal
         //and external list
-        if((bIgnoreLayers && indexLOI != (int)i) ||
+        if(((bIgnoreLayers && indexLOI != (int)i) ||
            (!dpy && layer->isExtOnly()) ||
-           (dpy && layer->isIntOnly())) {
+                     (!dpy && isExtendedMode() && layer->isYuvLayer()))||
+                     (dpy && layer->isIntOnly())) {
             // Ignore all other layers except the layers marked as ext_only
             // by setting visible non transparent region empty.
             Region visibleNonTransRegion;
@@ -1865,8 +1914,12 @@ void SurfaceFlinger::doComposeSurfaces(const sp<const DisplayDevice>& hw, const 
 
             // screen is already cleared here
             if (!region.isEmpty()) {
-                // can happen with SurfaceView
-                drawWormhole(hw, region);
+                if (cur != end) {
+                    if (cur->getCompositionType() != HWC_BLIT)
+                        // can happen with SurfaceView
+                        drawWormhole(hw, region);
+                } else
+                    drawWormhole(hw, region);
             }
         }
 
@@ -2002,6 +2055,24 @@ void SurfaceFlinger::setTransactionState(
         uint32_t flags)
 {
     ATRACE_CALL();
+    size_t count = displays.size();
+#ifdef QCOM_BSP
+    for (size_t i=0 ; i<count ; i++) {
+        const DisplayState& s(displays[i]);
+        if(s.token != mBuiltinDisplays[DisplayDevice::DISPLAY_PRIMARY]) {
+            const uint32_t what = s.what;
+            // Invalidate and Delay the binder thread by 50 ms on
+            // eDisplayProjectionChanged to trigger a draw cycle so that
+            // it can fix one incorrect frame on the External, when we disable
+            // external animation
+            if (what & DisplayState::eDisplayProjectionChanged) {
+                invalidateHwcGeometry();
+                repaintEverything();
+                usleep(50000);
+            }
+        }
+    }
+#endif
     Mutex::Autolock _l(mStateLock);
     uint32_t transactionFlags = 0;
 
@@ -2021,7 +2092,6 @@ void SurfaceFlinger::setTransactionState(
         }
     }
 
-    size_t count = displays.size();
     for (size_t i=0 ; i<count ; i++) {
         const DisplayState& s(displays[i]);
         transactionFlags |= setDisplayStateLocked(s);
@@ -3082,7 +3152,17 @@ void SurfaceFlinger::renderScreenImplLocked(
                     continue;
                 }
 #endif
+#ifdef QCOM_BSP
+                int dispType = hw->getDisplayType();
+                // Dont let ext_only and extended_mode to be captured
+                // If not, we would see incorrect image during rotatoin
+                // on primary
+                if (layer->isVisible() &&
+                    not (!dispType && (layer->isExtOnly() ||
+                         (isExtendedMode() && layer->isYuvLayer())))) {
+#else
                 if (layer->isVisible()) {
+#endif
                     if (filtering) layer->setFiltering(true);
                     layer->draw(hw);
                     if (filtering) layer->setFiltering(false);
