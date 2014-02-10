@@ -74,6 +74,9 @@
 
 #include "RenderEngine/RenderEngine.h"
 #include <cutils/compiler.h>
+#ifdef QCOM_BSP
+#include "cb_swap_rect.h"
+#endif
 
 #define DISPLAY_COUNT       1
 
@@ -180,7 +183,7 @@ SurfaceFlinger::SurfaceFlinger()
     ALOGI_IF(mDebugRegion, "showupdates enabled");
     ALOGI_IF(mDebugDDMS, "DDMS debugging enabled");
 
-    property_get("debug.sf.swaprect", value, "1");
+    property_get("debug.sf.swaprect", value, "0");
     mSwapRectEnable = atoi(value) ? true:false ;
 }
 
@@ -3321,8 +3324,15 @@ void SurfaceFlinger::setupSwapRect()
     HWComposer& hwc(getHwComposer());
     const LayerVector& currentLayers(mDrawingState.layersSortedByZ);
     size_t count = currentLayers.size();
-
-    if (mSwapRectEnable && hwc.hasHwcComposition(HWC_DISPLAY_PRIMARY)) {
+#ifdef QCOM_BSP
+    qdutils::cb_swap_rect::getInstance().setSwapRectFeature_on(false);
+#endif
+    hwc.setSwapRectOn(false);
+    /*
+     * swap rect is enabled if swaprect property is set
+     * and it is blit composition
+     */
+    if (mSwapRectEnable && hwc.hasBlitComposition(HWC_DISPLAY_PRIMARY)) {
         int  totalDirtyRects = 0;
         Region consolidateVisibleRegion;
         Rect swapDirtyRect(Rect(0,0,0,0));
@@ -3355,9 +3365,13 @@ void SurfaceFlinger::setupSwapRect()
         //If SwapRect is enabled, dirtyLayerIdx would be set to the layer's idx
         if(dirtyLayerIdx != -1)  {
             /*
-            * Create dirty layer work list to be used by HWComposer instead of
-            * visible layer work list
-            */
+             * Create dirty layer work list to be used by HWComposer instead of
+             * visible layer work list
+             */
+#ifdef QCOM_BSP
+           qdutils::cb_swap_rect::getInstance().setSwapRectFeature_on(true);
+#endif
+            hwc.setSwapRectOn(true);
             hwc.setSwapRect(swapDirtyRect);
             invalidateHwcGeometry();
         }
