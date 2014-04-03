@@ -116,7 +116,7 @@ DisplayDevice::DisplayDevice(
         case DISPLAY_PRIMARY:
             mDisplayName = "Built-in Screen";
             break;
-        case DISPLAY_EXTERNAL:
+        case DISPLAY_SECONDARY:
             mDisplayName = "HDMI Screen";
             break;
         default:
