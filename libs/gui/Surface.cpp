@@ -68,6 +68,7 @@ Surface::Surface(
     mReqSize = 0;
     mTimestamp = NATIVE_WINDOW_TIMESTAMP_AUTO;
     mCrop.clear();
+    mDirtyRect.clear();
     mScalingMode = NATIVE_WINDOW_SCALING_MODE_FREEZE;
     mTransform = 0;
     mDefaultWidth = 0;
@@ -79,7 +80,6 @@ Surface::Surface(
     mConnectedToCpu = false;
     mProducerControlledByApp = controlledByApp;
     mSwapIntervalZero = false;
-    mDequeueIdx = 0;
 }
 
 Surface::~Surface() {
@@ -167,17 +167,11 @@ int Surface::hook_perform(ANativeWindow* window, int operation, ...) {
     return c->perform(operation, args);
 }
 
-int Surface::setDirtyRegion(Region* inOutDirtyRegion) {
-    Rect dirty;
-    if(inOutDirtyRegion)
-         dirty = inOutDirtyRegion->getBounds();
+status_t Surface::setDirtyRect(const Rect* dirtyRect) {
     Mutex::Autolock lock(mMutex);
-    status_t res = mGraphicBufferProducer->updateDirtyRegion(mDequeueIdx,
-                                      dirty.left, dirty.top, dirty.right,
-                                      dirty.bottom);
-    return res;
+    mDirtyRect = *dirtyRect;
+    return NO_ERROR;
 }
-
 
 int Surface::setSwapInterval(int interval) {
     ATRACE_CALL();
@@ -212,9 +206,6 @@ int Surface::dequeueBuffer(android_native_buffer_t** buffer, int* fenceFd) {
              result);
         return result;
     }
-
-    mDequeueIdx = buf;
-
     sp<GraphicBuffer>& gbuf(mSlots[buf].buffer);
 
     // this should never happen
@@ -308,10 +299,13 @@ int Surface::queueBuffer(android_native_buffer_t* buffer, int fenceFd) {
     Rect crop;
     mCrop.intersect(Rect(buffer->width, buffer->height), &crop);
 
+    Rect dirtyRect = mDirtyRect.isEmpty() ?
+        Rect(buffer->width, buffer->height) : mDirtyRect;
+
     sp<Fence> fence(fenceFd >= 0 ? new Fence(fenceFd) : Fence::NO_FENCE);
     IGraphicBufferProducer::QueueBufferOutput output;
     IGraphicBufferProducer::QueueBufferInput input(timestamp, isAutoTimestamp,
-            crop, mScalingMode, mTransform, mSwapIntervalZero, fence);
+            crop, dirtyRect, mScalingMode, mTransform, mSwapIntervalZero,fence);
     status_t err = mGraphicBufferProducer->queueBuffer(i, input, &output);
     if (err != OK)  {
         ALOGE("queueBuffer: error queuing buffer to SurfaceTexture, %d", err);
