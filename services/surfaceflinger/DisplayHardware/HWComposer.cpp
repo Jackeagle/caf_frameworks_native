@@ -46,9 +46,6 @@
 #include "../Layer.h"           // needed only for debugging
 #include "../SurfaceFlinger.h"
 
-#ifdef QCOM_BSP
-#include "cb_swap_rect.h"
-#endif
 namespace android {
 
 #define MIN_HWC_HEADER_VERSION HWC_HEADER_VERSION
@@ -91,7 +88,6 @@ HWComposer::HWComposer(
       mCBContext(new cb_context),
       mEventHandler(handler),
       mDebugForceFakeVSync(false),
-      mSwapRectOn(false),
       mVDSEnabled(false)
 {
     for (size_t i =0 ; i<MAX_HWC_DISPLAYS ; i++) {
@@ -1065,21 +1061,22 @@ void HWComposer::setSwapRect(Rect dirtyRect)
                l.displayFrame.right  = dirtyRect.right;
                l.displayFrame.bottom = dirtyRect.bottom;
           } else {
-#ifdef QCOM_BSP
-               l.flags |= qdutils::HWC_SKIP_HWC_COMPOSITION;
-#endif
+               l.sourceCropf.left   = 0;
+               l.sourceCropf.top    = 0;
+               l.sourceCropf.right  = 0;
+               l.sourceCrop.bottom = 0;
+               l.displayFrame.left   = 0;
+               l.displayFrame.top    = 0;
+               l.displayFrame.right  = 0;
+               l.displayFrame.bottom = 0;
           }
      }
 }
 
-void HWComposer::setSwapRectOn(bool enable){
-    mSwapRectOn = enable;
-}
 void HWComposer::dump(String8& result) const {
     if (mHwc) {
         result.appendFormat("Hardware Composer state (version %8x):\n", hwcApiVersion(mHwc));
         result.appendFormat("  mDebugForceFakeVSync=%d\n", mDebugForceFakeVSync);
-        result.appendFormat("  mSwapRectOn=%d\n",mSwapRectOn);
         for (size_t i=0 ; i<mNumDisplays ; i++) {
             const DisplayData& disp(mDisplayData[i]);
             if (!disp.connected)
