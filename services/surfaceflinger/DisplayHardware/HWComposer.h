@@ -115,7 +115,6 @@ public:
 
     // does this display have layers handled by HWC
     bool hasHwcComposition(int32_t id) const;
-    bool hasBlitComposition(int32_t id) const;
 
     // does this display have layers handled by GLES
     bool hasGlesComposition(int32_t id) const;
@@ -325,7 +324,6 @@ private:
         nsecs_t refresh;
         bool connected;
         bool hasFbComp;
-        bool hasBlitComp;
         bool hasOvComp;
         size_t capacity;
         hwc_display_contents_1* list;
