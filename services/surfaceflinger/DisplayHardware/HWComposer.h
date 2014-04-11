@@ -108,14 +108,10 @@ public:
     // create a work list for numLayers layer. sets HWC_GEOMETRY_CHANGED.
     status_t createWorkList(int32_t id, size_t numLayers);
 
-    void setSwapRectOn(bool);
-    void setSwapRect(Rect);
-
     bool supportsFramebufferTarget() const;
 
     // does this display have layers handled by HWC
     bool hasHwcComposition(int32_t id) const;
-    bool hasBlitComposition(int32_t id) const;
 
     // does this display have layers handled by GLES
     bool hasGlesComposition(int32_t id) const;
@@ -172,6 +168,7 @@ public:
         virtual void setFrame(const Rect& frame) = 0;
         virtual void setCrop(const FloatRect& crop) = 0;
         virtual void setVisibleRegionScreen(const Region& reg) = 0;
+        virtual void setDirtyRect(const Rect& dirtyRect) = 0;
         virtual void setBuffer(const sp<GraphicBuffer>& buffer) = 0;
         virtual void setAcquireFenceFd(int fenceFd) = 0;
         virtual void setPlaneAlpha(uint8_t alpha) = 0;
@@ -325,7 +322,6 @@ private:
         nsecs_t refresh;
         bool connected;
         bool hasFbComp;
-        bool hasBlitComp;
         bool hasOvComp;
         size_t capacity;
         hwc_display_contents_1* list;
@@ -349,7 +345,7 @@ private:
     struct hwc_display_contents_1*  mLists[MAX_HWC_DISPLAYS];
     DisplayData                     mDisplayData[MAX_HWC_DISPLAYS];
     size_t                          mNumDisplays;
-    bool                            mSwapRectOn;
+
     cb_context*                     mCBContext;
     EventHandler&                   mEventHandler;
     size_t                          mVSyncCounts[HWC_NUM_PHYSICAL_DISPLAY_TYPES];
