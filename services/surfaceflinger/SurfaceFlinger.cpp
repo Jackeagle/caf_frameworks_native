@@ -636,23 +636,6 @@ int32_t SurfaceFlinger::allocateHwcDisplayId(DisplayDevice::DisplayType type) {
             type : mHwc->allocateDisplayId();
 }
 
-bool SurfaceFlinger::isNonWfdVirtualDisplayDevice(
-                                        const DisplayDeviceState& state) {
-
-    /* Though the property persist.sys.wfd.virtual can be used to
-       detect if virtual wfd is connected, there is no way to
-       determine if a given virtual display is wfd or not. Hence for now,
-       we are relying on other virtual display adaptors to make this
-       decision */
-
-    if (!strncmp(state.displayName.string(), "Overlay", 7)){
-        return true;
-    } else if(!strncmp(state.displayName.string(), "ScreenRecorder", 14)){
-        return true;
-    }
-    return false;
-}
-
 void SurfaceFlinger::startBootAnim() {
     // start boot animation
     mBootFinished = false;
@@ -1301,6 +1284,76 @@ void SurfaceFlinger::setVirtualDisplayData(
     mHwc->setVirtualDisplayProperties(hwcDisplayId, w, h, format);
 }
 
+void SurfaceFlinger::configureVirtualDisplay(int32_t &hwcDisplayId,
+                                        sp<DisplaySurface> &dispSurface,
+                                        sp<IGraphicBufferProducer> &producer,
+                                        const DisplayDeviceState state,
+                                        sp<BufferQueue> bq)
+{
+    bool vdsEnabled = mHwc->isVDSEnabled();
+
+    //for V4L2 based virtual display implementation
+    if(!vdsEnabled) {
+        // persist.sys.wfd.virtual will be set if WFD is launched via
+        // settings app. This is currently being done in
+        // ExtendedRemoteDisplay-WFD stack.
+        // This flag will be reset at the time of disconnection of virtual WFD
+        // display.
+        // This flag is set to zero if WFD is launched via QCOM WFD
+        // proprietary APIs which use HDMI piggyback approach.
+        char value[PROPERTY_VALUE_MAX];
+        property_get("persist.sys.wfd.virtual", value, "0");
+        int wfdVirtual = atoi(value);
+        if(!wfdVirtual) {
+            // This is for non-wfd virtual display scenarios(e.g. SSD/SR/CTS)
+            sp<VirtualDisplaySurface> vds = new VirtualDisplaySurface(*mHwc,
+                    hwcDisplayId, state.surface, bq, state.displayName);
+            dispSurface = vds;
+            // There won't be any interaction with HWC for this virtual display.
+            // so the GLES driver can pass buffers directly to the sink.
+            producer = state.surface;
+        } else {
+            hwcDisplayId = allocateHwcDisplayId(state.type);
+            if (hwcDisplayId >= 0) {
+                // This is for WFD virtual display scenario.
+                // Read virtual display properties and create a
+                // rendering surface for it inorder to be handled by hwc.
+                setVirtualDisplayData(hwcDisplayId, state.surface);
+                dispSurface = new FramebufferSurface(*mHwc, state.type, bq);
+                producer = bq;
+            } else {
+                // in case of WFD Virtual + SSD/SR concurrency scenario,
+                // WFD virtual display instance gets valid hwcDisplayId and
+                // SSD/SR will get invalid hwcDisplayId
+                sp<VirtualDisplaySurface> vds = new VirtualDisplaySurface(*mHwc,
+                        hwcDisplayId, state.surface, bq, state.displayName);
+                dispSurface = vds;
+                // There won't be any interaction with HWC for this virtual
+                // display, so the GLES driver can pass buffers directly to the
+                // sink.
+                producer = state.surface;
+            }
+        }
+    } else {
+        // VDS solution is enabled
+        // HWC is allocated for first virtual display.
+        // Subsequent virtual display sessions will be composed by GLES driver.
+        // ToDo: Modify VDS component to allocate hwcDisplayId based on
+        // mForceHwcCopy (which is based on Usage Flags)
+
+        sp<VirtualDisplaySurface> vds = new VirtualDisplaySurface(*mHwc,
+                hwcDisplayId, state.surface, bq, state.displayName);
+        dispSurface = vds;
+        if (hwcDisplayId >= 0) {
+            producer = vds;
+        } else {
+            // There won't be any interaction with HWC for this virtual display,
+            // so the GLES driver can pass buffers directly to the sink.
+            producer = state.surface;
+        }
+    }
+}
+
 void SurfaceFlinger::handleTransactionLocked(uint32_t transactionFlags)
 {
     const LayerVector& currentLayers(mCurrentState.layersSortedByZ);
@@ -1423,48 +1476,14 @@ void SurfaceFlinger::handleTransactionLocked(uint32_t transactionFlags)
                     sp<IGraphicBufferProducer> producer;
                     sp<BufferQueue> bq = new BufferQueue(new GraphicBufferAlloc());
 
-                    int32_t hwcDisplayId = NO_MEMORY;
+                    int32_t hwcDisplayId = -1;
                     if (state.isVirtualDisplay()) {
                         // Virtual displays without a surface are dormant:
                         // they have external state (layer stack, projection,
                         // etc.) but no internal state (i.e. a DisplayDevice).
                         if (state.surface != NULL) {
-
-                            char value[PROPERTY_VALUE_MAX];
-                            property_get("persist.sys.wfd.virtual", value, "0");
-                            int wfdVirtual = atoi(value);
-
-                            if((!wfdVirtual) or (isNonWfdVirtualDisplayDevice(state))) {
-                                sp<VirtualDisplaySurface> vds =
-                                              new VirtualDisplaySurface(
-                                    *mHwc, hwcDisplayId, state.surface, bq,
-                                    state.displayName);
-                                dispSurface = vds;
-                                if (hwcDisplayId >= 0) {
-                                   producer = vds;
-                                } else {
-                                /* hwcDisplayId is -ve at this point.
-                                   Since only one Virtual Display can be supported by HWC,
-                                   and WFD can be connected at any point of time, always
-                                   use GLES to compose ScreenRecorder and Simulated Display
-                                   usecases.
-                                */
-                                /* There won't be any interaction with HWC for this virtual display,
-                                   so the GLES driver can pass buffers directly to the sink.
-                                */
-                                  producer = state.surface;
-                                }
-                            } else {
-                                hwcDisplayId = allocateHwcDisplayId(state.type);
-                                //Read virtual display properties and create a
-                                //rendering surface for it inorder to be handled
-                                //by hwc.
-                                setVirtualDisplayData(hwcDisplayId,
-                                                                 state.surface);
-                                dispSurface = new FramebufferSurface(*mHwc,
-                                                                    state.type, bq);
-                                producer = bq;
-                            }
+                            configureVirtualDisplay(hwcDisplayId,
+                                    dispSurface, producer, state, bq);
                         }
                     } else {
                         ALOGE_IF(state.surface!=NULL,
