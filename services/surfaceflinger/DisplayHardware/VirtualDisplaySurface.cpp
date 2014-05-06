@@ -293,11 +293,6 @@ void VirtualDisplaySurface::onFrameCommitted() {
 void VirtualDisplaySurface::dump(String8& result) const {
 }
 
-status_t VirtualDisplaySurface:: updateDirtyRegion(int bufferidx, int l,
-                                                     int t, int r, int b) {
-   return 0;
-}
-
 status_t VirtualDisplaySurface::requestBuffer(int pslot,
         sp<GraphicBuffer>* outBuf) {
     VDS_LOGW_IF(mDbgState != DBG_STATE_GLES,
@@ -458,7 +453,7 @@ status_t VirtualDisplaySurface::queueBuffer(int pslot,
         uint32_t transform;
         bool async;
         input.deflate(&timestamp, &isAutoTimestamp, &crop, &scalingMode,
-                &transform, &async, &mFbFence);
+               &transform, &async, &mFbFence);
 
         mFbProducerSlot = pslot;
         mOutputFence = mFbFence;
