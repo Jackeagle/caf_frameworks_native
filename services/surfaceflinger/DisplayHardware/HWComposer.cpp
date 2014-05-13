@@ -516,7 +516,8 @@ status_t HWComposer::createWorkList(int32_t id, size_t numLayers) {
         if (disp.capacity < numLayers || disp.list == NULL) {
             size_t size = sizeof(hwc_display_contents_1_t)
                     + numLayers * sizeof(hwc_layer_1_t);
-            free(disp.list);
+            if (disp.list != NULL)
+                free(disp.list);
             disp.list = (hwc_display_contents_1_t*)malloc(size);
             disp.capacity = numLayers;
         }
