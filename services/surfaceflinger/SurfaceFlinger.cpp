@@ -1116,8 +1116,10 @@ void SurfaceFlinger::setVirtualDisplayData(
     EGLint w, h;
     EGLDisplay display = eglGetDisplay(EGL_DEFAULT_DISPLAY);
     surface = eglCreateWindowSurface(display, mEGLConfig, window, NULL);
-    eglQuerySurface(display, surface, EGL_WIDTH,  &w);
-    eglQuerySurface(display, surface, EGL_HEIGHT, &h);
+    if (surface != NULL) {
+        eglQuerySurface(display, surface, EGL_WIDTH,  &w);
+        eglQuerySurface(display, surface, EGL_HEIGHT, &h);
+    }
 
     mHwc->setVirtualDisplayProperties(hwcDisplayId, w, h, format);
 }
@@ -1700,8 +1702,12 @@ void SurfaceFlinger::doComposeSurfaces(const sp<const DisplayDevice>& hw, const 
 
             // screen is already cleared here
             if (!region.isEmpty()) {
-                // can happen with SurfaceView
-                drawWormhole(hw, region);
+                if (cur != end) {
+                    if (cur->getCompositionType() != HWC_BLIT)
+                        // can happen with SurfaceView
+                        drawWormhole(hw, region);
+                } else
+                    drawWormhole(hw, region);
             }
         }
 
@@ -1753,6 +1759,9 @@ void SurfaceFlinger::doComposeSurfaces(const sp<const DisplayDevice>& hw, const 
                         layer->draw(hw, clip);
                         break;
                     }
+                    case HWC_BLIT:
+                        //Do nothing
+                        break;
                     case HWC_FRAMEBUFFER_TARGET: {
                         // this should not happen as the iterator shouldn't
                         // let us get there.

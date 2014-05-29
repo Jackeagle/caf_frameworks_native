@@ -516,7 +516,8 @@ status_t HWComposer::createWorkList(int32_t id, size_t numLayers) {
         if (disp.capacity < numLayers || disp.list == NULL) {
             size_t size = sizeof(hwc_display_contents_1_t)
                     + numLayers * sizeof(hwc_layer_1_t);
-            free(disp.list);
+            if (disp.list != NULL)
+                free(disp.list);
             disp.list = (hwc_display_contents_1_t*)malloc(size);
             disp.capacity = numLayers;
         }
@@ -629,6 +630,11 @@ status_t HWComposer::prepare() {
                         l.compositionType = HWC_FRAMEBUFFER;
                     }
                     if (l.compositionType == HWC_FRAMEBUFFER) {
+                        disp.hasFbComp = true;
+                    }
+                    // If the composition type is BLIT, we set this to
+                    // trigger a FLIP
+                    if(l.compositionType == HWC_BLIT) {
                         disp.hasFbComp = true;
                     }
                     if (l.compositionType == HWC_OVERLAY) {
@@ -1028,6 +1034,7 @@ void HWComposer::dump(String8& result, char* buffer, size_t SIZE) const {
                             "HWC",
                             "BACKGROUND",
                             "FB TARGET",
+                            "FB_BLIT",
                             "UNKNOWN"};
                     if (type >= NELEM(compositionTypeName))
                         type = NELEM(compositionTypeName) - 1;
