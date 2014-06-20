@@ -75,6 +75,10 @@
 #include "RenderEngine/RenderEngine.h"
 #include <cutils/compiler.h>
 
+#ifdef QCOM_BSP
+#include <display_config.h>
+#endif
+
 #define DISPLAY_COUNT       1
 
 /*
@@ -1453,12 +1457,15 @@ void SurfaceFlinger::handleTransactionLocked(uint32_t transactionFlags)
                                 || (state.viewport != draw[i].viewport)
                                 || (state.frame != draw[i].frame))
                         {
+#ifdef QCOM_BSP
+                            int orient = state.orientation;
                             // Honor the orientation change after boot
                             // animation completes and make sure boot
                             // animation is shown in panel orientation always.
                             if(mBootFinished){
                                 disp->setProjection(state.orientation,
                                         state.viewport, state.frame);
+                                orient = state.orientation;
                             }
                             else{
                                 char property[PROPERTY_VALUE_MAX];
@@ -1470,8 +1477,19 @@ void SurfaceFlinger::handleTransactionLocked(uint32_t transactionFlags)
                                 }
                                 disp->setProjection(panelOrientation,
                                         state.viewport, state.frame);
-
+                                orient = panelOrientation;
                             }
+                            // Set the view frame of each display only of its
+                            // default orientation.
+                            if(orient == DisplayState::eOrientationDefault) {
+                                qdutils::setViewFrame(disp->getHwcDisplayId(),
+                                    state.frame.left, state.frame.top,
+                                    state.frame.right, state.frame.bottom);
+                            }
+#else
+                            disp->setProjection(state.orientation,
+                                state.viewport, state.frame);
+#endif
                         }
                     }
                 }
