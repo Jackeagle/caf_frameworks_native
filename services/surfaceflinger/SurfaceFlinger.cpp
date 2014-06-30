@@ -3005,6 +3005,9 @@ status_t SurfaceFlinger::captureScreenImplLocked(
 
     eglDestroySurface(mEGLDisplay, eglSurface);
 
+    DisplayDevice::makeCurrent(mEGLDisplay,
+                    getDefaultDisplayDevice(), mEGLContext);
+
     return NO_ERROR;
 }
 
