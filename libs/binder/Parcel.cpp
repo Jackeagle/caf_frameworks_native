@@ -628,6 +628,16 @@ status_t Parcel::writeInt32Array(size_t len, const int32_t *val) {
     }
     return ret;
 }
+status_t Parcel::writeByteArray(size_t len, const uint8_t *val) {
+    if (!val) {
+        return writeAligned(-1);
+    }
+    status_t ret = writeAligned(len);
+    if (ret == NO_ERROR) {
+        ret = write(val, len * sizeof(*val));
+    }
+    return ret;
+}
 
 status_t Parcel::writeInt64(int64_t val)
 {
@@ -898,7 +908,8 @@ void Parcel::remove(size_t start, size_t amt)
 
 status_t Parcel::read(void* outData, size_t len) const
 {
-    if ((mDataPos+PAD_SIZE(len)) >= mDataPos && (mDataPos+PAD_SIZE(len)) <= mDataSize) {
+    if ((mDataPos+PAD_SIZE(len)) >= mDataPos && (mDataPos+PAD_SIZE(len)) <= mDataSize
+            && len <= PAD_SIZE(len)) {
         memcpy(outData, mData+mDataPos, len);
         mDataPos += PAD_SIZE(len);
         ALOGV("read Setting data pos of %p to %d\n", this, mDataPos);
@@ -909,7 +920,8 @@ status_t Parcel::read(void* outData, size_t len) const
 
 const void* Parcel::readInplace(size_t len) const
 {
-    if ((mDataPos+PAD_SIZE(len)) >= mDataPos && (mDataPos+PAD_SIZE(len)) <= mDataSize) {
+    if ((mDataPos+PAD_SIZE(len)) >= mDataPos && (mDataPos+PAD_SIZE(len)) <= mDataSize
+            && len <= PAD_SIZE(len)) {
         const void* data = mData+mDataPos;
         mDataPos += PAD_SIZE(len);
         ALOGV("readInplace Setting data pos of %p to %d\n", this, mDataPos);
