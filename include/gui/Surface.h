@@ -125,6 +125,7 @@ private:
     int dispatchSetUsage(va_list args);
     int dispatchLock(va_list args);
     int dispatchUnlockAndPost(va_list args);
+    int dispatchSetSurfaceSwitchContext(va_list args);
 
 protected:
     virtual int dequeueBuffer(ANativeWindowBuffer** buffer, int* fenceFd);
@@ -147,6 +148,7 @@ protected:
     virtual int setBuffersTimestamp(int64_t timestamp);
     virtual int setCrop(Rect const* rect);
     virtual int setUsage(uint32_t reqUsage);
+    virtual int setSurfaceSwitchContext(uint32_t switch_surface);
 
 public:
     virtual int lock(ANativeWindow_Buffer* outBuffer, ARect* inOutDirtyBounds);
@@ -262,6 +264,8 @@ private:
 
     // must be accessed from lock/unlock thread only
     Region mDirtyRegion;
+
+    uint32_t mSurfaceSwitchCtx;
 };
 
 }; // namespace android

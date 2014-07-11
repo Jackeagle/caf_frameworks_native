@@ -79,6 +79,7 @@ Surface::Surface(
     mConnectedToCpu = false;
     mProducerControlledByApp = controlledByApp;
     mSwapIntervalZero = false;
+    mSurfaceSwitchCtx = false;
 }
 
 Surface::~Surface() {
@@ -308,8 +309,12 @@ int Surface::queueBuffer(android_native_buffer_t* buffer, int fenceFd) {
     sp<Fence> fence(fenceFd >= 0 ? new Fence(fenceFd) : Fence::NO_FENCE);
     IGraphicBufferProducer::QueueBufferOutput output;
     IGraphicBufferProducer::QueueBufferInput input(timestamp, isAutoTimestamp,
-            crop, dirtyRect, mScalingMode, mTransform, mSwapIntervalZero,fence);
+            crop, dirtyRect, mScalingMode, mTransform, mSwapIntervalZero,
+            mSurfaceSwitchCtx, fence);
+
     status_t err = mGraphicBufferProducer->queueBuffer(i, input, &output);
+    mSurfaceSwitchCtx = false;
+
     if (err != OK)  {
         ALOGE("queueBuffer: error queuing buffer to SurfaceTexture, %d", err);
     }
@@ -435,6 +440,9 @@ int Surface::perform(int operation, va_list args)
     case NATIVE_WINDOW_API_DISCONNECT:
         res = dispatchDisconnect(args);
         break;
+    case NATIVE_WINDOW_SET_SURFACE_SWITCH_CONTEXT:
+        res = dispatchSetSurfaceSwitchContext(args);
+        break;
     default:
         res = NAME_NOT_FOUND;
         break;
@@ -520,6 +528,10 @@ int Surface::dispatchUnlockAndPost(va_list args) {
     return unlockAndPost();
 }
 
+int Surface::dispatchSetSurfaceSwitchContext(va_list args) {
+    uint32_t switch_surface_ctx = va_arg(args, uint32_t);
+    return setSurfaceSwitchContext(switch_surface_ctx);
+}
 
 int Surface::connect(int api) {
     ATRACE_CALL();
@@ -686,6 +698,14 @@ int Surface::setBuffersTimestamp(int64_t timestamp)
     ALOGV("Surface::setBuffersTimestamp");
     Mutex::Autolock lock(mMutex);
     mTimestamp = timestamp;
+    return NO_ERROR;
+}
+
+int Surface::setSurfaceSwitchContext(uint32_t surface_change) {
+    ATRACE_CALL();
+    ALOGV("Surface::disconnect");
+    Mutex::Autolock lock(mMutex);
+	mSurfaceSwitchCtx = surface_change;
     return NO_ERROR;
 }
 
