@@ -34,6 +34,7 @@
 
 #include <private/binder/binder_module.h>
 
+#include <inttypes.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdint.h>
@@ -1306,6 +1307,7 @@ size_t Parcel::ipcObjectsCount() const
 void Parcel::ipcSetDataReference(const uint8_t* data, size_t dataSize,
     const size_t* objects, size_t objectsCount, release_func relFunc, void* relCookie)
 {
+    size_t minOffset = 0;
     freeDataNoInit();
     mError = NO_ERROR;
     mData = const_cast<uint8_t*>(data);
@@ -1318,6 +1320,16 @@ void Parcel::ipcSetDataReference(const uint8_t* data, size_t dataSize,
     mNextObjectHint = 0;
     mOwner = relFunc;
     mOwnerCookie = relCookie;
+    for (size_t i = 0; i < mObjectsSize; i++) {
+        size_t offset = mObjects[i];
+        if (offset < minOffset) {
+            ALOGE("%s: bad object offset %llu  < %llu \n",
+                  __func__, (uint64_t)offset, (uint64_t)minOffset);
+            mObjectsSize = 0;
+            break;
+        }
+        minOffset = offset + sizeof(flat_binder_object);
+    }
     scanForFds();
 }
 
