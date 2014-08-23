@@ -175,6 +175,7 @@ HWComposer::HWComposer(
         disp.format = mFbDev->format;
         disp.xdpi = mFbDev->xdpi;
         disp.ydpi = mFbDev->ydpi;
+        disp.secure = true; //XXX: Assuming primary is always true
         if (disp.refresh == 0) {
             disp.refresh = nsecs_t(1e9 / mFbDev->fps);
             ALOGW("getting VSYNC period from fb HAL: %lld", disp.refresh);
@@ -339,6 +340,10 @@ static const uint32_t DISPLAY_ATTRIBUTES[] = {
     HWC_DISPLAY_HEIGHT,
     HWC_DISPLAY_DPI_X,
     HWC_DISPLAY_DPI_Y,
+    //To specify if display is secure
+    //Primary is considered as secure always
+    //HDMI can be secure based on HDCP
+    HWC_DISPLAY_SECURE,
     HWC_DISPLAY_NO_ATTRIBUTE,
 };
 #define NUM_DISPLAY_ATTRIBUTES (sizeof(DISPLAY_ATTRIBUTES) / sizeof(DISPLAY_ATTRIBUTES)[0])
@@ -385,6 +390,9 @@ status_t HWComposer::queryDisplayProperties(int disp) {
         case HWC_DISPLAY_DPI_Y:
             mDisplayData[disp].ydpi = values[i] / 1000.0f;
             break;
+        case HWC_DISPLAY_SECURE:
+            mDisplayData[disp].secure = values[i];
+            break;
         default:
             ALOG_ASSERT(false, "unknown display attribute[%d] %#x",
                     i, DISPLAY_ATTRIBUTES[i]);
@@ -413,6 +421,8 @@ status_t HWComposer::setVirtualDisplayProperties(int32_t id,
     mDisplayData[id].height = h;
     mDisplayData[id].format = format;
     mDisplayData[id].xdpi = mDisplayData[id].ydpi = getDefaultDensity(h);
+    //XXXX: No need to set secure for virtual display's as its initiated by
+    //the frameworks
     return NO_ERROR;
 }
 
@@ -478,6 +488,10 @@ float HWComposer::getDpiY(int disp) const {
 
 bool HWComposer::isConnected(int disp) const {
     return mDisplayData[disp].connected;
+}
+
+bool HWComposer::isSecure(int disp) const {
+    return mDisplayData[disp].secure;
 }
 
 void HWComposer::eventControl(int disp, int event, int enabled) {
@@ -1063,8 +1077,8 @@ void HWComposer::dump(String8& result) const {
                     mFlinger->getLayerSortedByZForHwcDisplay(i);
 
             result.appendFormat(
-                    "  Display[%d] : %ux%u, xdpi=%f, ydpi=%f, refresh=%lld\n",
-                    i, disp.width, disp.height, disp.xdpi, disp.ydpi, disp.refresh);
+                    "  Display[%d] : %ux%u, xdpi=%f, ydpi=%f, secure=%d refresh=%lld\n",
+                    i, disp.width, disp.height, disp.xdpi, disp.ydpi, disp.secure, disp.refresh);
 
             if (disp.list) {
                 result.appendFormat(
