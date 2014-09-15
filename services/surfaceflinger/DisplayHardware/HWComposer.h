@@ -119,8 +119,8 @@ public:
     bool hasGlesComposition(int32_t id) const;
 
 #ifdef QCOM_BSP
-    // does this display have layers handled by BLIT HW
-    bool hasBlitComposition(int32_t id) const;
+    // does this display have layers handled by overlays/blit
+    bool hasHwcOrBlitComposition(int32_t id) const;
 
     //GPUTiledRect : function to find out if DR can be used in GPU Comp.
     bool canUseTiledDR(int32_t id, Rect& dr);
@@ -406,7 +406,6 @@ private:
             return true;
         }
     };
-
 #ifdef QCOM_BSP
     //GPUTileRect Optimization Functions.
     CompMap prev_comp_map[MAX_HWC_DISPLAYS], current_comp_map[MAX_HWC_DISPLAYS];
@@ -415,8 +414,6 @@ private:
     void computeUnionDirtyRect(int32_t id, Rect& unionDirtyRect);
     bool areVisibleRegionsOverlapping(int32_t id );
     bool needsScaling(int32_t id);
-    float mDynThreshold;
-    bool canHandleOverlapArea(int32_t id, Rect unionDr);
 #endif
 };
 
