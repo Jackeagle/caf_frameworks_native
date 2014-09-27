@@ -514,6 +514,10 @@ private:
 
     Daltonizer mDaltonizer;
     bool mDaltonize;
+#ifdef QCOM_BSP
+    // Flag to disable external rotation animation feature.
+    bool mDisableExtAnimation;
+#endif
 };
 
 }; // namespace android
