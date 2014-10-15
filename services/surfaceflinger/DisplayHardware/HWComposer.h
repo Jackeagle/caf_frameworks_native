@@ -262,6 +262,7 @@ public:
     float getDpiX(int disp) const;
     float getDpiY(int disp) const;
     bool isConnected(int disp) const;
+    bool isSecure(int disp) const;
 
     status_t setVirtualDisplayProperties(int32_t id, uint32_t w, uint32_t h,
             uint32_t format);
@@ -319,6 +320,7 @@ private:
         uint32_t format;    // pixel format from FB hal, for pre-hwc-1.1
         float xdpi;
         float ydpi;
+        bool secure;
         nsecs_t refresh;
         bool connected;
         bool hasFbComp;

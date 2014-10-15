@@ -272,13 +272,13 @@ void SurfaceFlinger::destroyDisplay(const sp<IBinder>& display) {
     setTransactionFlags(eDisplayTransactionNeeded);
 }
 
-void SurfaceFlinger::createBuiltinDisplayLocked(DisplayDevice::DisplayType type) {
+void SurfaceFlinger::createBuiltinDisplayLocked(DisplayDevice::DisplayType type,
+                                                bool secure) {
     ALOGW_IF(mBuiltinDisplays[type],
             "Overwriting display token for display type %d", type);
     mBuiltinDisplays[type] = new BBinder();
     DisplayDeviceState info(type);
-    // All non-virtual displays are currently considered secure.
-    info.isSecure = true;
+    info.isSecure = secure;
     mCurrentState.displays.add(mBuiltinDisplays[type], info);
 }
 
@@ -588,9 +588,9 @@ void SurfaceFlinger::init() {
         DisplayDevice::DisplayType type((DisplayDevice::DisplayType)i);
         // set-up the displays that are already connected
         if (mHwc->isConnected(i) || type==DisplayDevice::DISPLAY_PRIMARY) {
-            // All non-virtual displays are currently considered secure.
-            bool isSecure = true;
-            createBuiltinDisplayLocked(type);
+            // query from hwc if the non-virtual display is secure.
+            bool isSecure = mHwc->isSecure(i);;
+            createBuiltinDisplayLocked(type, isSecure);
             wp<IBinder> token = mBuiltinDisplays[i];
 
             sp<BufferQueue> bq = new BufferQueue(new GraphicBufferAlloc());
@@ -736,8 +736,8 @@ status_t SurfaceFlinger::getDisplayInfo(const sp<IBinder>& display, DisplayInfo*
     info->ydpi = ydpi;
     info->fps = float(1e9 / hwc.getRefreshPeriod(type));
 
-    // All non-virtual displays are currently considered secure.
-    info->secure = true;
+    // // set secure info based on the disp info.
+    info->secure = hwc.isSecure(type);
 
     return NO_ERROR;
 }
@@ -862,7 +862,9 @@ void SurfaceFlinger::onHotplugReceived(int type, bool connected) {
     if (uint32_t(type) < DisplayDevice::NUM_BUILTIN_DISPLAY_TYPES) {
         Mutex::Autolock _l(mStateLock);
         if (connected) {
-            createBuiltinDisplayLocked((DisplayDevice::DisplayType)type);
+            // query from hwc if the connected display is secure
+            bool secure = mHwc->isSecure(type);;
+            createBuiltinDisplayLocked((DisplayDevice::DisplayType)type, secure);
         } else {
             mCurrentState.displays.removeItem(mBuiltinDisplays[type]);
             mBuiltinDisplays[type].clear();
