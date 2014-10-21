@@ -658,6 +658,12 @@ status_t HWComposer::prepare() {
 #endif
 
             if (disp.list) {
+#ifdef QCOM_BSP
+               //GPUTILERECT
+               prev_comp_map[i] = current_comp_map[i];
+               current_comp_map[i].reset();
+               current_comp_map[i].count = disp.list->numHwLayers-1;
+#endif
                 for (size_t j=0 ; j<disp.list->numHwLayers ; j++) {
                     hwc_layer_1_t& l = disp.list->hwLayers[j];
 
@@ -682,6 +688,12 @@ status_t HWComposer::prepare() {
                     if (l.compositionType == HWC_OVERLAY) {
                         disp.hasOvComp = true;
                     }
+#ifdef QCOM_BSP
+                    //GPUTILERECT
+                    if(l.compositionType != HWC_FRAMEBUFFER_TARGET) {
+                        current_comp_map[i].compType[j] = l.compositionType;
+                    }
+#endif
                 }
                 if (disp.list->numHwLayers == (disp.framebufferTarget ? 1 : 0)) {
                     disp.hasFbComp = true;
@@ -1307,6 +1319,13 @@ void HWComposer::computeUnionDirtyRect(int32_t id, Rect& unionDirtyRect) {
     unionDirtyRect = unionDirtyRegion.getBounds();
 }
 
+bool HWComposer::isCompositionMapChanged(int32_t id) {
+    if (prev_comp_map[id] == current_comp_map[id]) {
+        return false;
+    }
+    return true;
+}
+
 bool HWComposer::isGeometryChanged(int32_t id) {
     if (!mHwc || uint32_t(id)>31 || !mAllocatedDisplayIDs.hasBit(id))
         return false;
@@ -1329,6 +1348,9 @@ bool HWComposer::canUseTiledDR(int32_t id, Rect& unionDr ){
      /* Currently enabled only for full GPU Comp
       * TODO : enable for mixed mode also */
         ALOGD_IF(GPUTILERECT_DEBUG, "GPUTileRect: Blit comp, disable");
+        status = false;
+    } else if ( isCompositionMapChanged(id)) {
+        ALOGD_IF(GPUTILERECT_DEBUG, "GPUTileRect: comp map changed, disable");
         status = false;
     } else if (areVisibleRegionsOverlapping(id)) {
       /* With DirtyRect optimiaton, On certain targets we are  seeing slightly
