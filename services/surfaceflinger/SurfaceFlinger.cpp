@@ -2392,6 +2392,9 @@ status_t SurfaceFlinger::onLayerDestroyed(const wp<Layer>& layer)
 
 void SurfaceFlinger::onInitializeDisplays() {
     for(int dpy = 0;dpy < mDisplays.size(); dpy++) {
+        if(mBuiltinDisplays[dpy] == NULL) {
+            continue;
+        }
         const sp<const DisplayDevice>&
             hw(getDisplayDevice(mBuiltinDisplays[dpy]));
         // reset screen orientation and use primary layer stack
