@@ -121,8 +121,11 @@ DisplayDevice::DisplayDevice(
         case DISPLAY_PRIMARY:
             mDisplayName = "Built-in Screen";
             break;
-        case DISPLAY_EXTERNAL:
-            mDisplayName = "HDMI Screen";
+        case DISPLAY_SECONDARY:
+            mDisplayName = "Secondary Screen";
+            break;
+        case DISPLAY_TERTIARY:
+            mDisplayName = "Tertiary Screen";
             break;
         default:
             mDisplayName = "Virtual Screen";    // e.g. Overlay #n
