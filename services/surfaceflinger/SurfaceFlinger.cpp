@@ -2665,26 +2665,34 @@ status_t SurfaceFlinger::onLayerDestroyed(const wp<Layer>& layer)
 // ---------------------------------------------------------------------------
 
 void SurfaceFlinger::onInitializeDisplays() {
-    // reset screen orientation and use primary layer stack
-    Vector<ComposerState> state;
-    Vector<DisplayState> displays;
-    DisplayState d;
-    d.what = DisplayState::eDisplayProjectionChanged |
-             DisplayState::eLayerStackChanged;
-    d.token = mBuiltinDisplays[DisplayDevice::DISPLAY_PRIMARY];
-    d.layerStack = 0;
-    d.orientation = DisplayState::eOrientationDefault;
-    d.frame.makeInvalid();
-    d.viewport.makeInvalid();
-    d.width = 0;
-    d.height = 0;
-    displays.add(d);
-    setTransactionState(state, displays, 0);
-    setPowerModeInternal(getDisplayDevice(d.token), HWC_POWER_MODE_NORMAL);
-
-    const nsecs_t period =
-            getHwComposer().getRefreshPeriod(HWC_DISPLAY_PRIMARY);
-    mAnimFrameTracker.setDisplayRefreshPeriod(period);
+    for(int dpy = 0;dpy < mDisplays.size(); dpy++) {
+        if(mBuiltinDisplays[dpy] == NULL) {
+            continue;
+        }
+        const sp<const DisplayDevice>&
+            hw(getDisplayDevice(mBuiltinDisplays[dpy]));
+        // reset screen orientation and use primary layer stack
+        Vector<ComposerState> state;
+        Vector<DisplayState> displays;
+        DisplayState d;
+        d.what = DisplayState::eDisplayProjectionChanged |
+                 DisplayState::eLayerStackChanged;
+        d.token = mBuiltinDisplays[dpy];
+        d.layerStack = 0;
+        d.orientation = DisplayState::eOrientationDefault;
+        d.frame.makeInvalid();
+        d.viewport.makeInvalid();
+        d.width = 0;
+        d.height = 0;
+        displays.add(d);
+        setTransactionState(state, displays, 0);
+        setPowerModeInternal(getDisplayDevice(d.token), HWC_POWER_MODE_NORMAL);
+        if(!dpy) {
+            const nsecs_t period =
+                    getHwComposer().getRefreshPeriod(dpy);
+            mAnimFrameTracker.setDisplayRefreshPeriod(period);
+        }
+    }
 }
 
 void SurfaceFlinger::initializeDisplays() {
