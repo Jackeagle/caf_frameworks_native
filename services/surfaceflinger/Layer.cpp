@@ -368,7 +368,7 @@ FloatRect Layer::computeCrop(const sp<const DisplayDevice>& hw) const {
     return crop;
 }
 
-Transform Layer::computeBufferTransform(const sp<const DisplayDevice>& hw)
+Transform Layer::computeBufferTransform(const sp<const DisplayDevice>& hw) const
 {
     const State& s(getDrawingState());
     const Transform& tr(hw->getTransform());
@@ -414,7 +414,7 @@ void Layer::setGeometry(
 
     // this gives us only the "orientation" component of the transform
     const State& s(getDrawingState());
-    if (!isOpaque() || s.alpha != 0xFF) {
+    if (!isOpaque()) {
         layer.setBlending(mPremultipliedAlpha ?
                 HWC_BLENDING_PREMULT :
                 HWC_BLENDING_COVERAGE);
@@ -699,22 +699,22 @@ void Layer::drawWithOpenGL(
 
     computeGeometry(hw, mMesh);
 
-    /*
-     * NOTE: the way we compute the texture coordinates here produces
-     * different results than when we take the HWC path -- in the later case
-     * the "source crop" is rounded to texel boundaries.
-     * This can produce significantly different results when the texture
-     * is scaled by a large amount.
-     *
-     * The GL code below is more logical (imho), and the difference with
-     * HWC is due to a limitation of the HWC API to integers -- a question
-     * is suspend is whether we should ignore this problem or revert to
-     * GL composition when a buffer scaling is applied (maybe with some
-     * minimal value)? Or, we could make GL behave like HWC -- but this feel
-     * like more of a hack.
-     */
-    const Rect win(computeBounds());
-
+    // Compute the crops exactly in the way we are doing
+    // for HWC & program texture coordinates for the clipped
+    // source after transformation.
+    Rect win(s.active.w, s.active.h);
+    if(!s.active.crop.isEmpty()) {
+        win = s.active.crop;
+    }
+#ifdef QCOM_BSP
+    win = s.transform.transform(win);
+    win.intersect(hw->getViewport(), &win);
+    win = s.transform.inverse().transform(win);
+    win.intersect(Rect(s.active.w, s.active.h), &win);
+    win = reduce(win, s.activeTransparentRegion);
+#else
+    win = reduce(win, s.activeTransparentRegion);
+#endif
     float left   = float(win.left)   / float(s.active.w);
     float top    = float(win.top)    / float(s.active.h);
     float right  = float(win.right)  / float(s.active.w);
@@ -770,14 +770,35 @@ bool Layer::getOpacityForFormat(uint32_t format) {
 void Layer::computeGeometry(const sp<const DisplayDevice>& hw, Mesh& mesh) const
 {
     const Layer::State& s(getDrawingState());
-    const Transform tr(hw->getTransform() * s.transform);
+    Transform tr(hw->getTransform());
     const uint32_t hw_h = hw->getHeight();
     Rect win(s.active.w, s.active.h);
     if (!s.active.crop.isEmpty()) {
         win.intersect(s.active.crop, &win);
     }
+
+#ifdef QCOM_BSP
+    win = s.transform.transform(win);
+    win.intersect(hw->getViewport(), &win);
+    win = s.transform.inverse().transform(win);
+    win.intersect(Rect(s.active.w, s.active.h), &win);
+    win = reduce(win, s.activeTransparentRegion);
+    Transform transform = computeBufferTransform(hw);
+    const uint32_t orientation = transform.getOrientation();
+    // If rotation or pre-rotation is there we can't match HWC 100%.
+    // Still, we can make sure input vertices to GPU is based ROI on screen
+    // after applying layer transform.
+
+    if (mTransformHint | mCurrentTransform | orientation) {
+        tr = (hw->getTransform() * s.transform );
+    } else {
+        win = s.transform.transform(win);
+        win.intersect(hw->getViewport(), &win);
+    }
+#else
     // subtract the transparent region and snap to the bounds
     win = reduce(win, s.activeTransparentRegion);
+#endif
 
     Mesh::VertexArray<vec2> position(mesh.getPositionArray<vec2>());
     position[0] = tr.transform(win.left,  win.top);
