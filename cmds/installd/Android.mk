@@ -34,7 +34,6 @@ LOCAL_SHARED_LIBRARIES := \
     libcutils \
     liblog \
     liblogwrap \
-    libselinux \
 
 LOCAL_STATIC_LIBRARIES := libdiskusage
 LOCAL_ADDITIONAL_DEPENDENCIES += $(LOCAL_PATH)/Android.mk

@@ -20,8 +20,6 @@
 
 #include <sys/capability.h>
 #include <sys/prctl.h>
-#include <selinux/android.h>
-#include <selinux/avc.h>
 
 #define BUFFER_MAX    1024  /* input buffer for commands */
 #define TOKEN_MAX     16    /* max number of arguments in buffer */
@@ -163,8 +161,9 @@ static int do_idmap(char **arg, char reply[REPLY_MAX] __unused)
 
 static int do_restorecon_data(char **arg, char reply[REPLY_MAX] __attribute__((unused)))
 {
-    return restorecon_data(parse_null(arg[0]), arg[1], arg[2], atoi(arg[3]));
-                             /* uuid, pkgName, seinfo, uid*/
+    (void) arg;
+    (void) reply;
+    return 0;
 }
 
 static int do_create_oat_dir(char **arg, char reply[REPLY_MAX] __unused)
@@ -471,10 +470,6 @@ int initialize_directories() {
             goto fail;
         }
 
-        if (selinux_android_restorecon(android_media_dir.path, 0)) {
-            goto fail;
-        }
-
         // /data/media/0
         char owner_media_dir[PATH_MAX];
         snprintf(owner_media_dir, PATH_MAX, "%s0", android_media_dir.path);
@@ -636,42 +631,16 @@ fail:
     return res;
 }
 
-static int log_callback(int type, const char *fmt, ...) {
-    va_list ap;
-    int priority;
-
-    switch (type) {
-    case SELINUX_WARNING:
-        priority = ANDROID_LOG_WARN;
-        break;
-    case SELINUX_INFO:
-        priority = ANDROID_LOG_INFO;
-        break;
-    default:
-        priority = ANDROID_LOG_ERROR;
-        break;
-    }
-    va_start(ap, fmt);
-    LOG_PRI_VA(priority, "SELinux", fmt, ap);
-    va_end(ap);
-    return 0;
-}
-
 int main(const int argc __unused, char *argv[]) {
     char buf[BUFFER_MAX];
     struct sockaddr addr;
     socklen_t alen;
     int lsocket, s;
-    int selinux_enabled = (is_selinux_enabled() > 0);
 
     setenv("ANDROID_LOG_TAGS", "*:v", 1);
     android::base::InitLogging(argv);
 
     ALOGI("installd firing up\n");
-
-    union selinux_callback cb;
-    cb.func_log = log_callback;
-    selinux_set_callback(SELINUX_CB_LOG, cb);
 
     if (initialize_globals() < 0) {
         ALOGE("Could not initialize globals; exiting.\n");
@@ -680,11 +649,6 @@ int main(const int argc __unused, char *argv[]) {
 
     if (initialize_directories() < 0) {
         ALOGE("Could not create directories; exiting.\n");
-        exit(1);
-    }
-
-    if (selinux_enabled && selinux_status_open(true) < 0) {
-        ALOGE("Could not open selinux status; exiting.\n");
         exit(1);
     }
 
@@ -724,9 +688,6 @@ int main(const int argc __unused, char *argv[]) {
                 break;
             }
             buf[count] = 0;
-            if (selinux_enabled && selinux_status_updated() > 0) {
-                selinux_android_seapp_context_reload();
-            }
             if (execute(s, buf)) break;
         }
         ALOGI("closing connection\n");

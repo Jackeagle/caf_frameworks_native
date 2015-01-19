@@ -22,7 +22,6 @@
 #include <diskusage/dirsize.h>
 #include <logwrap/logwrap.h>
 #include <system/thread_defs.h>
-#include <selinux/android.h>
 
 #include <inttypes.h>
 #include <sys/capability.h>
@@ -45,6 +44,7 @@ static const char* kCpPath = "/system/bin/cp";
 
 int install(const char *uuid, const char *pkgname, uid_t uid, gid_t gid, const char *seinfo)
 {
+    (void) seinfo;
     if ((uid < AID_SYSTEM) || (gid < AID_SYSTEM)) {
         ALOGE("invalid uid/gid: %d %d\n", uid, gid);
         return -1;
@@ -61,12 +61,6 @@ int install(const char *uuid, const char *pkgname, uid_t uid, gid_t gid, const c
         ALOGE("cannot chmod dir '%s': %s\n", pkgdir, strerror(errno));
         unlink(pkgdir);
         return -1;
-    }
-
-    if (selinux_android_setfilecon(pkgdir, pkgname, seinfo, uid) < 0) {
-        ALOGE("cannot setfilecon dir '%s': %s\n", pkgdir, strerror(errno));
-        unlink(pkgdir);
-        return -errno;
     }
 
     if (chown(pkgdir, uid, gid) < 0) {
@@ -151,6 +145,7 @@ int make_user_data(const char *uuid, const char *pkgname, uid_t uid, userid_t us
 {
     std::string _pkgdir(create_data_user_package_path(uuid, userid, pkgname));
     const char* pkgdir = _pkgdir.c_str();
+    (void) seinfo;
 
     if (mkdir(pkgdir, 0751) < 0) {
         ALOGE("cannot create dir '%s': %s\n", pkgdir, strerror(errno));
@@ -158,12 +153,6 @@ int make_user_data(const char *uuid, const char *pkgname, uid_t uid, userid_t us
     }
     if (chmod(pkgdir, 0751) < 0) {
         ALOGE("cannot chmod dir '%s': %s\n", pkgdir, strerror(errno));
-        unlink(pkgdir);
-        return -errno;
-    }
-
-    if (selinux_android_setfilecon(pkgdir, pkgname, seinfo, uid) < 0) {
-        ALOGE("cannot setfilecon dir '%s': %s\n", pkgdir, strerror(errno));
         unlink(pkgdir);
         return -errno;
     }
@@ -181,6 +170,7 @@ int copy_complete_app(const char *from_uuid, const char *to_uuid,
         const char *package_name, const char *data_app_name, appid_t appid,
         const char* seinfo) {
     std::vector<userid_t> users = get_known_users(from_uuid);
+    (void) seinfo;
 
     // Copy app
     {
@@ -205,11 +195,6 @@ int copy_complete_app(const char *from_uuid, const char *to_uuid,
         if (rc != 0) {
             LOG(ERROR) << "Failed copying " << from << " to " << to
                     << ": status " << rc;
-            goto fail;
-        }
-
-        if (selinux_android_restorecon(to.c_str(), SELINUX_ANDROID_RESTORECON_RECURSE) != 0) {
-            LOG(ERROR) << "Failed to restorecon " << to;
             goto fail;
         }
     }
@@ -257,11 +242,6 @@ int copy_complete_app(const char *from_uuid, const char *to_uuid,
                     << ": status " << rc;
             goto fail;
         }
-    }
-
-    if (restorecon_data(to_uuid, package_name, seinfo, multiuser_get_uid(0, appid)) != 0) {
-        LOG(ERROR) << "Failed to restorecon";
-        goto fail;
     }
 
     // We let the framework scan the new location and persist that before
@@ -1735,71 +1715,6 @@ fail:
     return -1;
 }
 
-int restorecon_data(const char* uuid, const char* pkgName,
-                    const char* seinfo, uid_t uid)
-{
-    struct dirent *entry;
-    DIR *d;
-    struct stat s;
-    int ret = 0;
-
-    // SELINUX_ANDROID_RESTORECON_DATADATA flag is set by libselinux. Not needed here.
-    unsigned int flags = SELINUX_ANDROID_RESTORECON_RECURSE;
-
-    if (!pkgName || !seinfo) {
-        ALOGE("Package name or seinfo tag is null when trying to restorecon.");
-        return -1;
-    }
-
-    // Special case for owner on internal storage
-    if (uuid == nullptr) {
-        std::string path(create_data_user_package_path(nullptr, 0, pkgName));
-
-        if (selinux_android_restorecon_pkgdir(path.c_str(), seinfo, uid, flags) < 0) {
-            PLOG(ERROR) << "restorecon failed for " << path;
-            ret |= -1;
-        }
-    }
-
-    // Relabel package directory for all secondary users.
-    std::string userdir(create_data_path(uuid) + "/" + SECONDARY_USER_PREFIX);
-    d = opendir(userdir.c_str());
-    if (d == NULL) {
-        return -1;
-    }
-
-    while ((entry = readdir(d))) {
-        if (entry->d_type != DT_DIR) {
-            continue;
-        }
-
-        const char *user = entry->d_name;
-        // Ignore "." and ".."
-        if (!strcmp(user, ".") || !strcmp(user, "..")) {
-            continue;
-        }
-
-        // user directories start with a number
-        if (user[0] < '0' || user[0] > '9') {
-            ALOGE("Expecting numbered directory during restorecon. Instead got '%s'.", user);
-            continue;
-        }
-
-        std::string pkgdir(StringPrintf("%s%s/%s", userdir.c_str(), user, pkgName));
-        if (stat(pkgdir.c_str(), &s) < 0) {
-            continue;
-        }
-
-        if (selinux_android_restorecon_pkgdir(pkgdir.c_str(), seinfo, s.st_uid, flags) < 0) {
-            PLOG(ERROR) << "restorecon failed for " << pkgdir;
-            ret |= -1;
-        }
-    }
-
-    closedir(d);
-    return ret;
-}
-
 int create_oat_dir(const char* oat_dir, const char* instruction_set)
 {
     char oat_instr_dir[PKG_PATH_MAX];
@@ -1809,10 +1724,6 @@ int create_oat_dir(const char* oat_dir, const char* instruction_set)
         return -1;
     }
     if (fs_prepare_dir(oat_dir, S_IRWXU | S_IRWXG | S_IXOTH, AID_SYSTEM, AID_INSTALL)) {
-        return -1;
-    }
-    if (selinux_android_restorecon(oat_dir, 0)) {
-        ALOGE("cannot restorecon dir '%s': %s\n", oat_dir, strerror(errno));
         return -1;
     }
     snprintf(oat_instr_dir, PKG_PATH_MAX, "%s/%s", oat_dir, instruction_set);
