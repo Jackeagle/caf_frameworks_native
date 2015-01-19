@@ -24,7 +24,7 @@ LOCAL_MODULE := installd
 LOCAL_MODULE_TAGS := optional
 LOCAL_CFLAGS := $(common_cflags)
 LOCAL_SRC_FILES := installd.c $(common_src_files)
-LOCAL_SHARED_LIBRARIES := libcutils liblog libselinux
+LOCAL_SHARED_LIBRARIES := libcutils liblog
 LOCAL_STATIC_LIBRARIES := libdiskusage
 LOCAL_ADDITIONAL_DEPENDENCIES += $(LOCAL_PATH)/Android.mk
 include $(BUILD_EXECUTABLE)
