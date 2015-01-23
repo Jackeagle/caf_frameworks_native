@@ -16,8 +16,6 @@
 
 #include <sys/capability.h>
 #include <sys/prctl.h>
-#include <selinux/android.h>
-#include <selinux/avc.h>
 
 #include "installd.h"
 
