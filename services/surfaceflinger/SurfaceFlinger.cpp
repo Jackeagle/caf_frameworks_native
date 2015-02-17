@@ -320,6 +320,7 @@ void SurfaceFlinger::bootFinished()
     // formerly we would just kill the process, but we now ask it to exit so it
     // can choose where to stop the animation.
     property_set("service.bootanim.exit", "1");
+    placeMarker("BootAnim - End");
 }
 
 void SurfaceFlinger::deleteTextureAsync(uint32_t texture) {
@@ -408,9 +409,21 @@ private:
     Mutex mMutex;
 };
 
+/* For KPI Logging */
+void SurfaceFlinger::placeMarker(const char *name)
+{
+    int fd = open("/proc/bootkpi/marker_entry", O_RDWR);
+    if (fd >= 0) {
+        write(fd, name, strlen(name));
+        close(fd);
+    }
+}
+
 void SurfaceFlinger::init() {
     ALOGI(  "SurfaceFlinger's main thread ready to run. "
             "Initializing graphics H/W...");
+
+    placeMarker("SF_Init - Start");
 
     status_t err;
     Mutex::Autolock _l(mStateLock);
@@ -501,6 +514,8 @@ void SurfaceFlinger::init() {
 
     // start boot animation
     startBootAnim();
+
+    placeMarker("SF_Init - End");
 }
 
 int32_t SurfaceFlinger::allocateHwcDisplayId(DisplayDevice::DisplayType type) {
@@ -513,6 +528,7 @@ void SurfaceFlinger::startBootAnim() {
     mBootFinished = false;
     property_set("service.bootanim.exit", "0");
     property_set("ctl.start", "bootanim");
+    placeMarker("BootAnim - Start");
 }
 
 size_t SurfaceFlinger::getMaxTextureSize() const {
