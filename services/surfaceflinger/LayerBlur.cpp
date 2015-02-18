@@ -96,7 +96,9 @@ LayerBlur::LayerBlur(SurfaceFlinger* flinger, const sp<Client>& client,
     : Layer(flinger, client, name, w, h, flags), mBlurMaskSampling(1), mBlurMaskAlphaThreshold(0.0f)
     ,mLastFrameSequence(0)
 {
+#ifdef UI_BLUR
     mBlurToken = qtiblur::initBlurToken();
+#endif
 
     GLuint texnames[3];
     mFlinger->getRenderEngine().genTextures(3, texnames);
@@ -106,7 +108,9 @@ LayerBlur::LayerBlur(SurfaceFlinger* flinger, const sp<Client>& client,
 }
 
 LayerBlur::~LayerBlur() {
+#ifdef UI_BLUR
     qtiblur::releaseBlurToken(mBlurToken);
+#endif
 
     releaseFbo(mFboCapture);
     releaseFbo(mFboMasking);
@@ -167,6 +171,7 @@ void LayerBlur::onDraw(const sp<const DisplayDevice>& hw, const Region& /*clip*/
         // blur
         size_t outTexWidth = mTextureBlur.getWidth();
         size_t outTexHeight = mTextureBlur.getHeight();
+#ifdef UI_BLUR
         if (!qtiblur::blur(mBlurToken,
                 s.blur,
                 mTextureCapture.getTextureName(),
@@ -177,6 +182,7 @@ void LayerBlur::onDraw(const sp<const DisplayDevice>& hw, const Region& /*clip*/
                 &outTexHeight)) {
             return;
         }
+#endif
 
         // mTextureBlur now has "Blurred image"
         mTextureBlur.setDimensions(outTexWidth, outTexHeight);
