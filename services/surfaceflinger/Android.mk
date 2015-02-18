@@ -104,7 +104,10 @@ ifeq ($(TARGET_USES_QCOM_BSP), true)
     LOCAL_CFLAGS += -DQCOM_BSP
 endif
 
-LOCAL_C_INCLUDES += $(TARGET_OUT_HEADERS)/ui
+ifeq ($(TARGET_USES_UI_BLUR), true)
+    LOCAL_C_INCLUDES += $(TARGET_OUT_HEADERS)/ui
+    LOCAL_CFLAGS += -DUI_BLUR
+endif
 
 LOCAL_MODULE:= libsurfaceflinger
 
