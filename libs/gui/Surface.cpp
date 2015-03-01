@@ -874,7 +874,7 @@ status_t Surface::lock(
                 backBuffer->height == frontBuffer->height &&
                 backBuffer->format == frontBuffer->format);
 
-        if (canCopyBack) {
+        if (canCopyBack && (backBufferSlot >= 0)) {
             Mutex::Autolock lock(mMutex);
             Region oldDirtyRegion;
             if(mSlots[backBufferSlot].dirtyRegion.isEmpty()) {
