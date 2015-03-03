@@ -94,7 +94,6 @@ LOCAL_SHARED_LIBRARIES := \
 	libbinder \
 	libui \
 	libgui \
-        libuiblur \
 	libpowermanager
 
 ifeq ($(TARGET_USES_QCOM_BSP), true)
@@ -106,6 +105,7 @@ endif
 
 ifeq ($(TARGET_USES_UI_BLUR), true)
     LOCAL_C_INCLUDES += $(TARGET_OUT_HEADERS)/ui
+    LOCAL_SHARED_LIBRARIES += libuiblur
     LOCAL_CFLAGS += -DUI_BLUR
 endif
 
