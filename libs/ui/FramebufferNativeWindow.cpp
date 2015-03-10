@@ -370,3 +370,11 @@ EGLNativeWindowType android_createDisplaySurface(void)
     }
     return (EGLNativeWindowType)w;
 }
+
+void android_destroyDisplaySurface(EGLNativeWindowType window)
+{
+    FramebufferNativeWindow* w = (FramebufferNativeWindow *)window;
+    if(w) {
+        delete w;
+    }
+}

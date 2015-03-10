@@ -34,6 +34,7 @@
 #define MAX_NUM_FRAME_BUFFERS  3
 
 extern "C" EGLNativeWindowType android_createDisplaySurface(void);
+extern "C" void android_destroyDisplaySurface(EGLNativeWindowType window);
 
 // ---------------------------------------------------------------------------
 namespace android {
@@ -51,9 +52,10 @@ class FramebufferNativeWindow
         LightRefBase<FramebufferNativeWindow> >
 {
 public:
-    FramebufferNativeWindow(); 
+    FramebufferNativeWindow();
+    ~FramebufferNativeWindow();
 
-    framebuffer_device_t const * getDevice() const { return fbDev; } 
+    framebuffer_device_t const * getDevice() const { return fbDev; }
 
     bool isUpdateOnDemand() const { return mUpdateOnDemand; }
     status_t setUpdateRectangle(const Rect& updateRect);
@@ -66,7 +68,6 @@ public:
 
 private:
     friend class LightRefBase<FramebufferNativeWindow>;    
-    ~FramebufferNativeWindow(); // this class cannot be overloaded
     static int setSwapInterval(ANativeWindow* window, int interval);
     static int dequeueBuffer(ANativeWindow* window, ANativeWindowBuffer** buffer, int* fenceFd);
     static int queueBuffer(ANativeWindow* window, ANativeWindowBuffer* buffer, int fenceFd);
