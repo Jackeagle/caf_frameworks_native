@@ -97,6 +97,9 @@ LOCAL_SHARED_LIBRARIES := \
 ifeq ($(TARGET_USES_QCOM_BSP), true)
     LOCAL_C_INCLUDES += hardware/qcom/display/libgralloc
     LOCAL_CFLAGS += -DQCOM_BSP
+ifeq ($(GET_FRAMEBUFFER_FORMAT_FROM_HWC),true)
+  LOCAL_CFLAGS += -DGET_FRAMEBUFFER_FORMAT_FROM_HWC
+endif
 endif
 
 LOCAL_MODULE:= libsurfaceflinger

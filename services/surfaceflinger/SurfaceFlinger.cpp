@@ -438,9 +438,13 @@ status_t SurfaceFlinger::selectEGLConfig(EGLDisplay display, EGLint nativeVisual
         attribs[EGL_RED_SIZE]                   = 8;
         attribs[EGL_GREEN_SIZE]                 = 8;
         attribs[EGL_BLUE_SIZE]                  = 8;
-        wantedAttribute                         = EGL_NONE;
-        wantedAttributeValue                    = EGL_NONE;
-
+        if (nativeVisualId != HAL_PIXEL_FORMAT_RGBA_8888) {
+            wantedAttribute                     = EGL_NATIVE_VISUAL_ID;
+            wantedAttributeValue                = nativeVisualId;
+        } else {
+            wantedAttribute                     = EGL_NONE;
+            wantedAttributeValue                = EGL_NONE;
+        }
     } else {
         // if no renderable type specified, fallback to a simplified query
         wantedAttribute                         = EGL_NATIVE_VISUAL_ID;
