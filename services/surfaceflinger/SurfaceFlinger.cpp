@@ -540,6 +540,9 @@ status_t SurfaceFlinger::getDisplayConfigs(const sp<IBinder>& display,
         return BAD_VALUE;
     }
 
+    if (!display.get())
+        return NAME_NOT_FOUND;
+
     int32_t type = NAME_NOT_FOUND;
     for (int i=0 ; i<DisplayDevice::NUM_BUILTIN_DISPLAY_TYPES ; i++) {
         if (display == mBuiltinDisplays[i]) {
@@ -688,7 +691,7 @@ status_t SurfaceFlinger::setActiveConfig(const sp<IBinder>& display, int mode) {
         virtual bool handler() {
             Vector<DisplayInfo> configs;
             mFlinger.getDisplayConfigs(mDisplay, &configs);
-            if(mMode < 0 || mMode >= configs.size()) {
+            if (mMode < 0 || mMode >= static_cast<int>(configs.size())) {
                 ALOGE("Attempt to set active config = %d for display with %zu configs",
                         mMode, configs.size());
             }
@@ -868,30 +871,41 @@ void SurfaceFlinger::eventControl(int disp, int event, int enabled) {
 void SurfaceFlinger::onMessageReceived(int32_t what) {
     ATRACE_CALL();
     switch (what) {
-    case MessageQueue::TRANSACTION:
-        handleMessageTransaction();
-        break;
-    case MessageQueue::INVALIDATE:
-        handleMessageTransaction();
-        handleMessageInvalidate();
-        signalRefresh();
-        break;
-    case MessageQueue::REFRESH:
-        handleMessageRefresh();
-        break;
+        case MessageQueue::TRANSACTION: {
+            handleMessageTransaction();
+            break;
+        }
+        case MessageQueue::INVALIDATE: {
+            bool refreshNeeded = handleMessageTransaction();
+            refreshNeeded |= handleMessageInvalidate();
+            refreshNeeded |= mRepaintEverything;
+            if (refreshNeeded) {
+                // Signal a refresh if a transaction modified the window state,
+                // a new buffer was latched, or if HWC has requested a full
+                // repaint
+                signalRefresh();
+            }
+            break;
+        }
+        case MessageQueue::REFRESH: {
+            handleMessageRefresh();
+            break;
+        }
     }
 }
 
-void SurfaceFlinger::handleMessageTransaction() {
+bool SurfaceFlinger::handleMessageTransaction() {
     uint32_t transactionFlags = peekTransactionFlags(eTransactionMask);
     if (transactionFlags) {
         handleTransaction(transactionFlags);
+        return true;
     }
+    return false;
 }
 
-void SurfaceFlinger::handleMessageInvalidate() {
+bool SurfaceFlinger::handleMessageInvalidate() {
     ATRACE_CALL();
-    handlePageFlip();
+    return handlePageFlip();
 }
 
 #ifdef QCOM_BSP
@@ -1984,12 +1998,13 @@ void SurfaceFlinger::invalidateLayerStack(uint32_t layerStack,
     }
 }
 
-void SurfaceFlinger::handlePageFlip()
+bool SurfaceFlinger::handlePageFlip()
 {
     Region dirtyRegion;
 
     bool visibleRegions = false;
     const LayerVector& layers(mDrawingState.layersSortedByZ);
+    bool frameQueued = false;
 
     // Store the set of layers that need updates. This set must not change as
     // buffers are being latched, as this could result in a deadlock.
@@ -2003,8 +2018,12 @@ void SurfaceFlinger::handlePageFlip()
     Vector<Layer*> layersWithQueuedFrames;
     for (size_t i = 0, count = layers.size(); i<count ; i++) {
         const sp<Layer>& layer(layers[i]);
-        if (layer->hasQueuedFrame())
-            layersWithQueuedFrames.push_back(layer.get());
+        if (layer->hasQueuedFrame()) {
+            frameQueued = true;
+            if (layer->shouldPresentNow(mPrimaryDispSync)) {
+                layersWithQueuedFrames.push_back(layer.get());
+            }
+        }
     }
     for (size_t i = 0, count = layersWithQueuedFrames.size() ; i<count ; i++) {
         Layer* layer = layersWithQueuedFrames[i];
@@ -2014,6 +2033,16 @@ void SurfaceFlinger::handlePageFlip()
     }
 
     mVisibleRegionsDirty |= visibleRegions;
+
+    // If we will need to wake up at some time in the future to deal with a
+    // queued frame that shouldn't be displayed during this vsync period, wake
+    // up during the next vsync period to check again.
+    if (frameQueued && layersWithQueuedFrames.empty()) {
+        signalLayerUpdate();
+    }
+
+    // Only continue with the refresh if there is actually new work to do
+    return !layersWithQueuedFrames.empty();
 }
 
 void SurfaceFlinger::invalidateHwcGeometry()
@@ -3582,13 +3611,13 @@ void SurfaceFlinger::renderScreenImplLocked(
     if (sourceCrop.left < 0) {
         ALOGE("Invalid crop rect: l = %d (< 0)", sourceCrop.left);
     }
-    if (sourceCrop.right > hw_w) {
+    if (static_cast<uint32_t>(sourceCrop.right) > hw_w) {
         ALOGE("Invalid crop rect: r = %d (> %d)", sourceCrop.right, hw_w);
     }
     if (sourceCrop.top < 0) {
         ALOGE("Invalid crop rect: t = %d (< 0)", sourceCrop.top);
     }
-    if (sourceCrop.bottom > hw_h) {
+    if (static_cast<uint32_t>(sourceCrop.bottom) > hw_h) {
         ALOGE("Invalid crop rect: b = %d (> %d)", sourceCrop.bottom, hw_h);
     }
 
@@ -3713,6 +3742,8 @@ status_t SurfaceFlinger::captureScreenImplLocked(
                         EGLSyncKHR sync;
                         if (!DEBUG_SCREENSHOTS) {
                            sync = eglCreateSyncKHR(mEGLDisplay, EGL_SYNC_NATIVE_FENCE_ANDROID, NULL);
+                           // native fence fd will not be populated until flush() is done.
+                           getRenderEngine().flush();
                         } else {
                             sync = EGL_NO_SYNC_KHR;
                         }
