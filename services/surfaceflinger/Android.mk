@@ -107,6 +107,9 @@ ifeq ($(TARGET_USES_QCOM_BSP), true)
     LOCAL_C_INCLUDES += hardware/qcom/display/libqdutils
     LOCAL_SHARED_LIBRARIES += libqdutils
     LOCAL_CFLAGS += -DQCOM_BSP
+ifeq ($(GET_FRAMEBUFFER_FORMAT_FROM_HWC),true)
+  LOCAL_CFLAGS += -DGET_FRAMEBUFFER_FORMAT_FROM_HWC
+endif
 endif
 
 ifeq ($(TARGET_USES_UI_BLUR), true)

@@ -350,6 +350,9 @@ static const uint32_t DISPLAY_ATTRIBUTES[] = {
     HWC_DISPLAY_HEIGHT,
     HWC_DISPLAY_DPI_X,
     HWC_DISPLAY_DPI_Y,
+#ifdef GET_FRAMEBUFFER_FORMAT_FROM_HWC
+    HWC_DISPLAY_FBFORMAT,
+#endif
     HWC_DISPLAY_NO_ATTRIBUTE,
 };
 #define NUM_DISPLAY_ATTRIBUTES (sizeof(DISPLAY_ATTRIBUTES) / sizeof(DISPLAY_ATTRIBUTES)[0])
@@ -405,6 +408,11 @@ status_t HWComposer::queryDisplayProperties(int disp) {
                 case HWC_DISPLAY_DPI_Y:
                     config.ydpi = values[i] / 1000.0f;
                     break;
+#ifdef GET_FRAMEBUFFER_FORMAT_FROM_HWC
+                case HWC_DISPLAY_FBFORMAT:
+                    config.fbformat = values[i];
+                    break;
+#endif
                 default:
                     ALOG_ASSERT(false, "unknown display attribute[%zu] %#x",
                             i, DISPLAY_ATTRIBUTES[i]);
@@ -422,7 +430,12 @@ status_t HWComposer::queryDisplayProperties(int disp) {
     }
 
     // FIXME: what should we set the format to?
+#ifdef GET_FRAMEBUFFER_FORMAT_FROM_HWC
+    mDisplayData[disp].format =
+            mDisplayData[disp].configs[currentConfig].fbformat;
+#else
     mDisplayData[disp].format = HAL_PIXEL_FORMAT_RGBA_8888;
+#endif
     mDisplayData[disp].connected = true;
     return NO_ERROR;
 }
@@ -904,7 +917,11 @@ int HWComposer::getVisualID() const {
         // FIXME: temporary hack until HAL_PIXEL_FORMAT_IMPLEMENTATION_DEFINED
         // is supported by the implementation. we can only be in this case
         // if we have HWC 1.1
+#ifdef GET_FRAMEBUFFER_FORMAT_FROM_HWC
+        return mDisplayData[HWC_DISPLAY_PRIMARY].format;
+#else
         return HAL_PIXEL_FORMAT_RGBA_8888;
+#endif
         //return HAL_PIXEL_FORMAT_IMPLEMENTATION_DEFINED;
     } else {
         return mFbDev->format;
