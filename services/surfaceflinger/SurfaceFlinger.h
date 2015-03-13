@@ -102,6 +102,9 @@ public:
         EVENT_ORIENTATION = HWC_EVENT_ORIENTATION
     };
 
+    // KPI Logging
+    void placeMarker(const char *markerName);
+
     // post an asynchronous message to the main thread
     status_t postMessageAsync(const sp<MessageBase>& msg, nsecs_t reltime = 0, uint32_t flags = 0);
 
