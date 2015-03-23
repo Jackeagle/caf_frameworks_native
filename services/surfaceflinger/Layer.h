@@ -150,6 +150,7 @@ public:
 
     void computeGeometry(const sp<const DisplayDevice>& hw, Mesh& mesh,
             bool useIdentityTransform) const;
+    Rect computeBounds(const Region& activeTransparentRegion) const;
     Rect computeBounds() const;
 
     sp<IBinder> getHandle();
@@ -221,6 +222,8 @@ public:
      */
     void onLayerDisplayed(const sp<const DisplayDevice>& hw,
             HWComposer::HWCLayerInterface* layer);
+
+    bool shouldPresentNow(const DispSync& dispSync) const;
 
     /*
      * called before composition.
@@ -353,7 +356,8 @@ protected:
 
 private:
     // Interface implementation for SurfaceFlingerConsumer::ContentsChangedListener
-    virtual void onFrameAvailable();
+    virtual void onFrameAvailable(const BufferItem& item);
+    virtual void onFrameReplaced(const BufferItem& item);
     virtual void onSidebandStreamChanged();
 
     void commitTransaction();
@@ -429,6 +433,9 @@ private:
     // This layer can be a cursor on some displays.
     bool mPotentialCursor;
 
+    // Local copy of the queued contents of the incoming BufferQueue
+    mutable Mutex mQueueItemLock;
+    Vector<BufferItem> mQueueItems;
     // Transform hint assigned for the layer
     uint32_t mTransformHint;
 };
