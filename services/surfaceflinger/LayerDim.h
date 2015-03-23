@@ -28,7 +28,7 @@ namespace android {
 
 class LayerDim : public Layer
 {
-public:    
+public:
                 LayerDim(SurfaceFlinger* flinger, const sp<Client>& client,
                         const String8& name, uint32_t w, uint32_t h, uint32_t flags);
         virtual ~LayerDim();
