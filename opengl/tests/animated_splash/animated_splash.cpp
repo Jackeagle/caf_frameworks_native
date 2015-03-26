@@ -226,8 +226,6 @@ int main(void)
 		}
 
 		/* close devices and free module */
-		delete []file_list;
-
 		if (grDev) {
 			for(int i = 0; i < mNumBuffers; i++) {
 				if (nativeWindowBuf[i].handle != NULL) {
@@ -240,6 +238,7 @@ int main(void)
 		if (fbDev) {
 			framebuffer_close(fbDev);
 		}
+		ALOGD("ASPLASH Finished!\n");
 	} else {
 		ALOGE("ASPLASH couldn't get gralloc module\n");
 	}
