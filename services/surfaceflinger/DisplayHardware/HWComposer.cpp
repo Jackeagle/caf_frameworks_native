@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2010 The Android Open Source Project
+ * Copyright (C) 2010, 2015 The Android Open Source Project
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -265,7 +265,7 @@ int HWComposer::loadFbHalModule()
         return err;
     }
 
-    return framebuffer_open(module, &mFbDev);
+    return framebuffer_open(module, GRALLOC_HARDWARE_FB_PRIMARY, &mFbDev);
 }
 
 status_t HWComposer::initCheck() const {
