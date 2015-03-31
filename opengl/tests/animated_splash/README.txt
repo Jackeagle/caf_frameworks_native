@@ -43,8 +43,7 @@ Step 6) After doing the above steps, the app and BMP files will be stored on the
 
 NOTES:
 ------
-Please ensure the following defines at the top of the file are in check or
-modified if need be:
+A. Please ensure the following defines at the top of the file are in check or modified if need be:
 
 	#define MAX_FILENAME_LENGTH 20
 	#define NUM_OF_BMPS 16
@@ -55,11 +54,18 @@ modified if need be:
 	#define BMP_PIXEL_FORMAT HAL_PIXEL_FORMAT_BGR_888
 	#define BMP_BPP 3
 
+B. Uncomment out any one of following line to choose which display is being tested.
+#define TEST_FB GRALLOC_HARDWARE_FB_PRIMARY
+//#define TEST_FB GRALLOC_HARDWARE_FB_SECONDARY
+//#define TEST_FB GRALLOC_HARDWARE_FB_TERTIARY
 
-To debug after system boots up:
+C. Direct memory address access through private_handle_t is not supported anymore.
+Please use copybit for any memory blit.
+
+D. To debug after system boots up:
 	- adb root
 	- adb shell
 	- ./system/bin/animated-splash
 	- logs will get printed to logcat
-	- you can grep for log tag LOG_TAG "ASPLASH" in adb logcat to view more 
+	- you can grep for log tag LOG_TAG "ASPLASH" in adb logcat to view more
 	  easily. (adb logcat | grep "ASPLASH")

@@ -27,6 +27,7 @@
 */
 
 
+#include <unistd.h>
 #include <hardware/hardware.h>
 #include <hardware/gralloc.h>
 #include <ui/ANativeObjectBase.h>
@@ -37,10 +38,14 @@
 #include <sys/cdefs.h>
 #include <stdint.h>
 #include <linux/fb.h>
-#include <gralloc_priv.h>
+#include <copybit.h>
 
-#define MIN_NUM_FRAME_BUFFERS  1
-#define MAX_NUM_FRAME_BUFFERS  2
+#define TEST_FB GRALLOC_HARDWARE_FB_PRIMARY
+//#define TEST_FB GRALLOC_HARDWARE_FB_SECONDARY
+//#define TEST_FB GRALLOC_HARDWARE_FB_TERTIARY
+
+#define MIN_NUM_FRAME_BUFFERS  2
+#define MAX_NUM_FRAME_BUFFERS  3
 
 #define LOG_TAG "ASPLASH"
 #define MAX_FILENAME_LENGTH 20
@@ -51,196 +56,301 @@
 #define P_SPLASH_2S_HOLD 26
 #define BMP_PIXEL_FORMAT HAL_PIXEL_FORMAT_BGR_888
 #define BMP_BPP 3
+#define SLEEP_EACH_FRAME_IN_US   50000 //50ms
+#define SLEEP_LAST_FRAME_IN_US   2000000 //2s
+
+struct copybit_iterator : public copybit_region_t {
+    copybit_iterator(const copybit_rect_t& rect) {
+        mRect = rect;
+        mCount = 1;
+        this->next = iterate;
+    }
+private:
+    static int iterate(copybit_region_t const * self, copybit_rect_t* rect) {
+        if (!self || !rect) {
+            return 0;
+        }
+
+        copybit_iterator const* me = static_cast<copybit_iterator const*>(self);
+        if (me->mCount) {
+            rect->l = me->mRect.l;
+            rect->t = me->mRect.t;
+            rect->r = me->mRect.r;
+            rect->b = me->mRect.b;
+            me->mCount--;
+            return 1;
+        }
+        return 0;
+    }
+    copybit_rect_t mRect;
+    mutable int mCount;
+};
 
 void place_marker(const char* str)
 {
-	FILE *fp;
+    FILE *fp;
 
-	fp = fopen( "/proc/bootkpi/marker_entry" , "w" );
-	if (fp) {
-		fwrite(str , 1 , strlen(str) , fp );
-		fclose(fp);
-	}
+    fp = fopen( "/proc/bootkpi/marker_entry" , "w" );
+    if (fp) {
+        fwrite(str , 1 , strlen(str) , fp );
+        fclose(fp);
+    }
 }
 
 int main(void)
 {
-	place_marker("ASPLASH: start");
-	hw_module_t const* module;
-	framebuffer_device_t* fbDev;
-	alloc_device_t* grDev;
-	char * inbuf;
+    place_marker("ASPLASH: start");
+    hw_module_t const* module;
+    framebuffer_device_t* fbDev;
+    alloc_device_t* grDev;
+    hw_module_t const* copybit_module;
+    copybit_device_t* copybitDev;
+    char * inbuf;
+    int err = 0;
+    char * inBuf = NULL;
+    int stride = 0;
+    int i = 0;
+    int32_t mNumBuffers = 0;
+    int32_t mNumFreeBuffers = 0;
+    int32_t mBufferHead = 0;
+    copybit_image_t src, dst;
+    copybit_iterator* clip = NULL;
+    copybit_rect_t rect;
+    copybit_rect_t src_rect;
+    copybit_rect_t dst_rect;
+    ANativeWindowBuffer nativeWindowBuf[MAX_NUM_FRAME_BUFFERS];
+    int native_buf_index = 0;
+    char gHeader[BMP_HEADER_IN_BYTES];
 
-	char file_list[][MAX_FILENAME_LENGTH] =
-	{
-		"/data/pan_1.bmp","/data/pan_2.bmp","/data/pan_3.bmp","/data/pan_4.bmp",
-		"/data/pan_5.bmp","/data/pan_6.bmp","/data/pan_7.bmp","/data/pan_8.bmp",
-		"/data/pan_9.bmp","/data/pan_10.bmp","/data/pan_11.bmp","/data/pan_12.bmp",
-		"/data/pan_13.bmp","/data/pan_14.bmp","/data/pan_15.bmp","/data/pan_16.bmp"
-	};
+    char file_list[][MAX_FILENAME_LENGTH] =
+    {
+        "/data/pan_1.bmp",  "/data/pan_2.bmp",  "/data/pan_3.bmp",
+        "/data/pan_4.bmp",  "/data/pan_5.bmp",  "/data/pan_6.bmp",
+        "/data/pan_7.bmp",  "/data/pan_8.bmp",  "/data/pan_9.bmp",
+        "/data/pan_10.bmp", "/data/pan_11.bmp", "/data/pan_12.bmp",
+        "/data/pan_13.bmp", "/data/pan_14.bmp", "/data/pan_15.bmp",
+        "/data/pan_16.bmp"
+    };
 
-	if (hw_get_module(GRALLOC_HARDWARE_MODULE_ID, &module) == 0) {
-		int stride;
-		int err;
-		int i,j;
-		int32_t mNumBuffers;
-		int32_t mNumFreeBuffers;
-		int32_t mBufferHead;
-		int spl_x_start, spl_y_start;
+    if (hw_get_module(COPYBIT_HARDWARE_MODULE_ID, &copybit_module) != 0) {
+        ALOGE("ASPLASH: Can't open copybit module");
+        return 0;
+    } else {
+        err = copybit_open(copybit_module, &copybitDev);
+        if((err < 0) || (copybitDev == NULL)) {
+            ALOGE_IF(err, "ASPLASH: couldn't open copybit HAL (%s)",
+                        strerror(-err));
+            return 0;
+        }
+    }
 
-		struct private_handle_t *g_handle_off[MAX_NUM_FRAME_BUFFERS];
-		ANativeWindowBuffer nativeWindowBuf[MAX_NUM_FRAME_BUFFERS];
 
-		gralloc_module_t const* grModule =
-		reinterpret_cast<gralloc_module_t const*>(module);
-		err = framebuffer_open(module, &fbDev);
-		if(err){
-			ALOGE_IF(err, "ASPLASH: couldn't open framebuffer HAL (%s)", strerror(-err));
-		}
+    if (hw_get_module(GRALLOC_HARDWARE_MODULE_ID, &module) == 0) {
 
-		err = gralloc_open(module, &grDev);
-		if(err){
-			ALOGE_IF(err, "ASPLASH: couldn't open gralloc HAL (%s)", strerror(-err));
-		}
+        gralloc_module_t const* grModule =
+        reinterpret_cast<gralloc_module_t const*>(module);
+        err = framebuffer_open(module, TEST_FB, &fbDev);
+        if(err){
+            ALOGE_IF(err, "ASPLASH: couldn't open framebuffer HAL (%s)",
+                        strerror(-err));
+        }
 
-		if (!fbDev || !grDev)
-			return -1;
+        err = gralloc_open(module, &grDev);
+        if(err){
+            ALOGE_IF(err, "ASPLASH: couldn't open gralloc HAL (%s)",
+                        strerror(-err));
+        }
 
-		if(fbDev->numFramebuffers >= MIN_NUM_FRAME_BUFFERS &&
-			fbDev->numFramebuffers <= MAX_NUM_FRAME_BUFFERS){
-			mNumBuffers = fbDev->numFramebuffers;
-		} else {
-			mNumBuffers = MIN_NUM_FRAME_BUFFERS;
-		}
-		mNumFreeBuffers = mNumBuffers;
-		mBufferHead = mNumBuffers-1;
+        if (!fbDev || !grDev)
+            return -1;
 
-		/* setup buffers*/
-		for (i = 0; i < mNumBuffers; i++)
-		{
-			nativeWindowBuf[i].width = fbDev->width;
-			nativeWindowBuf[i].height = fbDev->height;
-			nativeWindowBuf[i].format = BMP_PIXEL_FORMAT;
-			nativeWindowBuf[i].usage = GRALLOC_USAGE_SW_WRITE_RARELY|GRALLOC_USAGE_SW_READ_RARELY;
-		}
+        if(fbDev->numFramebuffers >= MIN_NUM_FRAME_BUFFERS &&
+            fbDev->numFramebuffers <= MAX_NUM_FRAME_BUFFERS){
+            mNumBuffers = fbDev->numFramebuffers;
+        } else {
+            mNumBuffers = MIN_NUM_FRAME_BUFFERS;
+        }
 
-		/* allocate buffers*/
-		for (i = 0; i < mNumBuffers; i++)
-		{
-			err = grDev->alloc(grDev,
-			fbDev->width, fbDev->height, nativeWindowBuf[i].format,
-			nativeWindowBuf[i].usage,
-			&nativeWindowBuf[i].handle, &nativeWindowBuf[i].stride);
-			g_handle_off[i] =
-				static_cast< private_handle_t*>(const_cast<native_handle_t*>(nativeWindowBuf[i].handle));
+        /* setup buffers*/
+        for (i = 0; i < mNumBuffers; i++)
+        {
+            nativeWindowBuf[i].width = (fbDev->width > P_SPLASH_IMAGE_WIDTH) ?
+                                        fbDev->width : P_SPLASH_IMAGE_WIDTH;
+            nativeWindowBuf[i].height =
+                                     (fbDev->height > P_SPLASH_IMAGE_HEIGHT) ?
+                                      fbDev->height : P_SPLASH_IMAGE_HEIGHT;
+            nativeWindowBuf[i].format = BMP_PIXEL_FORMAT;
+            nativeWindowBuf[i].usage =
+                    GRALLOC_USAGE_SW_WRITE_RARELY|GRALLOC_USAGE_SW_READ_RARELY;
+        }
 
-			ALOGE_IF(err, "ASPLASH: fb buffer %d allocation failed w=%d, h=%d, err=%s",
-			i, fbDev->width, fbDev->height, strerror(-err));
+        /* allocate buffers*/
+        for (i = 0; i < mNumBuffers; i++)
+        {
+            err = grDev->alloc(grDev,
+            nativeWindowBuf[i].width, nativeWindowBuf[i].height,
+            nativeWindowBuf[i].format, nativeWindowBuf[i].usage,
+            &nativeWindowBuf[i].handle, &nativeWindowBuf[i].stride);
 
-			if (err)
-			{
-				mNumBuffers = i;
-				mNumFreeBuffers = i;
-				mBufferHead = mNumBuffers-1;
-				break;
-			}
-		}
+            ALOGE_IF(err, "ASPLASH: fb buffer %d allocation failed w=%d, " \
+                     "h=%d, err=%s",
+                     i, fbDev->width, fbDev->height, strerror(-err));
 
-		/* get pointer to base fb addr */
-		char *memptr = (char *)g_handle_off[0]->base;
-		if (memptr == NULL)
-			return -1;
+            if (err)
+            {
+                mNumBuffers = i;
+                break;
+            }
+        }
 
-		/* centering image*/
-		spl_x_start = (nativeWindowBuf[0].width - P_SPLASH_IMAGE_WIDTH) * BMP_BPP;
-		spl_y_start = (nativeWindowBuf[0].height - (P_SPLASH_IMAGE_HEIGHT)) * BMP_BPP;
-		if (spl_y_start <= 0)
-			spl_y_start = 0;
-		else
-			spl_y_start = spl_y_start/2;
-		if (spl_x_start <= 0)
-			spl_x_start = 0;
-		else
-			spl_x_start = spl_x_start/2;
+        /* loop to go through animation */
+        int aCount;
+        for (aCount = 0; aCount < NUM_OF_BMPS; aCount++) {
+            FILE * pFile;
+            long fSize;
 
-		/* blanking background to white */
-		memset(memptr, 0xFF, nativeWindowBuf[0].stride*nativeWindowBuf[0].height*BMP_BPP);
+            /* read from bmp file */
+            pFile = fopen (file_list[aCount],"r");
+            if (pFile!=NULL)
+            {
+                fseek(pFile,0,SEEK_END);
+                fSize = ftell(pFile);
+                rewind(pFile);
 
-		/* loop to go through animation */
-		int aCount;
-		for (aCount = 0; aCount < NUM_OF_BMPS; aCount++){
+                inBuf = (char*)malloc(sizeof(char)*fSize);
+                fread(gHeader,1,BMP_HEADER_IN_BYTES,pFile);
+                fread(inBuf,1,fSize-BMP_HEADER_IN_BYTES,pFile);
+                fclose (pFile);
+            } else {
+                ALOGE("ASPLASH: Can't open file=%s", file_list[aCount]);
+                goto err_exit;
+            }
 
-			FILE * pFile;
-			long fSize;
-			char * inBuf;
-			char * gHeader;
+            /* Use copybit to do flip */
+            //src
+            src.w = P_SPLASH_IMAGE_WIDTH;
+            src.h = P_SPLASH_IMAGE_HEIGHT;
+            src.format = COPYBIT_FORMAT_BGR_888;
+            src.base = inBuf;
+            src.handle = NULL;
+            src.horiz_padding = 0;
+            src.vert_padding = 0;
+            //dst
+            dst.w = nativeWindowBuf[native_buf_index].stride;
+            dst.h = nativeWindowBuf[native_buf_index].height;
+            dst.format = COPYBIT_FORMAT_BGR_888;
+            dst.base = NULL;
+            dst.handle = const_cast<native_handle_t*>
+                            (nativeWindowBuf[native_buf_index].handle);
+            dst.horiz_padding = 0;
+            dst.vert_padding = 0;
+            //src rect
+            src_rect.l = 0;
+            src_rect.t = 0;
+            src_rect.r = src.w;
+            src_rect.b = src.h;
+            //dst rect
+            dst_rect.l = (nativeWindowBuf[native_buf_index].width>src.w)?
+                         ((nativeWindowBuf[native_buf_index].width-src.w)/2):
+                         (0);
+            dst_rect.t = (nativeWindowBuf[native_buf_index].height>src.h)?
+                         ((nativeWindowBuf[native_buf_index].height-src.h)/2):
+                         (0);
+            dst_rect.r = dst_rect.l+src.w;
+            dst_rect.b = dst_rect.t+src.h;
+            //region
+            rect.l = 0;
+            rect.t = 0;
+            rect.r = src.w;
+            rect.b = src.h;
+            clip = new copybit_iterator(rect);
+            if (clip == NULL) {
+                ALOGE("ASPLASH: can't alloc clip");
+                goto err_exit;
+            } else {
+                err = copybitDev->set_parameter(copybitDev, COPYBIT_TRANSFORM,
+                            COPYBIT_TRANSFORM_FLIP_V);
+                if (err != 0) {
+                    ALOGE_IF(err, "ASPLASH: set_parameter FLIP_V error=%d (%s)",
+                                err, strerror(-err));
+                    goto err_exit;
+                }
+                err = copybitDev->set_parameter(copybitDev,
+                                COPYBIT_BACKGROUND_COLOR, 0xFFFFFFFF);
+                if (err != 0) {
+                    ALOGE_IF(err, "ASPLASH: set_parameter BG error=%d (%s)",
+                             err, strerror(-err));
+                    goto err_exit;
+                }
+                err = copybitDev->sw_blit(copybitDev, &dst, &src, &dst_rect,
+                                    &src_rect, (struct copybit_region_t *)clip);
+                if (err != 0) {
+                    ALOGE_IF(err, "ASPLASH: sw_blit error=%d (%s)",
+                             err, strerror(-err));
+                    goto err_exit;
+                } else {
+                    ALOGD("ASPLASH: sw_blit succeed!");
+                }
+            }
 
-			/* read from bmp file */
-			pFile = fopen (file_list[aCount],"r");
-			if (pFile!=NULL)
-			{
-				fseek(pFile,0,SEEK_END);
-				fSize = ftell(pFile);
-				rewind(pFile);
+            void *vaddr = NULL;
+            err = grModule->lock(grModule,
+                    nativeWindowBuf[native_buf_index].handle,
+                    (GRALLOC_USAGE_SW_READ_MASK | GRALLOC_USAGE_SW_WRITE_MASK),
+                    0,0,fbDev->width, fbDev->height, &vaddr);
 
-				inBuf = (char*)malloc(sizeof(char)*fSize);
-				gHeader = (char*)malloc(sizeof(char)*BMP_HEADER_IN_BYTES);
-				fread(gHeader,1,BMP_HEADER_IN_BYTES,pFile);
-				fread(inBuf,1,fSize-BMP_HEADER_IN_BYTES,pFile);
-				fclose (pFile);
-			}
+            if(err != 0) {
+                ALOGE("ASPLASH:  gralloc lock fail\n");
+            }
 
-			/* copy to buffer - note bmp file saves vertically flipped */
-			unsigned k, l;
-			l = (nativeWindowBuf[0].height-1);
-			for (k = (0 + spl_y_start); k < (nativeWindowBuf[0].height); k++){
-				memcpy(memptr + spl_x_start + k*nativeWindowBuf[0].stride*BMP_BPP,
-				inBuf + l* P_SPLASH_IMAGE_WIDTH*BMP_BPP, P_SPLASH_IMAGE_WIDTH*BMP_BPP);
-				l--;
-			}
+            /* post to display */
+            framebuffer_device_t* fb = fbDev;
+            fb->post(fb, nativeWindowBuf[native_buf_index].handle);
+            usleep(SLEEP_EACH_FRAME_IN_US);
 
-			void *vaddr = NULL;
-			err = grModule->lock(grModule, g_handle_off[0],
-			(GRALLOC_USAGE_SW_READ_MASK | GRALLOC_USAGE_SW_WRITE_MASK),
-			0,0,fbDev->width, fbDev->height, &vaddr);
+            /*hold last image for 2s */
+            if (aCount == (NUM_OF_BMPS - 1)){
+                usleep(SLEEP_LAST_FRAME_IN_US);
+            }
 
-			if(err != 0) {
-				ALOGE("ASPLASH:  gralloc lock fail\n");
-			}
+            err = grModule->unlock(grModule,
+                    nativeWindowBuf[native_buf_index].handle);
+            native_buf_index++;
+            if (native_buf_index >= mNumBuffers)
+                native_buf_index = 0;
+            free(inBuf);
+            inBuf = NULL;
+        }
+        ALOGD("ASPLASH Finished!\n");
+    } else {
+        ALOGE("ASPLASH couldn't get gralloc module\n");
+    }
 
-			/* post to display */
-			framebuffer_device_t* fb = fbDev;
-			fb->post(fb, g_handle_off[0]);
-			fb->post(fb, g_handle_off[0]);
-			fb->post(fb, g_handle_off[0]);
-			fb->post(fb, g_handle_off[0]);
+err_exit:
+    /* close devices and free module */
+    if (inBuf) {
+        free(inBuf);
+        inBuf = NULL;
+    }
 
-			/*hold last image for 2s */
-			if (aCount == (NUM_OF_BMPS - 1)){
-				for (i =0; i < P_SPLASH_2S_HOLD; i++)
-					fb->post(fb, g_handle_off[0]);
-			}
+    if (copybitDev) {
+        copybit_close(copybitDev);
+        copybitDev = NULL;
+    }
 
-			err = grModule->unlock(grModule, g_handle_off[0]);
-			free(inBuf);
-		}
+    if (grDev) {
+        for(int i = 0; i < mNumBuffers; i++) {
+            if (nativeWindowBuf[i].handle != NULL)
+                grDev->free(grDev, nativeWindowBuf[i].handle);
+        }
+        gralloc_close(grDev);
+        grDev = NULL;
+    }
 
-		/* close devices and free module */
-		if (grDev) {
-			for(int i = 0; i < mNumBuffers; i++) {
-				if (nativeWindowBuf[i].handle != NULL) {
-					grDev->free(grDev, nativeWindowBuf[i].handle);
-				}
-			}
-			gralloc_close(grDev);
-		}
+    if (fbDev) {
+        framebuffer_close(fbDev);
+        fbDev= NULL;
+    }
 
-		if (fbDev) {
-			framebuffer_close(fbDev);
-		}
-		ALOGD("ASPLASH Finished!\n");
-	} else {
-		ALOGE("ASPLASH couldn't get gralloc module\n");
-	}
-	return 0;
+    return 0;
 }
