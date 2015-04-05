@@ -275,6 +275,9 @@ public:
         float xdpi;
         float ydpi;
         nsecs_t refresh;
+#ifdef GET_FRAMEBUFFER_FORMAT_FROM_HWC
+        uint32_t fbformat;
+#endif
     };
 
     // Query display parameters.  Pass in a display index (e.g.
