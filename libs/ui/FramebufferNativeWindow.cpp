@@ -1,17 +1,17 @@
-/* 
+/*
 **
-** Copyright 2007 The Android Open Source Project
+** Copyright 2007, 2015 The Android Open Source Project
 **
-** Licensed under the Apache License Version 2.0(the "License"); 
-** you may not use this file except in compliance with the License. 
-** You may obtain a copy of the License at 
+** Licensed under the Apache License Version 2.0(the "License");
+** you may not use this file except in compliance with the License.
+** You may obtain a copy of the License at
 **
-**     http://www.apache.org/licenses/LICENSE-2.0 
+**     http://www.apache.org/licenses/LICENSE-2.0
 **
-** Unless required by applicable law or agreed to in writing software 
-** distributed under the License is distributed on an "AS IS" BASIS 
-** WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND either express or implied. 
-** See the License for the specific language governing permissions and 
+** Unless required by applicable law or agreed to in writing software
+** distributed under the License is distributed on an "AS IS" BASIS
+** WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND either express or implied.
+** See the License for the specific language governing permissions and
 ** limitations under the License.
 */
 
@@ -41,10 +41,10 @@
 namespace android {
 // ----------------------------------------------------------------------------
 
-class NativeBuffer 
+class NativeBuffer
     : public ANativeObjectBase<
-        ANativeWindowBuffer, 
-        NativeBuffer, 
+        ANativeWindowBuffer,
+        NativeBuffer,
         LightRefBase<NativeBuffer> >
 {
 public:
@@ -55,7 +55,7 @@ public:
         ANativeWindowBuffer::usage  = u;
     }
 private:
-    friend class LightRefBase<NativeBuffer>;    
+    friend class LightRefBase<NativeBuffer>;
     ~NativeBuffer() { }; // this class cannot be overloaded
 };
 
@@ -63,13 +63,13 @@ private:
 /*
  * This implements the (main) framebuffer management. This class is used
  * mostly by SurfaceFlinger, but also by command line GL application.
- * 
+ *
  * In fact this is an implementation of ANativeWindow on top of
  * the framebuffer.
  * 
- * Currently it is pretty simple, it manages only two buffers (the front and 
+ * Currently it is pretty simple, it manages only two buffers (the front and
  * back buffer).
- * 
+ *
  */
 
 FramebufferNativeWindow::FramebufferNativeWindow() 
@@ -80,7 +80,7 @@ FramebufferNativeWindow::FramebufferNativeWindow()
         int stride;
         int err;
         int i;
-        err = framebuffer_open(module, &fbDev);
+        err = framebuffer_open(module, GRALLOC_HARDWARE_FB_PRIMARY, &fbDev);
         ALOGE_IF(err, "couldn't open framebuffer HAL (%s)", strerror(-err));
         
         err = gralloc_open(module, &grDev);
@@ -89,7 +89,7 @@ FramebufferNativeWindow::FramebufferNativeWindow()
         // bail out if we can't initialize the modules
         if (!fbDev || !grDev)
             return;
-        
+
         mUpdateOnDemand = (fbDev->setUpdateRect != 0);
         
         // initialize the buffer FIFO
@@ -117,16 +117,19 @@ FramebufferNativeWindow::FramebufferNativeWindow()
         for (i = 0; i < mNumBuffers; i++)
         {
                 buffers[i] = new NativeBuffer(
-                        fbDev->width, fbDev->height, fbDev->format, GRALLOC_USAGE_HW_FB);
+                        fbDev->width, fbDev->height, fbDev->format,
+                        GRALLOC_USAGE_HW_FB);
         }
 
         for (i = 0; i < mNumBuffers; i++)
         {
                 err = grDev->alloc(grDev,
                         fbDev->width, fbDev->height, fbDev->format,
-                        GRALLOC_USAGE_HW_FB, &buffers[i]->handle, &buffers[i]->stride);
+                        GRALLOC_USAGE_HW_FB, &buffers[i]->handle,
+                        &buffers[i]->stride);
 
-                ALOGE_IF(err, "fb buffer %d allocation failed w=%d, h=%d, err=%s",
+                ALOGE_IF(err, "fb buffer %d allocation failed w=%d, h=%d, " \
+                        "err=%s",
                         i, fbDev->width, fbDev->height, strerror(-err));
 
                 if (err)
@@ -138,12 +141,12 @@ FramebufferNativeWindow::FramebufferNativeWindow()
                 }
         }
 
-        const_cast<uint32_t&>(ANativeWindow::flags) = fbDev->flags; 
+        const_cast<uint32_t&>(ANativeWindow::flags) = fbDev->flags;
         const_cast<float&>(ANativeWindow::xdpi) = fbDev->xdpi;
         const_cast<float&>(ANativeWindow::ydpi) = fbDev->ydpi;
-        const_cast<int&>(ANativeWindow::minSwapInterval) = 
+        const_cast<int&>(ANativeWindow::minSwapInterval) =
             fbDev->minSwapInterval;
-        const_cast<int&>(ANativeWindow::maxSwapInterval) = 
+        const_cast<int&>(ANativeWindow::maxSwapInterval) =
             fbDev->maxSwapInterval;
     } else {
         ALOGE("Couldn't get gralloc module");
@@ -160,7 +163,7 @@ FramebufferNativeWindow::FramebufferNativeWindow()
     ANativeWindow::queueBuffer_DEPRECATED = queueBuffer_DEPRECATED;
 }
 
-FramebufferNativeWindow::~FramebufferNativeWindow() 
+FramebufferNativeWindow::~FramebufferNativeWindow()
 {
     if (grDev) {
         for(int i = 0; i < mNumBuffers; i++) {
@@ -176,7 +179,7 @@ FramebufferNativeWindow::~FramebufferNativeWindow()
     }
 }
 
-status_t FramebufferNativeWindow::setUpdateRectangle(const Rect& r) 
+status_t FramebufferNativeWindow::setUpdateRectangle(const Rect& r)
 {
     if (!mUpdateOnDemand) {
         return INVALID_OPERATION;
@@ -193,7 +196,7 @@ status_t FramebufferNativeWindow::compositionComplete()
 }
 
 int FramebufferNativeWindow::setSwapInterval(
-        ANativeWindow* window, int interval) 
+        ANativeWindow* window, int interval)
 {
     framebuffer_device_t* fb = getSelf(window)->fbDev;
     return fb->setSwapInterval(fb, interval);
@@ -217,7 +220,7 @@ int FramebufferNativeWindow::getCurrentBufferIndex() const
     return index;
 }
 
-int FramebufferNativeWindow::dequeueBuffer_DEPRECATED(ANativeWindow* window, 
+int FramebufferNativeWindow::dequeueBuffer_DEPRECATED(ANativeWindow* window,
         ANativeWindowBuffer** buffer)
 {
     int fenceFd = -1;
@@ -232,7 +235,7 @@ int FramebufferNativeWindow::dequeueBuffer_DEPRECATED(ANativeWindow* window,
     return result;
 }
 
-int FramebufferNativeWindow::dequeueBuffer(ANativeWindow* window, 
+int FramebufferNativeWindow::dequeueBuffer(ANativeWindow* window,
         ANativeWindowBuffer** buffer, int* fenceFd)
 {
     FramebufferNativeWindow* self = getSelf(window);
@@ -259,19 +262,19 @@ int FramebufferNativeWindow::dequeueBuffer(ANativeWindow* window,
     return 0;
 }
 
-int FramebufferNativeWindow::lockBuffer_DEPRECATED(ANativeWindow* /*window*/, 
+int FramebufferNativeWindow::lockBuffer_DEPRECATED(ANativeWindow* /*window*/,
         ANativeWindowBuffer* /*buffer*/)
 {
     return NO_ERROR;
 }
 
-int FramebufferNativeWindow::queueBuffer_DEPRECATED(ANativeWindow* window, 
+int FramebufferNativeWindow::queueBuffer_DEPRECATED(ANativeWindow* window,
         ANativeWindowBuffer* buffer)
 {
     return queueBuffer(window, buffer, -1);
 }
 
-int FramebufferNativeWindow::queueBuffer(ANativeWindow* window, 
+int FramebufferNativeWindow::queueBuffer(ANativeWindow* window,
         ANativeWindowBuffer* buffer, int fenceFd)
 {
     FramebufferNativeWindow* self = getSelf(window);
@@ -291,7 +294,7 @@ int FramebufferNativeWindow::queueBuffer(ANativeWindow* window,
 }
 
 int FramebufferNativeWindow::query(const ANativeWindow* window,
-        int what, int* value) 
+        int what, int* value)
 {
     const FramebufferNativeWindow* self = getSelf(window);
     Mutex::Autolock _l(self->mutex);
