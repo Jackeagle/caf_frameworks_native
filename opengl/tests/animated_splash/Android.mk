@@ -11,8 +11,10 @@ LOCAL_SHARED_LIBRARIES := \
 
 LOCAL_C_INCLUDES += $(call include-path-for, opengl-tests-includes)
 
-LOCAL_C_INCLUDES  += $(TARGET_OUT_HEADERS)/qcom/display/
+LOCAL_C_INCLUDES  += $(TARGET_OUT_HEADERS)/qcom/display/ \
+                     $(TARGET_OUT_INTERMEDIATES)/KERNEL_OBJ/usr/include
 
+LOCAL_ADDITIONAL_DEPENDENCIES := $(TARGET_OUT_INTERMEDIATES)/KERNEL_OBJ/usr
 LOCAL_MODULE:= animated-splash
 
 LOCAL_MODULE_TAGS := optional

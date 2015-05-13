@@ -69,3 +69,11 @@ D. To debug after system boots up:
 	- logs will get printed to logcat
 	- you can grep for log tag LOG_TAG "ASPLASH" in adb logcat to view more
 	  easily. (adb logcat | grep "ASPLASH")
+
+E. System properties for feature control:
+	- sys.asplash.keep_running
+	  Setting this property to true before running application could trigger application to
+	  non-stop mode.
+	- sys.asplash.stop
+	  Setting this property to true results application to exit from non-stop
+	  mode.
