@@ -31,6 +31,7 @@
 #include <ui/Fence.h>
 #include <ui/FramebufferNativeWindow.h>
 #include <ui/Rect.h>
+#include <gui/ISurfaceComposer.h>
 
 #include <EGL/egl.h>
 
@@ -72,7 +73,7 @@ private:
  *
  */
 
-FramebufferNativeWindow::FramebufferNativeWindow() 
+FramebufferNativeWindow::FramebufferNativeWindow(const char *name, int fb_idx)
     : BASE(), fbDev(0), grDev(0), mUpdateOnDemand(false)
 {
     hw_module_t const* module;
@@ -80,9 +81,25 @@ FramebufferNativeWindow::FramebufferNativeWindow()
         int stride;
         int err;
         int i;
-        err = framebuffer_open(module, GRALLOC_HARDWARE_FB_PRIMARY, &fbDev);
-        ALOGE_IF(err, "couldn't open framebuffer HAL (%s)", strerror(-err));
-        
+        gralloc_module_t const* grModule =
+        reinterpret_cast<gralloc_module_t const*>(module);
+        if (!grModule->framebufferOpenEx) {
+            ALOGI("%s gralloc doesn't support framebufferOpenEx, fallback to"\
+                " legacy framebuffer_open");
+            err = framebuffer_open(module, GRALLOC_HARDWARE_FB_PRIMARY, &fbDev);
+            ALOGE_IF(err, "couldn't open framebuffer HAL (%s)", strerror(-err));
+        } else if (!name) {
+            ALOGE("%s client name is NULL", __FUNCTION__);
+            return;
+        } else {
+            err = grModule->framebufferOpenEx(module, name, fb_idx, &fbDev);
+            if (err) {
+                ALOGE_IF(err, "couldn't open framebuffer HAL EX (%s) client=%s",
+                         strerror(-err), name);
+                return;
+            }
+        }
+
         err = gralloc_open(module, &grDev);
         ALOGE_IF(err, "couldn't open gralloc HAL (%s)", strerror(-err));
 
@@ -356,16 +373,52 @@ int FramebufferNativeWindow::perform(ANativeWindow* /*window*/,
     return NAME_NOT_FOUND;
 }
 
+int FramebufferNativeWindow::getDisplayFbIdx(int id)
+{
+    const char *name = NULL;
+    int fbIdx = 0;
+    int err = 0;
+    hw_module_t const* module = NULL;
+
+    if (hw_get_module(GRALLOC_HARDWARE_MODULE_ID, &module) == 0) {
+        gralloc_module_t const* grModule =
+        reinterpret_cast<gralloc_module_t const*>(module);
+        switch (id) {
+        case ISurfaceComposer::eDisplayIdMain:
+            name = GRALLOC_HARDWARE_FB_PRIMARY;
+            break;
+        case ISurfaceComposer::eDisplayIdSecondary:
+            name = GRALLOC_HARDWARE_FB_SECONDARY;
+            break;
+        case ISurfaceComposer::eDisplayIdTertiary:
+            name = GRALLOC_HARDWARE_FB_TERTIARY;
+            break;
+        default:
+            ALOGE("%s unsupported display id=%d", __FUNCTION__, id);
+        }
+        if (grModule->getDisplayFbIdx) {
+            err = grModule->getDisplayFbIdx(name, &fbIdx);
+            if (err) {
+                ALOGE("%s getDisplayFbIdx returns error=%d", __FUNCTION__, err);
+            }
+        } else {
+            ALOGE("%s getDisplayFbIdx is not supported by gralloc",
+                __FUNCTION__);
+        }
+    }
+    return fbIdx;
+}
+
 // ----------------------------------------------------------------------------
 }; // namespace android
 // ----------------------------------------------------------------------------
 
 using namespace android;
 
-EGLNativeWindowType android_createDisplaySurface(void)
+EGLNativeWindowType android_createDisplaySurface(const char *name, int fb_idx)
 {
     FramebufferNativeWindow* w;
-    w = new FramebufferNativeWindow();
+    w = new FramebufferNativeWindow(name, fb_idx);
     if (w->getDevice() == NULL) {
         // get a ref so it can be destroyed when we exit this block
         sp<FramebufferNativeWindow> ref(w);
@@ -381,3 +434,9 @@ void android_destroyDisplaySurface(EGLNativeWindowType window)
         delete w;
     }
 }
+
+int android_getDisplayFbIdx(int id)
+{
+    return FramebufferNativeWindow::getDisplayFbIdx(id);
+}
+

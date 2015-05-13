@@ -33,8 +33,10 @@
 #define MIN_NUM_FRAME_BUFFERS  2
 #define MAX_NUM_FRAME_BUFFERS  3
 
-extern "C" EGLNativeWindowType android_createDisplaySurface(void);
+extern "C" EGLNativeWindowType android_createDisplaySurface(const char *name,
+        int fb_idx);
 extern "C" void android_destroyDisplaySurface(EGLNativeWindowType window);
+extern "C" int android_getDisplayFbIdx(int id);
 
 // ---------------------------------------------------------------------------
 namespace android {
@@ -52,7 +54,7 @@ class FramebufferNativeWindow
         LightRefBase<FramebufferNativeWindow> >
 {
 public:
-    FramebufferNativeWindow();
+    FramebufferNativeWindow(const char *name, int fb_idx);
     ~FramebufferNativeWindow();
 
     framebuffer_device_t const * getDevice() const { return fbDev; }
@@ -65,6 +67,8 @@ public:
 
     // for debugging only
     int getCurrentBufferIndex() const;
+
+    static int getDisplayFbIdx(int id);
 
 private:
     friend class LightRefBase<FramebufferNativeWindow>;    
