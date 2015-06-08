@@ -18,13 +18,45 @@
 #include <sys/prctl.h>
 #include <selinux/android.h>
 #include <selinux/avc.h>
-
+#include <pthread.h>
 #include "installd.h"
 
 
 #define BUFFER_MAX    1024  /* input buffer for commands */
 #define TOKEN_MAX     8     /* max number of arguments in buffer */
 #define REPLY_MAX     256   /* largest reply allowed */
+#define DEX_OPT_DELAY 90
+#define FRAMEWORK_PATH "/system/framework"
+
+typedef struct dexoptarg{
+    struct dexoptarg* next;
+    char* apk_path;
+    char* pkgname;
+    char* instruction_set;
+    uid_t uid;
+    bool is_public;
+    bool vm_safe_mode;
+}dex_opt_arg_t;
+
+static bool boot_completed = false;
+static dex_opt_arg_t* p_header = NULL;
+static dex_opt_arg_t* p_tail = NULL;
+
+static void * do_dexopt_func(void* arg)
+{
+    sleep(DEX_OPT_DELAY);
+    dex_opt_arg_t* p_temp = p_header;
+    while(p_temp != NULL){
+        dexopt(p_temp->apk_path, p_temp->uid, p_temp->is_public, p_temp->pkgname, p_temp->instruction_set, p_temp->vm_safe_mode, 0);
+        free(p_temp->apk_path);
+        free(p_temp->pkgname);
+        free(p_temp->instruction_set);
+        dex_opt_arg_t* prev = p_temp;
+        p_temp = p_temp->next;
+        free(prev);
+    }
+    return 0;
+}
 
 static int do_ping(char **arg, char reply[REPLY_MAX])
 {
@@ -38,12 +70,40 @@ static int do_install(char **arg, char reply[REPLY_MAX])
 
 static int do_dexopt(char **arg, char reply[REPLY_MAX])
 {
+    if(!boot_completed){
+        if(arg[0]==NULL || strstr(arg[0],FRAMEWORK_PATH)==NULL) {
+            dex_opt_arg_t* p = (dex_opt_arg_t*)malloc(sizeof(dex_opt_arg_t));
+            if (p != NULL) {
+                p->apk_path = (NULL==arg[0])?NULL:strdup(arg[0]);
+                p->pkgname =(NULL==arg[3])?NULL:strdup(arg[3]);
+                p->instruction_set = (NULL==arg[4])?NULL:strdup(arg[4]);
+                p->uid = (NULL==arg[1])?0:atoi(arg[1]);
+                p->is_public = (NULL==arg[2])?0:atoi(arg[2]);
+                p->vm_safe_mode = (NULL==arg[5])?0:atoi(arg[5]);
+                p->next = NULL;
+                if(p_header==NULL){
+                    p_header=p_tail=p;
+                }else {
+                    if(p_tail!=NULL)p_tail->next = p;
+                    p_tail = p;
+                }
+                return 0;
+            }
+        }
+    }
     /* apk_path, uid, is_public, pkgname, instruction_set, vm_safe_mode, should_relocate */
     return dexopt(arg[0], atoi(arg[1]), atoi(arg[2]), arg[3], arg[4], atoi(arg[5]), 0);
 }
 
 static int do_mark_boot_complete(char **arg, char reply[REPLY_MAX])
 {
+    if(!boot_completed){
+        boot_completed = true;
+        if(p_header!=NULL){
+            pthread_t t;
+            pthread_create( &t, NULL, do_dexopt_func, (void *)1 );
+        }
+    }
     return mark_boot_complete(arg[0] /* instruction set */);
 }
 
