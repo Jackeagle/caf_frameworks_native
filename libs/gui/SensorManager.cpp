@@ -74,6 +74,10 @@ status_t SensorManager::assertStateLocked() const {
             }
             break;
         }
+        if (mSensorServer == NULL) {
+            ALOGE("%s, mSensorServer still is NULL,exit\n", __func__);
+            return NAME_NOT_FOUND;
+        }
 
         class DeathObserver : public IBinder::DeathRecipient {
             SensorManager& mSensorManger;
