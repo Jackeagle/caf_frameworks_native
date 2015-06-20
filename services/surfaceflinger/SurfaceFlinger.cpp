@@ -319,8 +319,12 @@ void SurfaceFlinger::bootFinished()
     // stop boot animation
     // formerly we would just kill the process, but we now ask it to exit so it
     // can choose where to stop the animation.
-    property_set("service.bootanim.exit", "1");
-    placeMarker("BootAnim - End");
+    char propValue[PROPERTY_VALUE_MAX] = {0};
+    property_get("AUTOPLATFORM_BOOT", propValue, "false");
+    if (!(strcmp(propValue, "true") == 0)) {
+        property_set("service.bootanim.exit", "1");
+        placeMarker("BootAnim - End");
+    }
 }
 
 void SurfaceFlinger::deleteTextureAsync(uint32_t texture) {
@@ -513,8 +517,11 @@ void SurfaceFlinger::init() {
     initializeDisplays();
 
     // start boot animation
-    startBootAnim();
-
+    char propValue[PROPERTY_VALUE_MAX] = {0};
+    property_get("AUTOPLATFORM_BOOT", propValue, "false");
+    if (!(strcmp(propValue, "true") == 0)) {
+        startBootAnim();
+    }
     placeMarker("SF_Init - End");
 }
 
