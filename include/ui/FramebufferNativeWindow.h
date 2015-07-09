@@ -33,10 +33,7 @@
 #define MIN_NUM_FRAME_BUFFERS  2
 #define MAX_NUM_FRAME_BUFFERS  3
 
-extern "C" EGLNativeWindowType android_createDisplaySurface(const char *name,
-        int fb_idx);
-extern "C" void android_destroyDisplaySurface(EGLNativeWindowType window);
-extern "C" int android_getDisplayFbIdx(int id);
+extern "C" EGLNativeWindowType android_createDisplaySurface(void);
 
 // ---------------------------------------------------------------------------
 namespace android {
@@ -54,8 +51,9 @@ class FramebufferNativeWindow
         LightRefBase<FramebufferNativeWindow> >
 {
 public:
-    FramebufferNativeWindow(const char *name, int fb_idx);
-    ~FramebufferNativeWindow();
+    FramebufferNativeWindow();
+    void initialize();
+    virtual bool framebufferInit(hw_module_t const* module);
 
     framebuffer_device_t const * getDevice() const { return fbDev; }
 
@@ -68,10 +66,9 @@ public:
     // for debugging only
     int getCurrentBufferIndex() const;
 
-    static int getDisplayFbIdx(int id);
-
-private:
+protected:
     friend class LightRefBase<FramebufferNativeWindow>;    
+    ~FramebufferNativeWindow(); // this class cannot be overloaded
     static int setSwapInterval(ANativeWindow* window, int interval);
     static int dequeueBuffer(ANativeWindow* window, ANativeWindowBuffer** buffer, int* fenceFd);
     static int queueBuffer(ANativeWindow* window, ANativeWindowBuffer* buffer, int fenceFd);
@@ -96,7 +93,7 @@ private:
     int32_t mCurrentBufferIndex;
     bool mUpdateOnDemand;
 };
-    
+
 // ---------------------------------------------------------------------------
 }; // namespace android
 // ---------------------------------------------------------------------------
