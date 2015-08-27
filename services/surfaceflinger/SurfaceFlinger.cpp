@@ -27,6 +27,7 @@
 #include <EGL/egl.h>
 
 #include <cutils/log.h>
+#include <cutils/klog.h>
 #include <cutils/properties.h>
 
 #include <binder/IPCThreadState.h>
@@ -437,6 +438,8 @@ void SurfaceFlinger::init() {
     ALOGI(  "SurfaceFlinger's main thread ready to run. "
             "Initializing graphics H/W...");
 
+    printMarker("SF_Init - Start");
+
     Mutex::Autolock _l(mStateLock);
 
     // initialize EGL for the default display
@@ -526,6 +529,7 @@ void SurfaceFlinger::init() {
 
     // start boot animation
     startBootAnim();
+    printMarker("SF_Init - End");
 }
 
 int32_t SurfaceFlinger::allocateHwcDisplayId(DisplayDevice::DisplayType type) {
