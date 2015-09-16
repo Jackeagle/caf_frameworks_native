@@ -118,6 +118,7 @@ void GraphicBuffer::free_handle()
         GraphicBufferAllocator& allocator(GraphicBufferAllocator::get());
         allocator.free(handle);
     }
+    handle = NULL;
     mWrappedBuffer = 0;
 }
 
