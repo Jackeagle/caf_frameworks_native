@@ -42,6 +42,8 @@ enum {
     BATTERY_HEALTH_OVER_VOLTAGE = 5, // equals BatteryManager.BATTERY_HEALTH_OVER_VOLTAGE constant
     BATTERY_HEALTH_UNSPECIFIED_FAILURE = 6, // equals BatteryManager.BATTERY_HEALTH_UNSPECIFIED_FAILURE constant
     BATTERY_HEALTH_COLD = 7, // equals BatteryManager.BATTERY_HEALTH_COLD constant
+    BATTERY_HEALTH_WARM = 8, // equals BatteryManager.BATTERY_HEALTH_WARM constant
+    BATTERY_HEALTH_COOL = 9, // equals BatteryManager.BATTERY_HEALTH_COOL constant
 };
 
 // must be kept in sync with definitions in BatteryProperty.java
