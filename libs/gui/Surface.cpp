@@ -38,6 +38,9 @@
 
 #ifdef QCOM_BSP
 #include <gralloc_priv.h>
+
+#define MAX(a, b) (((a) > (b)) ? (a) : (b))
+#define MIN(a, b) (((a) < (b)) ? (a) : (b))
 #endif
 
 namespace android {
@@ -178,12 +181,6 @@ int Surface::hook_perform(ANativeWindow* window, int operation, ...) {
     va_start(args, operation);
     Surface* c = getSelf(window);
     return c->perform(operation, args);
-}
-
-status_t Surface::setDirtyRect(const Rect* dirtyRect) {
-    Mutex::Autolock lock(mMutex);
-    mDirtyRect = *dirtyRect;
-    return NO_ERROR;
 }
 
 int Surface::setSwapInterval(int interval) {
@@ -479,6 +476,9 @@ int Surface::perform(int operation, va_list args)
     case NATIVE_WINDOW_SET_SIDEBAND_STREAM:
         res = dispatchSetSidebandStream(args);
         break;
+     case NATIVE_WINDOW_SET_DIRTY_RECT:
+        res = dispatchSetDirtyRect(args);
+        break;
     default:
         res = NAME_NOT_FOUND;
         break;
@@ -573,6 +573,18 @@ int Surface::dispatchSetSidebandStream(va_list args) {
     native_handle_t* sH = va_arg(args, native_handle_t*);
     sp<NativeHandle> sidebandHandle = NativeHandle::create(sH, false);
     setSidebandStream(sidebandHandle);
+    return OK;
+}
+
+int Surface::dispatchSetDirtyRect(va_list args) {
+#ifdef QCOM_BSP
+    Rect dirtyRect;
+    dirtyRect.left   = va_arg(args, int);
+    dirtyRect.top    = va_arg(args, int);
+    dirtyRect.right  = va_arg(args, int);
+    dirtyRect.bottom = va_arg(args, int);
+    setDirtyRect(dirtyRect);
+#endif
     return OK;
 }
 
@@ -759,6 +771,24 @@ int Surface::setBuffersTimestamp(int64_t timestamp)
     ALOGV("Surface::setBuffersTimestamp");
     Mutex::Autolock lock(mMutex);
     mTimestamp = timestamp;
+    return NO_ERROR;
+}
+
+int Surface::setDirtyRect(const Rect& dirtyRect) {
+#ifdef QCOM_BSP
+    ALOGV("Surface::setDirtyRect");
+    Mutex::Autolock lock(mMutex);
+
+    if(mDirtyRect.isEmpty()) {
+        mDirtyRect = dirtyRect;
+    } else {
+        // Aggregate the dirty rectangle set by the client for each view
+        mDirtyRect.left = MIN(mDirtyRect.left, dirtyRect.left);
+        mDirtyRect.top = MIN(mDirtyRect.top, dirtyRect.top);
+        mDirtyRect.right = MAX(mDirtyRect.right, dirtyRect.right);
+        mDirtyRect.bottom = MAX(mDirtyRect.bottom, dirtyRect.bottom);
+    }
+#endif
     return NO_ERROR;
 }
 

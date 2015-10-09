@@ -101,10 +101,6 @@ public:
      */
     void allocateBuffers();
 
-    /* sets dirty rectangle of the buffer that gets queued next for the
-     * Surface */
-    status_t setDirtyRect(const Rect* dirtyRect);
-
 protected:
     virtual ~Surface();
 
@@ -150,6 +146,7 @@ private:
     int dispatchLock(va_list args);
     int dispatchUnlockAndPost(va_list args);
     int dispatchSetSidebandStream(va_list args);
+    int dispatchSetDirtyRect(va_list args);
 
 protected:
     virtual int dequeueBuffer(ANativeWindowBuffer** buffer, int* fenceFd);
@@ -173,6 +170,7 @@ protected:
     virtual int setBuffersTimestamp(int64_t timestamp);
     virtual int setCrop(Rect const* rect);
     virtual int setUsage(uint32_t reqUsage);
+    virtual int setDirtyRect(const Rect& dirtyRect);
 
 public:
     virtual int lock(ANativeWindow_Buffer* outBuffer, ARect* inOutDirtyBounds);
