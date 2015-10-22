@@ -76,12 +76,17 @@ private:
 FramebufferNativeWindow::FramebufferNativeWindow()
     : BASE(), fbDev(0), grDev(0), mUpdateOnDemand(false)
 {
+}
+
+void FramebufferNativeWindow::initialize()
+{
     hw_module_t const* module;
     if (hw_get_module(GRALLOC_HARDWARE_MODULE_ID, &module) == 0) {
         int err;
         int i;
-        err = framebuffer_open(module, &fbDev);
-        ALOGE_IF(err, "couldn't open framebuffer HAL (%s)", strerror(-err));
+
+        if (!framebufferInit(module))
+            return;
 
         err = gralloc_open(module, &grDev);
         ALOGE_IF(err, "couldn't open gralloc HAL (%s)", strerror(-err));
@@ -159,6 +164,13 @@ FramebufferNativeWindow::FramebufferNativeWindow()
     ANativeWindow::dequeueBuffer_DEPRECATED = dequeueBuffer_DEPRECATED;
     ANativeWindow::lockBuffer_DEPRECATED = lockBuffer_DEPRECATED;
     ANativeWindow::queueBuffer_DEPRECATED = queueBuffer_DEPRECATED;
+}
+
+bool FramebufferNativeWindow::framebufferInit(hw_module_t const* module)
+{
+    int err = framebuffer_open(module, &fbDev);
+    ALOGE_IF(err, "couldn't open framebuffer HAL (%s)", strerror(-err));
+    return !err;
 }
 
 FramebufferNativeWindow::~FramebufferNativeWindow()
@@ -363,6 +375,7 @@ EGLNativeWindowType android_createDisplaySurface(void)
 {
     FramebufferNativeWindow* w;
     w = new FramebufferNativeWindow();
+    w->initialize();
     if (w->getDevice() == NULL) {
         // get a ref so it can be destroyed when we exit this block
         sp<FramebufferNativeWindow> ref(w);
