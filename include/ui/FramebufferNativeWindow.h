@@ -54,7 +54,8 @@ class FramebufferNativeWindow
 {
 public:
     FramebufferNativeWindow(); 
-
+    void initialize();
+    virtual bool framebufferInit(hw_module_t const* module);
     framebuffer_device_t const * getDevice() const { return fbDev; } 
 
     bool isUpdateOnDemand() const { return mUpdateOnDemand; }
@@ -66,9 +67,9 @@ public:
     // for debugging only
     int getCurrentBufferIndex() const;
 
-private:
+protected:
     friend class LightRefBase<FramebufferNativeWindow>;    
-    ~FramebufferNativeWindow(); // this class cannot be overloaded
+    virtual ~FramebufferNativeWindow(); // this class cannot be overloaded
     static int setSwapInterval(ANativeWindow* window, int interval);
     static int dequeueBuffer(ANativeWindow* window, ANativeWindowBuffer** buffer, int* fenceFd);
     static int queueBuffer(ANativeWindow* window, ANativeWindowBuffer* buffer, int fenceFd);
