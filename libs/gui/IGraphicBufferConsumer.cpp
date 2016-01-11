@@ -381,7 +381,24 @@ status_t BnGraphicBufferConsumer::onTransact(
             if (err) return err;
             reply->writeInt32(result);
             return NO_ERROR;
-        } break;
+        }
+        case DETACH_BUFFER: {
+            CHECK_INTERFACE(IGraphicBufferConsumer, data, reply);
+            int slot = data.readInt32();
+            int result = detachBuffer(slot);
+            reply->writeInt32(result);
+            return NO_ERROR;
+        }
+        case ATTACH_BUFFER: {
+            CHECK_INTERFACE(IGraphicBufferConsumer, data, reply);
+            sp<GraphicBuffer> buffer = new GraphicBuffer();
+            data.read(*buffer.get());
+            int slot = -1;
+            int result = attachBuffer(&slot, buffer);
+            reply->writeInt32(slot);
+            reply->writeInt32(result);
+            return NO_ERROR;
+        }
         case RELEASE_BUFFER: {
             CHECK_INTERFACE(IGraphicBufferConsumer, data, reply);
             int buf = data.readInt32();
