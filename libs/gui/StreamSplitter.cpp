@@ -56,7 +56,8 @@ status_t StreamSplitter::createSplitter(
 
 StreamSplitter::StreamSplitter(const sp<IGraphicBufferConsumer>& inputQueue)
       : mIsAbandoned(false), mMutex(), mReleaseCondition(),
-        mOutstandingBuffers(0), mInput(inputQueue), mOutputs(), mBuffers() {}
+        mOutstandingBuffers(0), mInput(inputQueue), mOutputs(), mBuffers(),
+        mNotifiers() {}
 
 StreamSplitter::~StreamSplitter() {
     mInput->consumerDisconnect();
@@ -90,6 +91,7 @@ status_t StreamSplitter::addOutput(
     }
 
     mOutputs.push_back(outputQueue);
+    mNotifiers.add(outputQueue, listener);
 
     return NO_ERROR;
 }
@@ -101,7 +103,7 @@ void StreamSplitter::setName(const String8 &name) {
 
 void StreamSplitter::onFrameAvailable(const BufferItem& /* item */) {
     ATRACE_CALL();
-    Mutex::Autolock lock(mMutex);
+    mMutex.lock();
 
     // The current policy is that if any one consumer is consuming buffers too
     // slowly, the splitter will stall the rest of the outputs by not acquiring
@@ -118,6 +120,7 @@ void StreamSplitter::onFrameAvailable(const BufferItem& /* item */) {
         // without attempting to do anything more (since the input queue will
         // also be abandoned).
         if (mIsAbandoned) {
+            mMutex.unlock();
             return;
         }
     }
@@ -164,9 +167,10 @@ void StreamSplitter::onFrameAvailable(const BufferItem& /* item */) {
             LOG_ALWAYS_FATAL_IF(status != NO_ERROR,
                     "attaching buffer to output failed (%d)", status);
         }
-
+        mMutex.unlock();
         IGraphicBufferProducer::QueueBufferOutput queueOutput;
         status = (*output)->queueBuffer(slot, queueInput, &queueOutput);
+        mMutex.lock();
         if (status == NO_INIT) {
             // If we just discovered that this output has been abandoned, note
             // that, increment the release count so that we still release this
@@ -183,6 +187,8 @@ void StreamSplitter::onFrameAvailable(const BufferItem& /* item */) {
         ALOGV("queued buffer %#" PRIx64 " to output %p",
                 bufferItem.mGraphicBuffer->getId(), output->get());
     }
+
+    mMutex.unlock();
 }
 
 void StreamSplitter::onBufferReleasedByOutput(
@@ -197,6 +203,9 @@ void StreamSplitter::onBufferReleasedByOutput(
         // If we just discovered that this output has been abandoned, note that,
         // but we can't do anything else, since buffer is invalid
         onAbandonedLocked();
+        return;
+    } else if (status == NO_MEMORY) {
+        ALOGI("No free buffers");
         return;
     } else {
         LOG_ALWAYS_FATAL_IF(status != NO_ERROR,
@@ -247,6 +256,28 @@ void StreamSplitter::onBufferReleasedByOutput(
     // Notify any waiting onFrameAvailable calls
     --mOutstandingBuffers;
     mReleaseCondition.signal();
+}
+
+status_t StreamSplitter::disconnect()
+{
+    ATRACE_CALL();
+    Mutex::Autolock lock(mMutex);
+
+    for (size_t i = 0 ; i < mNotifiers.size(); i++) {
+        sp<IGraphicBufferProducer> producer = mNotifiers.keyAt(i);
+        sp<OutputListener> listener = mNotifiers.valueAt(i);
+        IInterface::asBinder(producer)->unlinkToDeath(listener);
+    }
+    mNotifiers.clear();
+
+    mInput->consumerDisconnect();
+    Vector<sp<IGraphicBufferProducer> >::iterator output = mOutputs.begin();
+    for (; output != mOutputs.end(); ++output) {
+        (*output)->disconnect(NATIVE_WINDOW_API_CPU);
+    }
+    mOutputs.clear();
+
+    return NO_ERROR;
 }
 
 void StreamSplitter::onAbandonedLocked() {
