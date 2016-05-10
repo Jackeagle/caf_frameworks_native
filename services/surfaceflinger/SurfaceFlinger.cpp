@@ -306,7 +306,6 @@ void SurfaceFlinger::bootFinished()
     // formerly we would just kill the process, but we now ask it to exit so it
     // can choose where to stop the animation.
     property_set("service.bootanim.exit", "1");
-    property_set("ctl.stop", "nativehmi");
     printMarker("BootAnim - End");
 }
 
