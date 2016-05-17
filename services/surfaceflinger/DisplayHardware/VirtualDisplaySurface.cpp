@@ -292,6 +292,12 @@ status_t VirtualDisplaySurface::dequeueBuffer(Source source,
     // Don't let a slow consumer block us
     bool async = (source == SOURCE_SINK);
 
+    // Excluding video encoder usage flag from scratch buffer usage flags
+    if (source == SOURCE_SCRATCH) {
+        usage &= ~(GRALLOC_USAGE_HW_VIDEO_ENCODER);
+        VDS_LOGV("dequeueBuffer(%s): updated scratch buffer usage flags=%#x", dbgSourceStr(source), usage);
+    }
+
     status_t result = mSource[source]->dequeueBuffer(sslot, fence, async,
             mSinkBufferWidth, mSinkBufferHeight, format, usage);
     if (result < 0)
