@@ -235,7 +235,7 @@ void ExSurfaceFlinger::setOrientationEventControl(bool& freezeSurfacePresent,
     HWComposer& hwc(getHwComposer());
     HWComposer::LayerListIterator cur = hwc.begin(id);
 
-    if(freezeSurfacePresent) {
+    if((cur != hwc.end(id)) && freezeSurfacePresent) {
         /* If freezeSurfacePresent, set ANIMATING flag
          * which is used to support disable animation on external
          */
