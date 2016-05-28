@@ -36,6 +36,8 @@
 #include <stdio.h>
 #include <sys/ioctl.h>
 #include <sys/resource.h>
+#include <sys/syscall.h>
+#include <sys/types.h>
 #include <unistd.h>
 
 #if LOG_NDEBUG
@@ -57,6 +59,14 @@
 #define LOG_ONEWAY(...) ALOG(LOG_DEBUG, "ipc", __VA_ARGS__)
 
 #endif
+
+#ifndef __ANDROID__
+pid_t gettid() {
+#if defined(__linux__)
+  return syscall(__NR_gettid);
+#endif
+}
+#endif  // __ANDROID__
 
 // ---------------------------------------------------------------------------
 

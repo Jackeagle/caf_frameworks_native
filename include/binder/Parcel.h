@@ -23,7 +23,15 @@
 #include <utils/String16.h>
 #include <utils/Vector.h>
 #include <utils/Flattenable.h>
-#include <linux/binder.h>
+#include <linux/android/binder.h>
+
+#ifdef __LP64__
+# define ULONG_MAX    0xffffffffffffffffUL
+#else
+# define ULONG_MAX    0xffffffffUL
+#endif
+
+#define SIZE_T_MAX ULONG_MAX
 
 // ---------------------------------------------------------------------------
 namespace android {

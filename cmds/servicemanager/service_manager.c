@@ -1,6 +1,7 @@
 /* Copyright 2008 The Android Open Source Project
  */
 
+#include <stdbool.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <inttypes.h>
@@ -60,7 +61,7 @@ static bool check_mac_perms(pid_t spid, const char *tctx, const char *perm, cons
 {
     char *sctx = NULL;
     const char *class = "service_manager";
-    bool allowed;
+    bool allowed = true;
 
     if (getpidcon(spid, &sctx) < 0) {
         ALOGE("SELinux: getpidcon(pid=%d) failed to retrieve pid context.\n", spid);
@@ -360,10 +361,10 @@ int main(int argc, char **argv)
     }
 
     selinux_enabled = is_selinux_enabled();
-    sehandle = selinux_android_service_context_handle();
-    selinux_status_open(true);
 
     if (selinux_enabled > 0) {
+        sehandle = selinux_android_service_context_handle();
+        selinux_status_open(true);
         if (sehandle == NULL) {
             ALOGE("SELinux: Failed to acquire sehandle. Aborting.\n");
             abort();

@@ -17,7 +17,7 @@
 #ifndef ANDROID_BINDER_H
 #define ANDROID_BINDER_H
 
-#include <stdatomic.h>
+#include <cutils/stdatomic.h>
 #include <stdint.h>
 #include <binder/IBinder.h>
 

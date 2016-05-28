@@ -26,6 +26,7 @@
 typedef  int  uid_t;
 #endif
 
+extern pid_t  gettid(void);
 // ---------------------------------------------------------------------------
 namespace android {
 

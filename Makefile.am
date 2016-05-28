@@ -1,0 +1,7 @@
+BUILD_COMPONENTS :=
+
+BUILD_COMPONENTS += libs/binder
+BUILD_COMPONENTS += cmds/servicemanager
+BUILD_COMPONENTS += include
+
+SUBDIRS := $(BUILD_COMPONENTS)

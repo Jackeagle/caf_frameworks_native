@@ -16,7 +16,7 @@
 
 #include <binder/Binder.h>
 
-#include <stdatomic.h>
+#include <cutils/stdatomic.h>
 #include <utils/misc.h>
 #include <binder/BpBinder.h>
 #include <binder/IInterface.h>
