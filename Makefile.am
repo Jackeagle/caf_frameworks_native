@@ -1,6 +1,7 @@
 BUILD_COMPONENTS :=
 
 BUILD_COMPONENTS += libs/binder
+BUILD_COMPONENTS += libs/ui
 BUILD_COMPONENTS += cmds/servicemanager
 BUILD_COMPONENTS += include
 

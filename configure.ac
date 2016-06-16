@@ -62,6 +62,8 @@ AC_CONFIG_FILES([ \
         Makefile  \
         libs/binder/Makefile \
         libs/binder/libbinder.pc \
+        libs/ui/Makefile \
+        libs/ui/libui.pc \
         cmds/servicemanager/Makefile \
         include/Makefile
         ])
