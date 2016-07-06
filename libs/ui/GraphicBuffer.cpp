@@ -21,7 +21,11 @@
 #include <sys/types.h>
 
 #include <utils/Errors.h>
+#ifdef _ANDROID_
 #include <utils/Log.h>
+#else
+#include <log/log.h>
+#endif
 
 #include <ui/GraphicBuffer.h>
 #include <ui/GraphicBufferAllocator.h>
