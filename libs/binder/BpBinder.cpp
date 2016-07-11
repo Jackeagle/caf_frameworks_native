@@ -15,7 +15,7 @@
  */
 
 #define LOG_TAG "BpBinder"
-//#define LOG_NDEBUG 0
+#define LOG_NDEBUG 1
 
 #include <binder/BpBinder.h>
 
