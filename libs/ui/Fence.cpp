@@ -27,7 +27,11 @@
 
 #include <ui/Fence.h>
 #include <unistd.h>
+#ifdef _ANDROID_
 #include <utils/Log.h>
+#else
+#include <log/log.h>
+#endif
 #include <utils/Trace.h>
 
 namespace android {

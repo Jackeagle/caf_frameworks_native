@@ -18,7 +18,11 @@
 #define ANDROID_UI_RECT
 
 #include <utils/Flattenable.h>
+#ifdef _ANDROID_
 #include <utils/Log.h>
+#else
+#include <log/log.h>
+#endif
 #include <utils/TypeHelpers.h>
 #include <ui/Point.h>
 
