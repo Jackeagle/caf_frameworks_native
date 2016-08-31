@@ -4,5 +4,6 @@ BUILD_COMPONENTS += libs/binder
 BUILD_COMPONENTS += libs/ui
 BUILD_COMPONENTS += cmds/servicemanager
 BUILD_COMPONENTS += include
+BUILD_COMPONENTS += opengl
 
 SUBDIRS := $(BUILD_COMPONENTS)
