@@ -8,4 +8,4 @@ bin_PROGRAMS = glapp
 glapp_CC = @CC@
 pkgconfigdir = $(libdir)/pkgconfig
 glapp_SOURCES = gl2_basic.cpp
-glapp_LDADD = -lpthread -lcutils -lutils -lEGL_adreno -lGLESv2_adreno
+glapp_LDADD = -lpthread -lEGL_adreno -lGLESv2_adreno
