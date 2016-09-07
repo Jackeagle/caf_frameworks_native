@@ -65,6 +65,7 @@ AC_CONFIG_FILES([ \
         libs/ui/Makefile \
         libs/ui/libui.pc \
         cmds/servicemanager/Makefile \
-        include/Makefile
+        include/Makefile \
+        opengl/Makefile
         ])
 AC_OUTPUT
