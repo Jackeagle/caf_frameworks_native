@@ -13,7 +13,7 @@
 
 #include <private/android_filesystem_config.h>
 
-#include <selinux/android.h>
+//#include <selinux/android.h>
 #include <selinux/avc.h>
 
 #include "binder.h"
@@ -287,7 +287,7 @@ int svcmgr_handler(struct binder_state *bs,
     }
 
     if (sehandle && selinux_status_updated() > 0) {
-        struct selabel_handle *tmp_sehandle = selinux_android_service_context_handle();
+        struct selabel_handle *tmp_sehandle;// = selinux_android_service_context_handle();
         if (tmp_sehandle) {
             selabel_close(sehandle);
             sehandle = tmp_sehandle;
@@ -370,7 +370,7 @@ int main(int argc, char **argv)
     selinux_enabled = is_selinux_enabled();
 
     if (selinux_enabled > 0) {
-        sehandle = selinux_android_service_context_handle();
+//        sehandle = selinux_android_service_context_handle();
         selinux_status_open(true);
         if (sehandle == NULL) {
             ALOGE("SELinux: Failed to acquire sehandle. Aborting.\n");
@@ -386,7 +386,7 @@ int main(int argc, char **argv)
     union selinux_callback cb;
     cb.func_audit = audit_callback;
     selinux_set_callback(SELINUX_CB_AUDIT, cb);
-    cb.func_log = selinux_log_callback;
+    cb.func_log = 0;//selinux_log_callback;
     selinux_set_callback(SELINUX_CB_LOG, cb);
 
     binder_loop(bs, svcmgr_handler);
