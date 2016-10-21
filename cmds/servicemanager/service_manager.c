@@ -8,6 +8,8 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include <cutils/multiuser.h>
+
 #include <private/android_filesystem_config.h>
 
 #include "binder.h"
