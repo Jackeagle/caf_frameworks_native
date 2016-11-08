@@ -66,6 +66,8 @@ public:
     // setName sets the consumer name of the input queue
     void setName(const String8& name);
 
+    status_t disconnect();
+
 private:
     // From IConsumerListener
     //
@@ -177,6 +179,8 @@ private:
     // objects (which are mostly for counting how many outputs have released the
     // buffer, but also contain merged release fences).
     KeyedVector<uint64_t, sp<BufferTracker> > mBuffers;
+
+    KeyedVector<sp<IGraphicBufferProducer>, sp<OutputListener> > mNotifiers;
 };
 
 } // namespace android
