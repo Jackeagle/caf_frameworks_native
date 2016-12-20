@@ -27,6 +27,7 @@
 #include <utils/Timers.h>
 #include <utils/RefBase.h>
 #include <utils/String8.h>
+#include <stdint.h>
 
 /*
  * Additional private constants not defined in ndk/ui/input.h.
@@ -80,6 +81,11 @@ enum {
  * will occasionally emit 11.  There is not much harm making this constant bigger.)
  */
 #define MAX_POINTERS 16
+
+/*
+ * Maximum number of samples supported per motion event.
+ */
+#define MAX_SAMPLES 65535
 
 /*
  * Maximum pointer id value supported in a motion event.
