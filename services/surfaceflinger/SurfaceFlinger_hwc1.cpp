@@ -921,10 +921,12 @@ void SurfaceFlinger::disableHardwareVsync(bool makeUnavailable) {
 }
 
 void SurfaceFlinger::resyncWithRateLimit() {
+#ifndef DISABLE_RESYNC
     static constexpr nsecs_t kIgnoreDelay = ms2ns(500);
     if (systemTime() - mLastSwapTime > kIgnoreDelay) {
         resyncToHardwareVsync(false);
     }
+#endif
 }
 
 void SurfaceFlinger::onVSyncReceived(int type, nsecs_t timestamp) {
