@@ -202,6 +202,10 @@ LOCAL_MODULE := libsurfaceflinger_ddmconnection
 
 LOCAL_CFLAGS += -Wall -Werror -Wunused -Wunreachable-code
 
+ifeq ($(TARGET_SUPPORTS_WEARABLES),true)
+    LOCAL_CFLAGS += -DDISABLE_RESYNC
+endif
+
 include $(BUILD_SHARED_LIBRARY)
 endif # libnativehelper
 
