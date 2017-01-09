@@ -6488,6 +6488,7 @@ void MultiTouchInputMapper::syncTouch(nsecs_t when, RawState* outState) {
     size_t inCount = mMultiTouchMotionAccumulator.getSlotCount();
     size_t outCount = 0;
     BitSet32 newPointerIdBits;
+    bool trackIdStatus = false;
 
     for (size_t inIndex = 0; inIndex < inCount; inIndex++) {
         const MultiTouchMotionAccumulator::Slot* inSlot =
@@ -6532,33 +6533,39 @@ void MultiTouchInputMapper::syncTouch(nsecs_t when, RawState* outState) {
         outPointer.isHovering = isHovering;
 
         // Assign pointer id using tracking id if available.
-        mHavePointerIds = true;
-        int32_t trackingId = inSlot->getTrackingId();
-        int32_t id = -1;
-        if (trackingId >= 0) {
-            for (BitSet32 idBits(mPointerIdBits); !idBits.isEmpty(); ) {
-                uint32_t n = idBits.clearFirstMarkedBit();
-                if (mPointerTrackingIdMap[n] == trackingId) {
-                    id = n;
+        if (!trackIdStatus) {
+            mHavePointerIds = true;
+            int32_t trackingId = inSlot->getTrackingId();
+            int32_t id = -1;
+            if (trackingId >= 0) {
+                for (BitSet32 idBits(mPointerIdBits); !idBits.isEmpty(); ) {
+                    uint32_t n = idBits.clearFirstMarkedBit();
+                    if (mPointerTrackingIdMap[n] == trackingId) {
+                        id = n;
+                    }
+                }
+
+                if (id < 0 && !mPointerIdBits.isFull()) {
+                    id = mPointerIdBits.markFirstUnmarkedBit();
+                    mPointerTrackingIdMap[id] = trackingId;
                 }
             }
-
-            if (id < 0 && !mPointerIdBits.isFull()) {
-                id = mPointerIdBits.markFirstUnmarkedBit();
-                mPointerTrackingIdMap[id] = trackingId;
+            if (id < 0) {
+                mHavePointerIds = false;
+                outState->rawPointerData.clearIdBits();
+                newPointerIdBits.clear();
+                trackIdStatus = true;
+#if DEBUG_POINTERS
+                ALOGD("MultiTouch Device %s reported pointer that couldn't get pointer id."
+                        "Treating all pointer with no id assigned.", getDeviceName().string());
+#endif
+            } else {
+                outPointer.id = id;
+                outState->rawPointerData.idToIndex[id] = outCount;
+                outState->rawPointerData.markIdBit(id, isHovering);
+                newPointerIdBits.markBit(id);
             }
         }
-        if (id < 0) {
-            mHavePointerIds = false;
-            outState->rawPointerData.clearIdBits();
-            newPointerIdBits.clear();
-        } else {
-            outPointer.id = id;
-            outState->rawPointerData.idToIndex[id] = outCount;
-            outState->rawPointerData.markIdBit(id, isHovering);
-            newPointerIdBits.markBit(id);
-        }
-
         outCount += 1;
     }
 
