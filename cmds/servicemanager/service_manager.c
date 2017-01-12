@@ -287,7 +287,7 @@ int svcmgr_handler(struct binder_state *bs,
     }
 
     if (sehandle && selinux_status_updated() > 0) {
-        struct selabel_handle *tmp_sehandle;// = selinux_android_service_context_handle();
+        struct selabel_handle *tmp_sehandle = NULL;// = selinux_android_service_context_handle();
         if (tmp_sehandle) {
             selabel_close(sehandle);
             sehandle = tmp_sehandle;
@@ -367,7 +367,7 @@ int main(int argc, char **argv)
         return -1;
     }
 
-    selinux_enabled = is_selinux_enabled();
+//    selinux_enabled = is_selinux_enabled();
 
     if (selinux_enabled > 0) {
 //        sehandle = selinux_android_service_context_handle();
