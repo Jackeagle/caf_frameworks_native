@@ -579,6 +579,11 @@ int32_t SurfaceFlinger::allocateHwcDisplayId(DisplayDevice::DisplayType type) {
 }
 
 void SurfaceFlinger::startBootAnim() {
+    // Run time check for headless
+    if (property_get_bool("ro.config.headless", true)) {
+        return;
+    }
+
     // start boot animation
     property_set("service.bootanim.exit", "0");
     property_set("ctl.start", "bootanim");
