@@ -46,6 +46,8 @@
 #include <private/gui/ComposerService.h>
 #include <private/gui/LayerState.h>
 
+#include <cutils/properties.h>
+
 namespace android {
 // ---------------------------------------------------------------------------
 
@@ -58,6 +60,11 @@ ComposerService::ComposerService()
 }
 
 void ComposerService::connectLocked() {
+    // Run time check for headless
+    if (property_get_bool("ro.config.headless", false)) {
+        return;
+    }
+
     const String16 name("SurfaceFlinger");
     while (getService(name, &mComposerService) != NO_ERROR) {
         usleep(250000);
