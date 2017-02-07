@@ -687,11 +687,11 @@ void Layer::setGeometry(
                 to_string(error).c_str(), static_cast<int32_t>(error));
     }
 #else
-    if (0 == orientation) {
-        layer.setTransform(orientation);
-    } else {
+    if (orientation & Transform::ROT_INVALID) {
+        // we can only handle simple transformation
         layer.setSkip(true);
-        // Disables offline rotator
+    } else {
+        layer.setTransform(orientation);
     }
 #endif
 }
