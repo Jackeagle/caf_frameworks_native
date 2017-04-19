@@ -106,6 +106,7 @@ DisplayDevice::DisplayDevice(
     Surface* surface;
     mNativeWindow = surface = new Surface(producer, false);
     ANativeWindow* const window = mNativeWindow.get();
+    int defaultOrientation = 0;
     char property[PROPERTY_VALUE_MAX];
 
     /*
@@ -168,8 +169,28 @@ DisplayDevice::DisplayDevice(
     property_get("ro.panel.mountflip", property, "0");
     mPanelMountFlip = atoi(property);
 
+    property_get("ro.default.orientation", property, "0");
+    defaultOrientation = atoi(property);
+    switch(defaultOrientation) {
+        case 0:
+            defaultOrientation = DisplayState::eOrientationDefault;
+            break;
+        case 90:
+            defaultOrientation = DisplayState::eOrientation90;
+            break;
+        case 180:
+            defaultOrientation = DisplayState::eOrientation180;
+            break;
+        case 270:
+            defaultOrientation = DisplayState::eOrientation270;
+            break;
+        default:
+            defaultOrientation = DisplayState::eOrientationDefault;
+            break;
+    }
+
     // initialize the display orientation transform.
-    setProjection(DisplayState::eOrientationDefault, mViewport, mFrame);
+    setProjection(defaultOrientation, mViewport, mFrame);
 
 #ifdef NUM_FRAMEBUFFER_SURFACE_BUFFERS
     surface->allocateBuffers();
@@ -536,6 +557,7 @@ void DisplayDevice::setProjection(int orientation,
             // viewport is always specified in the logical orientation
             // of the display (ie: post-rotation).
             swap(viewport.right, viewport.bottom);
+            swap(frame.right, frame.bottom);
         }
     }
 
