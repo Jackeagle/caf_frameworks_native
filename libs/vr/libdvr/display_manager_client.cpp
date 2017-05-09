@@ -1,6 +1,8 @@
 #include "include/dvr/display_manager_client.h"
 
 #include <dvr/dvr_buffer.h>
+#include <grallocusage/GrallocUsageConversion.h>
+#include <private/android/AHardwareBufferHelpers.h>
 #include <private/dvr/buffer_hub_client.h>
 #include <private/dvr/display_manager_client_impl.h>
 
@@ -42,14 +44,28 @@ void dvrDisplayManagerClientDestroy(DvrDisplayManagerClient* client) {
   delete client;
 }
 
-DvrWriteBuffer* dvrDisplayManagerSetupPoseBuffer(
-    DvrDisplayManagerClient* client, size_t extended_region_size,
-    uint64_t usage0, uint64_t usage1) {
-  // TODO(hendrikw): When we move to gralloc1, pass both usage0 and usage1 down.
-  auto buffer_producer = client->client->SetupPoseBuffer(
-      extended_region_size, static_cast<int>(usage0));
-  if (buffer_producer) {
-    return CreateDvrWriteBufferFromBufferProducer(std::move(buffer_producer));
+DvrBuffer* dvrDisplayManagerSetupNamedBuffer(DvrDisplayManagerClient* client,
+                                             const char* name, size_t size,
+                                             uint64_t hardware_buffer_usage,
+                                             uint64_t unused) {
+  uint64_t producer_usage = 0;
+  uint64_t consumer_usage = 0;
+
+  // Note: AHardwareBuffer no longer uses usage0/usage1
+  uint64_t gralloc_usage =
+      android::AHardwareBuffer_convertToGrallocUsageBits(hardware_buffer_usage);
+
+  // Note: split producer/consumer usage is deprecated, grallocV2 uses single
+  // 64-bits usage
+  // And, currently, 64-bits gralloc usage flags can safely be truncated to
+  // 32-bits
+  android_convertGralloc0To1Usage((uint32_t)gralloc_usage, &producer_usage,
+                                  &consumer_usage);
+
+  auto ion_buffer = client->client->SetupNamedBuffer(name, size, producer_usage,
+                                                     consumer_usage);
+  if (ion_buffer) {
+    return CreateDvrBufferFromIonBuffer(std::move(ion_buffer));
   }
   return nullptr;
 }
@@ -109,8 +125,8 @@ bool dvrDisplayManagerClientSurfaceListGetClientIsVisible(
 }
 
 int dvrDisplayManagerClientGetSurfaceBuffers(
-    DvrDisplayManagerClient* client, int surface_id,
-    DvrDisplayManagerClientSurfaceBuffers** surface_buffers) {
+    DvrDisplayManagerClient* /* client */, int /* surface_id */,
+    DvrDisplayManagerClientSurfaceBuffers** /* surface_buffers */) {
   // TODO(jwcai, hendrikw) Remove this after we replacing
   // dvrDisplayManagerClientGetSurfaceBuffers is dvr_api.
   return -1;

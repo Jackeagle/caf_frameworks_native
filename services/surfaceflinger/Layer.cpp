@@ -167,7 +167,7 @@ void Layer::onFirstRef() {
     // Creates a custom BufferQueue for SurfaceFlingerConsumer to use
     sp<IGraphicBufferProducer> producer;
     sp<IGraphicBufferConsumer> consumer;
-    BufferQueue::createBufferQueue(&producer, &consumer, nullptr, true);
+    BufferQueue::createBufferQueue(&producer, &consumer, true);
     mProducer = new MonitoredProducer(producer, mFlinger, this);
     mSurfaceFlingerConsumer = new SurfaceFlingerConsumer(consumer, mTextureName, this);
     mSurfaceFlingerConsumer->setConsumerUsageBits(getEffectiveUsage(0));
@@ -287,6 +287,14 @@ void Layer::onSidebandStreamChanged() {
 // the layer has been remove from the current state list (and just before
 // it's removed from the drawing state list)
 void Layer::onRemoved() {
+    if (mCurrentState.zOrderRelativeOf != nullptr) {
+        sp<Layer> strongRelative = mCurrentState.zOrderRelativeOf.promote();
+        if (strongRelative != nullptr) {
+            strongRelative->removeZOrderRelative(this);
+        }
+        mCurrentState.zOrderRelativeOf = nullptr;
+    }
+
     mSurfaceFlingerConsumer->abandon();
     for (const auto& child : mCurrentChildren) {
         child->onRemoved();
@@ -1713,7 +1721,52 @@ bool Layer::setLayer(int32_t z) {
     mCurrentState.sequence++;
     mCurrentState.z = z;
     mCurrentState.modified = true;
+
+    // Discard all relative layering.
+    if (mCurrentState.zOrderRelativeOf != nullptr) {
+        sp<Layer> strongRelative = mCurrentState.zOrderRelativeOf.promote();
+        if (strongRelative != nullptr) {
+            strongRelative->removeZOrderRelative(this);
+        }
+        mCurrentState.zOrderRelativeOf = nullptr;
+    }
     setTransactionFlags(eTransactionNeeded);
+    return true;
+}
+
+void Layer::removeZOrderRelative(const wp<Layer>& relative) {
+    mCurrentState.zOrderRelatives.remove(relative);
+    mCurrentState.sequence++;
+    mCurrentState.modified = true;
+    setTransactionFlags(eTransactionNeeded);
+}
+
+void Layer::addZOrderRelative(const wp<Layer>& relative) {
+    mCurrentState.zOrderRelatives.add(relative);
+    mCurrentState.modified = true;
+    mCurrentState.sequence++;
+    setTransactionFlags(eTransactionNeeded);
+}
+
+bool Layer::setRelativeLayer(const sp<IBinder>& relativeToHandle, int32_t z) {
+    sp<Handle> handle = static_cast<Handle*>(relativeToHandle.get());
+    if (handle == nullptr) {
+        return false;
+    }
+    sp<Layer> relative = handle->owner.promote();
+    if (relative == nullptr) {
+        return false;
+    }
+
+    mCurrentState.sequence++;
+    mCurrentState.modified = true;
+    mCurrentState.z = z;
+
+    mCurrentState.zOrderRelativeOf = relative;
+    relative->addZOrderRelative(this);
+
+    setTransactionFlags(eTransactionNeeded);
+
     return true;
 }
 
@@ -2500,40 +2553,65 @@ int32_t Layer::getZ() const {
     return mDrawingState.z;
 }
 
+LayerVector Layer::makeTraversalList() {
+    if (mDrawingState.zOrderRelatives.size() == 0) {
+        return mDrawingChildren;
+    }
+    LayerVector traverse;
+
+    for (const wp<Layer>& weakRelative : mDrawingState.zOrderRelatives) {
+        sp<Layer> strongRelative = weakRelative.promote();
+        if (strongRelative != nullptr) {
+            traverse.add(strongRelative);
+        }
+    }
+
+    for (const sp<Layer>& child : mDrawingChildren) {
+        traverse.add(child);
+    }
+
+    return traverse;
+}
+
 /**
- * Negatively signed children are before 'this' in Z-order.
+ * Negatively signed relatives are before 'this' in Z-order.
  */
 void Layer::traverseInZOrder(const std::function<void(Layer*)>& exec) {
+    LayerVector list = makeTraversalList();
+
     size_t i = 0;
-    for (; i < mDrawingChildren.size(); i++) {
-        const auto& child = mDrawingChildren[i];
-        if (child->getZ() >= 0)
+    for (; i < list.size(); i++) {
+        const auto& relative = list[i];
+        if (relative->getZ() >= 0) {
             break;
-        child->traverseInZOrder(exec);
+        }
+        relative->traverseInZOrder(exec);
     }
     exec(this);
-    for (; i < mDrawingChildren.size(); i++) {
-        const auto& child = mDrawingChildren[i];
-        child->traverseInZOrder(exec);
+    for (; i < list.size(); i++) {
+        const auto& relative = list[i];
+        relative->traverseInZOrder(exec);
     }
 }
 
 /**
- * Positively signed children are before 'this' in reverse Z-order.
+ * Positively signed relatives are before 'this' in reverse Z-order.
  */
 void Layer::traverseInReverseZOrder(const std::function<void(Layer*)>& exec) {
+    LayerVector list = makeTraversalList();
+
     int32_t i = 0;
-    for (i = mDrawingChildren.size()-1; i>=0; i--) {
-        const auto& child = mDrawingChildren[i];
-        if (child->getZ() < 0) {
+    for (i = list.size()-1; i>=0; i--) {
+        const auto& relative = list[i];
+        if (relative->getZ() < 0) {
             break;
         }
-        child->traverseInReverseZOrder(exec);
+        relative->traverseInReverseZOrder(exec);
     }
     exec(this);
     for (; i>=0; i--) {
-        const auto& child = mDrawingChildren[i];
-        child->traverseInReverseZOrder(exec);
+        const auto& relative = list[i];
+        relative->traverseInReverseZOrder(exec);
     }
 }
 
@@ -2542,6 +2620,30 @@ Transform Layer::getTransform() const {
     const auto& p = getParent();
     if (p != nullptr) {
         t = p->getTransform();
+
+        // If the parent is not using NATIVE_WINDOW_SCALING_MODE_FREEZE (e.g.
+        // it isFixedSize) then there may be additional scaling not accounted
+        // for in the transform. We need to mirror this scaling in child surfaces
+        // or we will break the contract where WM can treat child surfaces as
+        // pixels in the parent surface.
+        if (p->isFixedSize()) {
+            int bufferWidth;
+            int bufferHeight;
+            if ((p->mCurrentTransform & NATIVE_WINDOW_TRANSFORM_ROT_90) == 0) {
+                bufferWidth = p->mActiveBuffer->getWidth();
+                bufferHeight = p->mActiveBuffer->getHeight();
+            } else {
+                bufferHeight = p->mActiveBuffer->getWidth();
+                bufferWidth = p->mActiveBuffer->getHeight();
+            }
+            float sx = p->getDrawingState().active.w /
+                    static_cast<float>(bufferWidth);
+            float sy = p->getDrawingState().active.h /
+                    static_cast<float>(bufferHeight);
+            Transform extraParentScaling;
+            extraParentScaling.set(sx, 0, 0, sy);
+            t = t * extraParentScaling;
+        }
     }
     return t * getDrawingState().active.transform;
 }

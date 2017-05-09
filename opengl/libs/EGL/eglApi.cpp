@@ -223,6 +223,10 @@ static const extention_map_t sExtensionMap[] = {
             (__eglMustCastToProperFunctionPointerType)&eglGetFrameTimestampsANDROID },
     { "eglGetFrameTimestampSupportedANDROID",
             (__eglMustCastToProperFunctionPointerType)&eglGetFrameTimestampSupportedANDROID },
+
+    // EGL_ANDROID_native_fence_sync
+    { "eglDupNativeFenceFDANDROID",
+            (__eglMustCastToProperFunctionPointerType)&eglDupNativeFenceFDANDROID },
 };
 
 /*
@@ -232,8 +236,7 @@ static const extention_map_t sExtensionMap[] = {
 #define FILTER_EXTENSIONS(procname) \
         (!strcmp((procname), "eglSetBlobCacheFuncsANDROID") ||    \
          !strcmp((procname), "eglHibernateProcessIMG")      ||    \
-         !strcmp((procname), "eglAwakenProcessIMG")         ||    \
-         !strcmp((procname), "eglDupNativeFenceFDANDROID"))
+         !strcmp((procname), "eglAwakenProcessIMG"))
 
 
 
@@ -2166,10 +2169,15 @@ EGLBoolean eglGetFrameTimestampSupportedANDROID(
         case EGL_FIRST_COMPOSITION_START_TIME_ANDROID:
         case EGL_LAST_COMPOSITION_START_TIME_ANDROID:
         case EGL_FIRST_COMPOSITION_GPU_FINISHED_TIME_ANDROID:
-        case EGL_DISPLAY_PRESENT_TIME_ANDROID:
         case EGL_DEQUEUE_READY_TIME_ANDROID:
         case EGL_READS_DONE_TIME_ANDROID:
             return EGL_TRUE;
+        case EGL_DISPLAY_PRESENT_TIME_ANDROID: {
+            int value = 0;
+            window->query(window,
+                    NATIVE_WINDOW_FRAME_TIMESTAMPS_SUPPORTS_PRESENT, &value);
+            return value == 0 ? EGL_FALSE : EGL_TRUE;
+        }
         default:
             return EGL_FALSE;
     }
