@@ -311,7 +311,7 @@ void SurfaceFlinger::createBuiltinDisplayLocked(DisplayDevice::DisplayType type)
 }
 
 sp<IBinder> SurfaceFlinger::getBuiltInDisplay(int32_t id) {
-    if (uint32_t(id) >= DisplayDevice::NUM_BUILTIN_DISPLAY_TYPES) {
+    if (uint32_t(id) > DisplayDevice::NUM_BUILTIN_DISPLAY_TYPES) {
         ALOGE("getDefaultDisplay: id=%d is not a valid default display id", id);
         return NULL;
     }
@@ -548,7 +548,7 @@ void SurfaceFlinger::init() {
     property_set(kTimestampProperty, "0");
 
     // initialize our non-virtual displays
-    for (size_t i=0 ; i<DisplayDevice::NUM_BUILTIN_DISPLAY_TYPES ; i++) {
+    for (size_t i=0 ; i<=DisplayDevice::NUM_BUILTIN_DISPLAY_TYPES ; i++) {
         DisplayDevice::DisplayType type((DisplayDevice::DisplayType)i);
         // set-up the displays that are already connected
         if (mHwc->isConnected(i) || type==DisplayDevice::DISPLAY_PRIMARY) {
@@ -608,7 +608,7 @@ void SurfaceFlinger::init() {
 }
 
 int32_t SurfaceFlinger::allocateHwcDisplayId(DisplayDevice::DisplayType type) {
-    return (uint32_t(type) < DisplayDevice::NUM_BUILTIN_DISPLAY_TYPES) ?
+    return (uint32_t(type) <= DisplayDevice::NUM_BUILTIN_DISPLAY_TYPES) ?
             type : mHwc->allocateDisplayId();
 }
 
@@ -785,7 +785,7 @@ void SurfaceFlinger::setActiveConfigInternal(const sp<DisplayDevice>& hw, int mo
         return;
     }
 
-    if (type >= DisplayDevice::NUM_BUILTIN_DISPLAY_TYPES) {
+    if (type == DisplayDevice::DISPLAY_VIRTUAL) {
         ALOGW("Trying to set config for virtual display");
         return;
     }
@@ -814,7 +814,7 @@ status_t SurfaceFlinger::setActiveConfig(const sp<IBinder>& display, int mode) {
             if (hw == NULL) {
                 ALOGE("Attempt to set active config = %d for null display %p",
                         mMode, mDisplay.get());
-            } else if (hw->getDisplayType() >= DisplayDevice::DISPLAY_VIRTUAL) {
+            } else if (hw->getDisplayType() == DisplayDevice::DISPLAY_VIRTUAL) {
                 ALOGW("Attempt to set active config = %d for virtual display",
                         mMode);
             } else {
@@ -1066,7 +1066,7 @@ void SurfaceFlinger::onHotplugReceived(HWComposer* /*composer*/, int type, bool 
         return;
     }
 
-    if (uint32_t(type) < DisplayDevice::NUM_BUILTIN_DISPLAY_TYPES) {
+    if (uint32_t(type) <= DisplayDevice::NUM_BUILTIN_DISPLAY_TYPES) {
         Mutex::Autolock _l(mStateLock);
         if (connected) {
             createBuiltinDisplayLocked((DisplayDevice::DisplayType)type);
@@ -1648,7 +1648,7 @@ void SurfaceFlinger::handleTransactionLocked(uint32_t transactionFlags)
                         sp<DisplayDevice> hw(getDisplayDeviceLocked(draw.keyAt(i)));
                         if (hw != NULL)
                             hw->disconnect(getHwComposer());
-                        if (draw[i].type < DisplayDevice::NUM_BUILTIN_DISPLAY_TYPES)
+                        if (draw[i].type <= DisplayDevice::NUM_BUILTIN_DISPLAY_TYPES)
                             mEventThread->onHotplugReceived(draw[i].type, false);
                         mDisplays.removeItem(draw.keyAt(i));
                     } else {
@@ -2852,7 +2852,7 @@ void SurfaceFlinger::setPowerModeInternal(const sp<DisplayDevice>& hw,
     }
 
     hw->setPowerMode(mode);
-    if (type >= DisplayDevice::NUM_BUILTIN_DISPLAY_TYPES) {
+    if (type == DisplayDevice::DISPLAY_VIRTUAL) {
         ALOGW("Trying to set power mode for virtual display");
         return;
     }
@@ -2921,7 +2921,7 @@ void SurfaceFlinger::setPowerMode(const sp<IBinder>& display, int mode) {
             if (hw == NULL) {
                 ALOGE("Attempt to set power mode = %d for null display %p",
                         mMode, mDisplay.get());
-            } else if (hw->getDisplayType() >= DisplayDevice::DISPLAY_VIRTUAL) {
+            } else if (hw->getDisplayType() == DisplayDevice::DISPLAY_VIRTUAL) {
                 ALOGW("Attempt to set power mode = %d for virtual display",
                         mMode);
             } else {

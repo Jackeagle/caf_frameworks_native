@@ -171,7 +171,7 @@ public:
 
     android::Hwc2::Composer* getComposer() const { return mHwcDevice->getComposer(); }
 private:
-    static const int32_t VIRTUAL_DISPLAY_ID_BASE = 2;
+    static const int32_t VIRTUAL_DISPLAY_ID_BASE = HWC_DISPLAY_VIRTUAL;
 
     void loadHwcModule(bool useVrComposer);
 

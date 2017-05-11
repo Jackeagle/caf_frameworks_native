@@ -71,7 +71,9 @@ public:
         DISPLAY_PRIMARY     = HWC_DISPLAY_PRIMARY,
         DISPLAY_EXTERNAL    = HWC_DISPLAY_EXTERNAL,
         DISPLAY_VIRTUAL     = HWC_DISPLAY_VIRTUAL,
+        DISPLAY_TERTIARY    = HWC_DISPLAY_TERTIARY,
         NUM_BUILTIN_DISPLAY_TYPES = HWC_NUM_PHYSICAL_DISPLAY_TYPES,
+        NUM_DISPLAY_TYPES   = HWC_NUM_DISPLAY_TYPES
     };
 
     enum {
@@ -288,7 +290,7 @@ struct DisplayDeviceState {
 
     bool isValid() const { return type >= 0; }
     bool isMainDisplay() const { return type == DisplayDevice::DISPLAY_PRIMARY; }
-    bool isVirtualDisplay() const { return type >= DisplayDevice::DISPLAY_VIRTUAL; }
+    bool isVirtualDisplay() const { return type == DisplayDevice::DISPLAY_VIRTUAL; }
 
     static std::atomic<int32_t> nextDisplayId;
     int32_t displayId = nextDisplayId++;
