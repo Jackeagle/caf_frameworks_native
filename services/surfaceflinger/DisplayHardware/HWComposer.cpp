@@ -61,7 +61,7 @@ namespace android {
 
 HWComposer::HWComposer(bool useVrComposer)
     : mHwcDevice(),
-      mDisplayData(2),
+      mDisplayData(4),
       mFreeDisplaySlots(),
       mHwcDisplaySlots(),
       mCBContext(),
@@ -156,7 +156,7 @@ void HWComposer::hotplug(const std::shared_ptr<HWC2::Display>& display,
         mDisplayData[0].hwcDisplay = display;
         mHwcDisplaySlots[display->getId()] = 0;
         disp = DisplayDevice::DISPLAY_PRIMARY;
-    } else {
+    } else if (!mDisplayData[1].hwcDisplay) {
         // Disconnect is handled through HWComposer::disconnectDisplay via
         // SurfaceFlinger's onHotplugReceived callback handling
         if (connected == HWC2::Connection::Connected) {
@@ -164,6 +164,13 @@ void HWComposer::hotplug(const std::shared_ptr<HWC2::Display>& display,
             mHwcDisplaySlots[display->getId()] = 1;
         }
         disp = DisplayDevice::DISPLAY_EXTERNAL;
+    } else {
+        if (connected == HWC2::Connection::Connected) {
+        //displayslot 2 is kept for virtual display
+            mDisplayData[3].hwcDisplay = display;
+            mHwcDisplaySlots[display->getId()] = 3;
+        }
+        disp = DisplayDevice::DISPLAY_TERTIARY;
     }
     mEventHandler->onHotplugReceived(this, disp,
             connected == HWC2::Connection::Connected);
@@ -380,7 +387,7 @@ status_t HWComposer::setActiveColorMode(int32_t displayId, android_color_mode_t 
 
 
 void HWComposer::setVsyncEnabled(int32_t displayId, HWC2::Vsync enabled) {
-    if (displayId < 0 || displayId >= HWC_DISPLAY_VIRTUAL) {
+    if (displayId < 0 || displayId == HWC_DISPLAY_VIRTUAL) {
         ALOGD("setVsyncEnabled: Ignoring for virtual display %d", displayId);
         return;
     }
@@ -672,7 +679,7 @@ status_t HWComposer::setPowerMode(int32_t displayId, int32_t intMode) {
         ALOGE("setPowerMode: Bad display");
         return BAD_INDEX;
     }
-    if (displayId >= VIRTUAL_DISPLAY_ID_BASE) {
+    if (displayId == HWC_DISPLAY_VIRTUAL) {
         ALOGE("setPowerMode: Virtual display %d passed in, returning",
                 displayId);
         return BAD_INDEX;

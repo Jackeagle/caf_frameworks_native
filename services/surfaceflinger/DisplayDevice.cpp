@@ -151,7 +151,7 @@ DisplayDevice::DisplayDevice(
     // * In makeCurrent(), using eglSwapInterval. Some EGL drivers set the
     //   window's swap interval in eglMakeCurrent, so they'll override the
     //   interval we set here.
-    if (mType >= DisplayDevice::DISPLAY_VIRTUAL)
+    if (mType == DisplayDevice::DISPLAY_VIRTUAL)
         window->setSwapInterval(window, 0);
 
     mConfig = config;
@@ -165,7 +165,7 @@ DisplayDevice::DisplayDevice(
     mFrame.makeInvalid();
 
     // virtual displays are always considered enabled
-    mPowerMode = (mType >= DisplayDevice::DISPLAY_VIRTUAL) ?
+    mPowerMode = (mType == DisplayDevice::DISPLAY_VIRTUAL) ?
                   HWC_POWER_MODE_NORMAL : HWC_POWER_MODE_OFF;
 
     // Name the display.  The name will be replaced shortly if the display
@@ -176,6 +176,9 @@ DisplayDevice::DisplayDevice(
             break;
         case DISPLAY_EXTERNAL:
             mDisplayName = "HDMI Screen";
+            break;
+        case DISPLAY_TERTIARY:
+            mDisplayName = "Tertiary Screen";
             break;
         default:
             mDisplayName = "Virtual Screen";    // e.g. Overlay #n
@@ -206,7 +209,7 @@ void DisplayDevice::disconnect(HWComposer& hwc) {
     if (mHwcDisplayId >= 0) {
         hwc.disconnectDisplay(mHwcDisplayId);
 #ifndef USE_HWC2
-        if (mHwcDisplayId >= DISPLAY_VIRTUAL)
+        if (mHwcDisplayId == DISPLAY_VIRTUAL)
             hwc.freeDisplayId(mHwcDisplayId);
 #endif
         mHwcDisplayId = -1;
@@ -329,7 +332,7 @@ void DisplayDevice::swapBuffers(HWComposer& hwc) const {
     //    (b) this is a virtual display
     if (hwc.initCheck() != NO_ERROR ||
             (hwc.hasGlesComposition(mHwcDisplayId) &&
-             (hwc.supportsFramebufferTarget() || mType >= DISPLAY_VIRTUAL))) {
+             (hwc.supportsFramebufferTarget() || mType == DISPLAY_VIRTUAL))) {
 #endif
         EGLBoolean success = eglSwapBuffers(mDisplay, mSurface);
         if (!success) {
@@ -375,7 +378,7 @@ EGLBoolean DisplayDevice::makeCurrent(EGLDisplay dpy, EGLContext ctx) const {
     if (sur != mSurface) {
         result = eglMakeCurrent(dpy, mSurface, mSurface, ctx);
         if (result == EGL_TRUE) {
-            if (mType >= DisplayDevice::DISPLAY_VIRTUAL)
+            if (mType == DisplayDevice::DISPLAY_VIRTUAL)
                 eglSwapInterval(dpy, 0);
         }
     }

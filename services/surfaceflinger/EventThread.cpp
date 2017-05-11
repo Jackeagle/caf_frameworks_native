@@ -52,7 +52,7 @@ EventThread::EventThread(const sp<VSyncSource>& src, SurfaceFlinger& flinger, bo
       mVsyncHintSent(false),
       mInterceptVSyncs(interceptVSyncs) {
 
-    for (int32_t i=0 ; i<DisplayDevice::NUM_BUILTIN_DISPLAY_TYPES ; i++) {
+    for (int32_t i=0 ; i<=DisplayDevice::NUM_BUILTIN_DISPLAY_TYPES ; i++) {
         mVSyncEvent[i].header.type = DisplayEventReceiver::DISPLAY_EVENT_VSYNC;
         mVSyncEvent[i].header.id = 0;
         mVSyncEvent[i].header.timestamp = 0;
@@ -164,11 +164,11 @@ void EventThread::onVSyncEvent(nsecs_t timestamp) {
 }
 
 void EventThread::onHotplugReceived(int type, bool connected) {
-    ALOGE_IF(type >= DisplayDevice::NUM_BUILTIN_DISPLAY_TYPES,
+    ALOGE_IF(type > DisplayDevice::NUM_BUILTIN_DISPLAY_TYPES,
             "received hotplug event for an invalid display (id=%d)", type);
 
     Mutex::Autolock _l(mLock);
-    if (type < DisplayDevice::NUM_BUILTIN_DISPLAY_TYPES) {
+    if (type <= DisplayDevice::NUM_BUILTIN_DISPLAY_TYPES) {
         DisplayEventReceiver::Event event;
         event.header.type = DisplayEventReceiver::DISPLAY_EVENT_HOTPLUG;
         event.header.id = type;
@@ -222,7 +222,7 @@ Vector< sp<EventThread::Connection> > EventThread::waitForEvent(
 
         size_t vsyncCount = 0;
         nsecs_t timestamp = 0;
-        for (int32_t i=0 ; i<DisplayDevice::NUM_BUILTIN_DISPLAY_TYPES ; i++) {
+        for (int32_t i=0 ; i<=DisplayDevice::NUM_BUILTIN_DISPLAY_TYPES ; i++) {
             timestamp = mVSyncEvent[i].header.timestamp;
             if (timestamp) {
                 // we have a vsync event to dispatch

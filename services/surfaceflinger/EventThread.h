@@ -125,7 +125,7 @@ private:
     // protected by mLock
     SortedVector< wp<Connection> > mDisplayEventConnections;
     Vector< DisplayEventReceiver::Event > mPendingEvents;
-    DisplayEventReceiver::Event mVSyncEvent[DisplayDevice::NUM_BUILTIN_DISPLAY_TYPES];
+    DisplayEventReceiver::Event mVSyncEvent[DisplayDevice::NUM_DISPLAY_TYPES];
     bool mUseSoftwareVSync;
     bool mVsyncEnabled;
 
