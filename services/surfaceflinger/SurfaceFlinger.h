@@ -499,7 +499,7 @@ private:
 
     int32_t getDisplayType(const sp<IBinder>& display) {
         if (!display.get()) return NAME_NOT_FOUND;
-        for (int i = 0; i < DisplayDevice::NUM_BUILTIN_DISPLAY_TYPES; ++i) {
+        for (int i = 0; i <= DisplayDevice::NUM_BUILTIN_DISPLAY_TYPES; ++i) {
             if (display == mBuiltinDisplays[i]) {
                 return i;
             }
@@ -652,7 +652,7 @@ private:
     sp<EventControlThread> mEventControlThread;
     EGLContext mEGLContext;
     EGLDisplay mEGLDisplay;
-    sp<IBinder> mBuiltinDisplays[DisplayDevice::NUM_BUILTIN_DISPLAY_TYPES];
+    sp<IBinder> mBuiltinDisplays[DisplayDevice::NUM_DISPLAY_TYPES];
 
 #ifdef USE_HWC2
     std::unique_ptr<dvr::VrFlinger> mVrFlinger;
