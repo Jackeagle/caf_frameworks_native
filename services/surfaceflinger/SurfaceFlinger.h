@@ -156,6 +156,7 @@ public:
     // This also allows devices with wide-color displays that don't
     // want to support color management to disable color management.
     static bool hasWideColorDisplay;
+    friend class ExSurfaceFlinger;
 
     static char const* getServiceName() ANDROID_API {
         return "SurfaceFlinger";
@@ -238,11 +239,21 @@ private:
 
     class State {
     public:
+        explicit State(LayerVector::StateSet set) : stateSet(set) {}
+        State& operator=(const State& other) {
+            // We explicitly don't copy stateSet so that, e.g., mDrawingState
+            // always uses the Drawing StateSet.
+            layersSortedByZ = other.layersSortedByZ;
+            displays = other.displays;
+            return *this;
+        }
+
+        const LayerVector::StateSet stateSet = LayerVector::StateSet::Invalid;
         LayerVector layersSortedByZ;
         DefaultKeyedVector< wp<IBinder>, DisplayDeviceState> displays;
 
-        void traverseInZOrder(const std::function<void(Layer*)>& consume) const;
-        void traverseInReverseZOrder(const std::function<void(Layer*)>& consume) const;
+        void traverseInZOrder(const LayerVector::Visitor& visitor) const;
+        void traverseInReverseZOrder(const LayerVector::Visitor& visitor) const;
     };
 
     /* ------------------------------------------------------------------------
@@ -309,6 +320,37 @@ private:
     virtual void onHotplugReceived(HWComposer* composer, int disp, bool connected);
     virtual void onInvalidateReceived(HWComposer* composer);
 
+    /* ------------------------------------------------------------------------
+     * Extensions
+     */
+    virtual void updateExtendedMode() { }
+
+    virtual void getIndexLOI(size_t /*dpy*/,
+                     bool& /*bIgnoreLayers*/,
+                     String8& /*nameLOI*/) { }
+
+    virtual bool updateLayerVisibleNonTransparentRegion(
+                     const int& dpy, const sp<Layer>& layer,
+                     bool& bIgnoreLayers, String8& nameLOI,
+                     uint32_t layerStack);
+
+    virtual void delayDPTransactionIfNeeded(
+                     const Vector<DisplayState>& /*displays*/) { }
+
+    virtual bool canDrawLayerinScreenShot(
+                     const sp<const DisplayDevice>& hw,
+                     const sp<Layer>& layer);
+
+    virtual void isfreezeSurfacePresent(
+                     bool& freezeSurfacePresent,
+                     const sp<const DisplayDevice>& /*hw*/,
+                     const int32_t& /*id*/) { freezeSurfacePresent = false; }
+
+    virtual void setOrientationEventControl(
+                     bool& /*freezeSurfacePresent*/,
+                     const int32_t& /*id*/) { }
+
+    virtual void updateVisibleRegionsDirty() { }
     /* ------------------------------------------------------------------------
      * Message handling
      */
@@ -486,8 +528,9 @@ private:
      * Compositing
      */
     void invalidateHwcGeometry();
-    void computeVisibleRegions(uint32_t layerStack,
-            Region& dirtyRegion, Region& opaqueRegion);
+    void computeVisibleRegions(size_t dpy,
+            uint32_t layerStack, Region& dirtyRegion,
+            Region& opaqueRegion);
 
     void preComposition(nsecs_t refreshStartTime);
     void postComposition(nsecs_t refreshStartTime);
@@ -548,6 +591,9 @@ private:
     void logFrameStats();
 
     void dumpStaticScreenStats(String8& result) const;
+#ifdef DEBUG_CONT_DUMPSYS
+    virtual void dumpDrawCycle(bool /* prePrepare */ ) { }
+#endif
     // Not const because each Layer needs to query Fences and cache timestamps.
     void dumpFrameEventsLocked(String8& result);
 
@@ -577,7 +623,7 @@ private:
 
     // access must be protected by mStateLock
     mutable Mutex mStateLock;
-    State mCurrentState;
+    State mCurrentState{LayerVector::StateSet::Current};
     volatile int32_t mTransactionFlags;
     Condition mTransactionCV;
     bool mTransactionPending;
@@ -617,7 +663,7 @@ private:
 
     // Can only accessed from the main thread, these members
     // don't need synchronization
-    State mDrawingState;
+    State mDrawingState{LayerVector::StateSet::Drawing};
     bool mVisibleRegionsDirty;
 #ifndef USE_HWC2
     bool mHwWorkListDirty;

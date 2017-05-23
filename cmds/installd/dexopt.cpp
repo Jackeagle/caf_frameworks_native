@@ -190,7 +190,7 @@ static const char* get_location_from_path(const char* path) {
 
 static void run_dex2oat(int zip_fd, int oat_fd, int input_vdex_fd, int output_vdex_fd, int image_fd,
         const char* input_file_name, const char* output_file_name, int swap_fd,
-        const char* instruction_set, const char* compiler_filter, bool vm_safe_mode,
+        const char* instruction_set, const char* compiler_filter,
         bool debuggable, bool post_bootcomplete, int profile_fd, const char* shared_libraries) {
     static const unsigned int MAX_INSTRUCTION_SET_LEN = 7;
 
@@ -240,7 +240,7 @@ static void run_dex2oat(int zip_fd, int oat_fd, int input_vdex_fd, int output_vd
                                  dex2oat_flags, NULL) <= 0 ? 0 : split_count(dex2oat_flags);
     ALOGV("dalvik.vm.dex2oat-flags=%s\n", dex2oat_flags);
 
-    // If we booting without the real /data, don't spend time compiling.
+    // If we are booting without the real /data, don't spend time compiling.
     char vold_decrypt[kPropertyValueMax];
     bool have_vold_decrypt = get_property("vold.decrypt", vold_decrypt, "") > 0;
     bool skip_compilation = (have_vold_decrypt &&
@@ -319,20 +319,24 @@ static void run_dex2oat(int zip_fd, int oat_fd, int input_vdex_fd, int output_vd
 
     // Compute compiler filter.
 
-    bool have_dex2oat_compiler_filter_flag;
+    bool have_dex2oat_compiler_filter_flag = false;
     if (skip_compilation) {
-        strcpy(dex2oat_compiler_filter_arg, "--compiler-filter=verify-none");
+        strcpy(dex2oat_compiler_filter_arg, "--compiler-filter=extract");
         have_dex2oat_compiler_filter_flag = true;
         have_dex2oat_relocation_skip_flag = true;
-    } else if (vm_safe_mode) {
-        strcpy(dex2oat_compiler_filter_arg, "--compiler-filter=interpret-only");
-        have_dex2oat_compiler_filter_flag = true;
-    } else if (compiler_filter != nullptr &&
-            strlen(compiler_filter) + strlen("--compiler-filter=") <
+    } else if (compiler_filter != nullptr) {
+        if (strlen(compiler_filter) + strlen("--compiler-filter=") <
                     arraysize(dex2oat_compiler_filter_arg)) {
-        sprintf(dex2oat_compiler_filter_arg, "--compiler-filter=%s", compiler_filter);
-        have_dex2oat_compiler_filter_flag = true;
-    } else {
+            sprintf(dex2oat_compiler_filter_arg, "--compiler-filter=%s", compiler_filter);
+            have_dex2oat_compiler_filter_flag = true;
+        } else {
+            ALOGW("Compiler filter name '%s' is too large (max characters is %zu)",
+                  compiler_filter,
+                  kPropertyValueMax);
+        }
+    }
+
+    if (!have_dex2oat_compiler_filter_flag) {
         char dex2oat_compiler_filter_flag[kPropertyValueMax];
         have_dex2oat_compiler_filter_flag = get_property("dalvik.vm.dex2oat-filter",
                                                          dex2oat_compiler_filter_flag, NULL) > 0;
@@ -1149,8 +1153,8 @@ Dex2oatFileWrapper maybe_open_reference_profile(const std::string& pkgname,
 // Opens the vdex files and assigns the input fd to in_vdex_wrapper_fd and the output fd to
 // out_vdex_wrapper_fd. Returns true for success or false in case of errors.
 bool open_vdex_files(const char* apk_path, const char* out_oat_path, int dexopt_needed,
-        const char* instruction_set, bool is_public, bool profile_guided,
-        int uid, bool is_secondary_dex, Dex2oatFileWrapper* in_vdex_wrapper_fd,
+        const char* instruction_set, bool is_public, int uid, bool is_secondary_dex,
+        Dex2oatFileWrapper* in_vdex_wrapper_fd,
         Dex2oatFileWrapper* out_vdex_wrapper_fd) {
     CHECK(in_vdex_wrapper_fd != nullptr);
     CHECK(out_vdex_wrapper_fd != nullptr);
@@ -1160,9 +1164,7 @@ bool open_vdex_files(const char* apk_path, const char* out_oat_path, int dexopt_
     int dexopt_action = abs(dexopt_needed);
     bool is_odex_location = dexopt_needed < 0;
     std::string in_vdex_path_str;
-    // Disable passing an input vdex when the compilation is profile-guided. The dexlayout
-    // optimization in dex2oat is incompatible with it. b/35872504.
-    if (dexopt_action != DEX2OAT_FROM_SCRATCH && !profile_guided) {
+    if (dexopt_action != DEX2OAT_FROM_SCRATCH) {
         // Open the possibly existing vdex. If none exist, we pass -1 to dex2oat for input-vdex-fd.
         const char* path = nullptr;
         if (is_odex_location) {
@@ -1200,7 +1202,11 @@ bool open_vdex_files(const char* apk_path, const char* out_oat_path, int dexopt_
     if (dexopt_action == DEX2OAT_FOR_BOOT_IMAGE &&
             in_vdex_wrapper_fd->get() != -1 &&
             in_vdex_path_str == out_vdex_path_str) {
-        out_vdex_wrapper_fd->reset(in_vdex_wrapper_fd->get());
+        // We unlink the file in case the invocation of dex2oat fails, to ensure we don't
+        // have bogus stale vdex files.
+        out_vdex_wrapper_fd->reset(
+              in_vdex_wrapper_fd->get(),
+              [out_vdex_path_str]() { unlink(out_vdex_path_str.c_str()); });
         // Disable auto close for the in wrapper fd (it will be done when destructing the out
         // wrapper).
         in_vdex_wrapper_fd->DisableAutoClose();
@@ -1477,7 +1483,6 @@ int dexopt(const char* dex_path, uid_t uid, const char* pkgname, const char* ins
     }
 
     bool is_public = (dexopt_flags & DEXOPT_PUBLIC) != 0;
-    bool vm_safe_mode = (dexopt_flags & DEXOPT_SAFEMODE) != 0;
     bool debuggable = (dexopt_flags & DEXOPT_DEBUGGABLE) != 0;
     bool boot_complete = (dexopt_flags & DEXOPT_BOOTCOMPLETE) != 0;
     bool profile_guided = (dexopt_flags & DEXOPT_PROFILE_GUIDED) != 0;
@@ -1523,8 +1528,8 @@ int dexopt(const char* dex_path, uid_t uid, const char* pkgname, const char* ins
     // Open vdex files.
     Dex2oatFileWrapper in_vdex_fd;
     Dex2oatFileWrapper out_vdex_fd;
-    if (!open_vdex_files(dex_path, out_oat_path, dexopt_needed, instruction_set, is_public,
-            profile_guided, uid, is_secondary_dex, &in_vdex_fd, &out_vdex_fd)) {
+    if (!open_vdex_files(dex_path, out_oat_path, dexopt_needed, instruction_set, is_public, uid,
+            is_secondary_dex, &in_vdex_fd, &out_vdex_fd)) {
         return -1;
     }
 
@@ -1575,7 +1580,6 @@ int dexopt(const char* dex_path, uid_t uid, const char* pkgname, const char* ins
                     swap_fd.get(),
                     instruction_set,
                     compiler_filter,
-                    vm_safe_mode,
                     debuggable,
                     boot_complete,
                     reference_profile_fd.get(),

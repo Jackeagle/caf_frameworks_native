@@ -732,6 +732,7 @@ status_t BufferQueueProducer::attachBuffer(int* outSlot,
     mSlots[*outSlot].mFence = Fence::NO_FENCE;
     mSlots[*outSlot].mRequestBufferCalled = true;
     mSlots[*outSlot].mAcquireCalled = false;
+    mSlots[*outSlot].mNeedsReallocation = false;
     mCore->mActiveBuffers.insert(found);
     VALIDATE_CONSISTENCY();
 
@@ -1104,6 +1105,9 @@ int BufferQueueProducer::query(int what, int *outValue) {
             } else {
                 value = static_cast<int32_t>(mCore->mBufferAge);
             }
+            break;
+        case NATIVE_WINDOW_CONSUMER_IS_PROTECTED:
+            value = static_cast<int32_t>(mCore->mConsumerIsProtected);
             break;
         default:
             return BAD_VALUE;

@@ -296,6 +296,9 @@ void Layer::onRemoved() {
     }
 
     mSurfaceFlingerConsumer->abandon();
+
+    clearHwcLayers();
+
     for (const auto& child : mCurrentChildren) {
         child->onRemoved();
     }
@@ -371,7 +374,7 @@ Rect Layer::getContentCrop() const {
     return crop;
 }
 
-static Rect reduce(const Rect& win, const Region& exclude) {
+Rect Layer::reduce(const Rect& win, const Region& exclude) const {
     if (CC_LIKELY(exclude.isEmpty())) {
         return win;
     }
@@ -675,6 +678,7 @@ void Layer::setGeometry(
         hwcInfo.displayFrame = transformedFrame;
     }
 
+    setPosition(displayDevice, s);
     FloatRect sourceCrop = computeCrop(displayDevice);
     error = hwcLayer->setSourceCrop(sourceCrop);
     if (error != HWC2::Error::None) {
@@ -697,7 +701,16 @@ void Layer::setGeometry(
             mName.string(), z, to_string(error).c_str(),
             static_cast<int32_t>(error));
 
-    error = hwcLayer->setInfo(s.type, s.appId);
+    int type = s.type;
+    int appId = s.appId;
+    sp<Layer> parent = mParent.promote();
+    if (parent.get()) {
+        auto& parentState = parent->getDrawingState();
+        type = parentState.type;
+        appId = parentState.appId;
+    }
+
+    error = hwcLayer->setInfo(type, appId);
     ALOGE_IF(error != HWC2::Error::None, "[%s] Failed to set info (%d)",
              mName.string(), static_cast<int32_t>(error));
 #else
@@ -706,6 +719,7 @@ void Layer::setGeometry(
     }
     const Transform& tr(hw->getTransform());
     layer.setFrame(tr.transform(frame));
+    setPosition(hw, layer, s);
     layer.setCrop(computeCrop(hw));
     layer.setPlaneAlpha(getAlpha());
 #endif
@@ -1033,7 +1047,7 @@ void Layer::onDraw(const sp<const DisplayDevice>& hw, const Region& clip,
         // figure out if there is something below us
         Region under;
         bool finished = false;
-        mFlinger->mDrawingState.layersSortedByZ.traverseInZOrder([&](Layer* layer) {
+        mFlinger->mDrawingState.traverseInZOrder([&](Layer* layer) {
             if (finished || layer == static_cast<Layer const*>(this)) {
                 finished = true;
                 return;
@@ -2174,9 +2188,14 @@ Region Layer::latchBuffer(bool& recomputeVisibleRegions, nsecs_t latchTime)
 
         // Remove any stale buffers that have been dropped during
         // updateTexImage
-        while (mQueueItems[0].mFrameNumber != currentFrameNumber) {
+        while ((mQueuedFrames > 0) && (mQueueItems[0].mFrameNumber != currentFrameNumber)) {
             mQueueItems.removeAt(0);
             android_atomic_dec(&mQueuedFrames);
+        }
+
+        if (mQueuedFrames == 0) {
+                ALOGE("[%s] mQueuedFrames is zero !!!", mName.string());
+                return outDirtyRegion;
         }
 
         mQueueItems.removeAt(0);
@@ -2519,7 +2538,7 @@ bool Layer::reparentChildren(const sp<IBinder>& newParentHandle) {
 }
 
 bool Layer::detachChildren() {
-    traverseInZOrder([this](Layer* child) {
+    traverseInZOrder(LayerVector::StateSet::Drawing, [this](Layer* child) {
         if (child == this) {
             return;
         }
@@ -2553,20 +2572,26 @@ int32_t Layer::getZ() const {
     return mDrawingState.z;
 }
 
-LayerVector Layer::makeTraversalList() {
-    if (mDrawingState.zOrderRelatives.size() == 0) {
-        return mDrawingChildren;
+LayerVector Layer::makeTraversalList(LayerVector::StateSet stateSet) {
+    LOG_ALWAYS_FATAL_IF(stateSet == LayerVector::StateSet::Invalid,
+                        "makeTraversalList received invalid stateSet");
+    const bool useDrawing = stateSet == LayerVector::StateSet::Drawing;
+    const LayerVector& children = useDrawing ? mDrawingChildren : mCurrentChildren;
+    const State& state = useDrawing ? mDrawingState : mCurrentState;
+
+    if (state.zOrderRelatives.size() == 0) {
+        return children;
     }
     LayerVector traverse;
 
-    for (const wp<Layer>& weakRelative : mDrawingState.zOrderRelatives) {
+    for (const wp<Layer>& weakRelative : state.zOrderRelatives) {
         sp<Layer> strongRelative = weakRelative.promote();
         if (strongRelative != nullptr) {
             traverse.add(strongRelative);
         }
     }
 
-    for (const sp<Layer>& child : mDrawingChildren) {
+    for (const sp<Layer>& child : children) {
         traverse.add(child);
     }
 
@@ -2576,8 +2601,8 @@ LayerVector Layer::makeTraversalList() {
 /**
  * Negatively signed relatives are before 'this' in Z-order.
  */
-void Layer::traverseInZOrder(const std::function<void(Layer*)>& exec) {
-    LayerVector list = makeTraversalList();
+void Layer::traverseInZOrder(LayerVector::StateSet stateSet, const LayerVector::Visitor& visitor) {
+    LayerVector list = makeTraversalList(stateSet);
 
     size_t i = 0;
     for (; i < list.size(); i++) {
@@ -2585,20 +2610,21 @@ void Layer::traverseInZOrder(const std::function<void(Layer*)>& exec) {
         if (relative->getZ() >= 0) {
             break;
         }
-        relative->traverseInZOrder(exec);
+        relative->traverseInZOrder(stateSet, visitor);
     }
-    exec(this);
+    visitor(this);
     for (; i < list.size(); i++) {
         const auto& relative = list[i];
-        relative->traverseInZOrder(exec);
+        relative->traverseInZOrder(stateSet, visitor);
     }
 }
 
 /**
  * Positively signed relatives are before 'this' in reverse Z-order.
  */
-void Layer::traverseInReverseZOrder(const std::function<void(Layer*)>& exec) {
-    LayerVector list = makeTraversalList();
+void Layer::traverseInReverseZOrder(LayerVector::StateSet stateSet,
+                                    const LayerVector::Visitor& visitor) {
+    LayerVector list = makeTraversalList(stateSet);
 
     int32_t i = 0;
     for (i = list.size()-1; i>=0; i--) {
@@ -2606,12 +2632,12 @@ void Layer::traverseInReverseZOrder(const std::function<void(Layer*)>& exec) {
         if (relative->getZ() < 0) {
             break;
         }
-        relative->traverseInReverseZOrder(exec);
+        relative->traverseInReverseZOrder(stateSet, visitor);
     }
-    exec(this);
+    visitor(this);
     for (; i>=0; i--) {
         const auto& relative = list[i];
-        relative->traverseInReverseZOrder(exec);
+        relative->traverseInReverseZOrder(stateSet, visitor);
     }
 }
 

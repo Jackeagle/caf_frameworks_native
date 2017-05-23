@@ -917,6 +917,9 @@ Error Display::getReleaseFences(
         } else {
             ALOGE("getReleaseFences: invalid layer %" PRIu64
                     " found on display %" PRIu64, layerIds[element], mId);
+            for (; element < numElements; ++element) {
+                close(fenceFds[element]);
+            }
             return Error::BadLayer;
         }
     }
@@ -1301,6 +1304,23 @@ Error Layer::setCompositionType(Composition type)
             mDisplayId, mId, intType);
 #else
     auto intType = static_cast<Hwc2::IComposerClient::Composition>(type);
+    auto intError = mDevice.mComposer->setLayerCompositionType(mDisplayId,
+            mId, intType);
+#endif
+    return static_cast<Error>(intError);
+}
+
+Error Layer::setAnimating(bool enable)
+{
+    if (!enable) {
+        return static_cast<Error> (0);
+    }
+// TODO: value 7 is not present in composition types at hwcomposer2.h
+#ifdef BYPASS_IHWC
+    int32_t intError = mDevice.mSetLayerCompositionType(mDevice.mHwcDevice,
+            mDisplayId, mId, 7);
+#else
+    auto intType = static_cast<Hwc2::IComposerClient::Composition>(7);
     auto intError = mDevice.mComposer->setLayerCompositionType(mDisplayId,
             mId, intType);
 #endif
