@@ -78,6 +78,7 @@ static constexpr const char* PKG_LIB_POSTFIX = "/lib";
 static constexpr const char* CACHE_DIR_POSTFIX = "/cache";
 static constexpr const char* CODE_CACHE_DIR_POSTFIX = "/code_cache";
 
+static constexpr const char *kIdMapPath = "/system/bin/idmap";
 static constexpr const char* IDMAP_PREFIX = "/data/resource-cache/";
 static constexpr const char* IDMAP_SUFFIX = "@idmap";
 
@@ -205,15 +206,20 @@ status_t InstalldNativeService::dump(int fd, const Vector<String16> & /* args */
     out << "installd is happy!" << endl;
 
     {
-        std::lock_guard<std::recursive_mutex> lock(mQuotaDevicesLock);
-        out << endl << "Devices with quota support:" << endl;
-        for (const auto& n : mQuotaDevices) {
+        std::lock_guard<std::recursive_mutex> lock(mMountsLock);
+        out << endl << "Storage mounts:" << endl;
+        for (const auto& n : mStorageMounts) {
+            out << "    " << n.first << " = " << n.second << endl;
+        }
+
+        out << endl << "Quota reverse mounts:" << endl;
+        for (const auto& n : mQuotaReverseMounts) {
             out << "    " << n.first << " = " << n.second << endl;
         }
     }
 
     {
-        std::lock_guard<std::recursive_mutex> lock(mCacheQuotasLock);
+        std::lock_guard<std::recursive_mutex> lock(mQuotasLock);
         out << endl << "Per-UID cache quotas:" << endl;
         for (const auto& n : mCacheQuotas) {
             out << "    " << n.first << " = " << n.second << endl;
@@ -901,7 +907,7 @@ binder::Status InstalldNativeService::destroyUserData(const std::unique_ptr<std:
         if (delete_dir_contents_and_dir(path, true) != 0) {
             res = error("Failed to delete " + path);
         }
-        path = create_data_media_path(uuid_, userId);
+        path = findDataMediaPath(uuid, userId);
         if (delete_dir_contents_and_dir(path, true) != 0) {
             res = error("Failed to delete " + path);
         }
@@ -952,13 +958,19 @@ binder::Status InstalldNativeService::freeCache(const std::unique_ptr<std::strin
             FTSENT *p;
             auto ce_path = create_data_user_ce_path(uuid_, user);
             auto de_path = create_data_user_de_path(uuid_, user);
-            char *argv[] = { (char*) ce_path.c_str(), (char*) de_path.c_str(), nullptr };
+            auto media_path = findDataMediaPath(uuid, user) + "/Android/data/";
+            char *argv[] = { (char*) ce_path.c_str(), (char*) de_path.c_str(),
+                    (char*) media_path.c_str(), nullptr };
             if (!(fts = fts_open(argv, FTS_PHYSICAL | FTS_NOCHDIR | FTS_XDEV, NULL))) {
                 return error("Failed to fts_open");
             }
             while ((p = fts_read(fts)) != NULL) {
                 if (p->fts_info == FTS_D && p->fts_level == 1) {
                     uid_t uid = p->fts_statp->st_uid;
+                    if (multiuser_get_app_id(uid) == AID_MEDIA_RW) {
+                        uid = (multiuser_get_app_id(p->fts_statp->st_gid) - AID_EXT_GID_START)
+                                + AID_APP_START;
+                    }
                     auto search = trackers.find(uid);
                     if (search != trackers.end()) {
                         search->second->addDataPath(p->fts_path);
@@ -967,7 +979,7 @@ binder::Status InstalldNativeService::freeCache(const std::unique_ptr<std::strin
                                 multiuser_get_user_id(uid), multiuser_get_app_id(uid), device));
                         tracker->addDataPath(p->fts_path);
                         {
-                            std::lock_guard<std::recursive_mutex> lock(mCacheQuotasLock);
+                            std::lock_guard<std::recursive_mutex> lock(mQuotasLock);
                             tracker->cacheQuota = mCacheQuotas[uid];
                         }
                         if (tracker->cacheQuota == 0) {
@@ -1089,10 +1101,13 @@ binder::Status InstalldNativeService::rmdex(const std::string& codePath,
 
     ALOGV("unlink %s\n", dex_path);
     if (unlink(dex_path) < 0) {
-        return error(StringPrintf("Failed to unlink %s", dex_path));
-    } else {
-        return ok();
+        // It's ok if we don't have a dalvik cache path. Report error only when the path exists
+        // but could not be unlinked.
+        if (errno != ENOENT) {
+            return error(StringPrintf("Failed to unlink %s", dex_path));
+        }
     }
+    return ok();
 }
 
 struct stats {
@@ -1745,7 +1760,7 @@ binder::Status InstalldNativeService::setAppQuota(const std::unique_ptr<std::str
         int32_t userId, int32_t appId, int64_t cacheQuota) {
     ENFORCE_UID(AID_SYSTEM);
     CHECK_ARGUMENT_UUID(uuid);
-    std::lock_guard<std::recursive_mutex> lock(mCacheQuotasLock);
+    std::lock_guard<std::recursive_mutex> lock(mQuotasLock);
 
     int32_t uid = multiuser_get_uid(userId, appId);
     mCacheQuotas[uid] = cacheQuota;
@@ -1927,14 +1942,58 @@ out:
 
 static void run_idmap(const char *target_apk, const char *overlay_apk, int idmap_fd)
 {
-    static const char *IDMAP_BIN = "/system/bin/idmap";
-    static const size_t MAX_INT_LEN = 32;
-    char idmap_str[MAX_INT_LEN];
+    execl(kIdMapPath, kIdMapPath, "--fd", target_apk, overlay_apk,
+            StringPrintf("%d", idmap_fd).c_str(), (char*)NULL);
+    PLOG(ERROR) << "execl (" << kIdMapPath << ") failed";
+}
 
-    snprintf(idmap_str, sizeof(idmap_str), "%d", idmap_fd);
+static void run_verify_idmap(const char *target_apk, const char *overlay_apk, int idmap_fd)
+{
+    execl(kIdMapPath, kIdMapPath, "--verify", target_apk, overlay_apk,
+            StringPrintf("%d", idmap_fd).c_str(), (char*)NULL);
+    PLOG(ERROR) << "execl (" << kIdMapPath << ") failed";
+}
 
-    execl(IDMAP_BIN, IDMAP_BIN, "--fd", target_apk, overlay_apk, idmap_str, (char*)NULL);
-    ALOGE("execl(%s) failed: %s\n", IDMAP_BIN, strerror(errno));
+static bool delete_stale_idmap(const char* target_apk, const char* overlay_apk,
+        const char* idmap_path, int32_t uid) {
+    int idmap_fd = open(idmap_path, O_RDWR);
+    if (idmap_fd < 0) {
+        PLOG(ERROR) << "idmap open failed: " << idmap_path;
+        unlink(idmap_path);
+        return true;
+    }
+
+    pid_t pid;
+    pid = fork();
+    if (pid == 0) {
+        /* child -- drop privileges before continuing */
+        if (setgid(uid) != 0) {
+            LOG(ERROR) << "setgid(" << uid << ") failed during idmap";
+            exit(1);
+        }
+        if (setuid(uid) != 0) {
+            LOG(ERROR) << "setuid(" << uid << ") failed during idmap";
+            exit(1);
+        }
+        if (flock(idmap_fd, LOCK_EX | LOCK_NB) != 0) {
+            PLOG(ERROR) << "flock(" << idmap_path << ") failed during idmap";
+            exit(1);
+        }
+
+        run_verify_idmap(target_apk, overlay_apk, idmap_fd);
+        exit(1); /* only if exec call to deleting stale idmap failed */
+    } else {
+        int status = wait_child(pid);
+        close(idmap_fd);
+
+        if (status != 0) {
+            // Failed on verifying if idmap is made from target_apk and overlay_apk.
+            LOG(DEBUG) << "delete stale idmap: " << idmap_path;
+            unlink(idmap_path);
+            return true;
+        }
+    }
+    return false;
 }
 
 // Transform string /a/b/c.apk to (prefix)/a@b@c.apk@(suffix)
@@ -1983,6 +2042,8 @@ binder::Status InstalldNativeService::idmap(const std::string& targetApkPath,
 
     int idmap_fd = -1;
     char idmap_path[PATH_MAX];
+    struct stat idmap_stat;
+    bool outdated = false;
 
     if (flatten_path(IDMAP_PREFIX, IDMAP_SUFFIX, overlay_apk,
                 idmap_path, sizeof(idmap_path)) == -1) {
@@ -1990,8 +2051,18 @@ binder::Status InstalldNativeService::idmap(const std::string& targetApkPath,
         goto fail;
     }
 
-    unlink(idmap_path);
-    idmap_fd = open(idmap_path, O_RDWR | O_CREAT | O_EXCL, 0644);
+    if (stat(idmap_path, &idmap_stat) < 0) {
+        outdated = true;
+    } else {
+        outdated = delete_stale_idmap(target_apk, overlay_apk, idmap_path, uid);
+    }
+
+    if (outdated) {
+        idmap_fd = open(idmap_path, O_RDWR | O_CREAT | O_EXCL, 0644);
+    } else {
+        idmap_fd = open(idmap_path, O_RDWR);
+    }
+
     if (idmap_fd < 0) {
         ALOGE("idmap cannot open '%s' for output: %s\n", idmap_path, strerror(errno));
         goto fail;
@@ -2003,6 +2074,11 @@ binder::Status InstalldNativeService::idmap(const std::string& targetApkPath,
     if (fchmod(idmap_fd, S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH) < 0) {
         ALOGE("idmap cannot chmod '%s'\n", idmap_path);
         goto fail;
+    }
+
+    if (!outdated) {
+        close(idmap_fd);
+        return ok();
     }
 
     pid_t pid;
@@ -2198,9 +2274,10 @@ binder::Status InstalldNativeService::reconcileSecondaryDexFile(
 
 binder::Status InstalldNativeService::invalidateMounts() {
     ENFORCE_UID(AID_SYSTEM);
-    std::lock_guard<std::recursive_mutex> lock(mQuotaDevicesLock);
+    std::lock_guard<std::recursive_mutex> lock(mMountsLock);
 
-    mQuotaDevices.clear();
+    mStorageMounts.clear();
+    mQuotaReverseMounts.clear();
 
     std::ifstream in("/proc/mounts");
     if (!in.is_open()) {
@@ -2210,17 +2287,25 @@ binder::Status InstalldNativeService::invalidateMounts() {
     std::string source;
     std::string target;
     std::string ignored;
-    struct dqblk dq;
     while (!in.eof()) {
         std::getline(in, source, ' ');
         std::getline(in, target, ' ');
         std::getline(in, ignored);
 
+#if !BYPASS_SDCARDFS
+        if (target.compare(0, 21, "/mnt/runtime/default/") == 0) {
+            LOG(DEBUG) << "Found storage mount " << source << " at " << target;
+            mStorageMounts[source] = target;
+        }
+#endif
+
+#if !BYPASS_QUOTA
         if (source.compare(0, 11, "/dev/block/") == 0) {
+            struct dqblk dq;
             if (quotactl(QCMD(Q_GETQUOTA, USRQUOTA), source.c_str(), 0,
                     reinterpret_cast<char*>(&dq)) == 0) {
-                LOG(DEBUG) << "Found " << source << " with quota";
-                mQuotaDevices[target] = source;
+                LOG(DEBUG) << "Found quota mount " << source << " at " << target;
+                mQuotaReverseMounts[target] = source;
 
                 // ext4 only enables DQUOT_USAGE_ENABLED by default, so we
                 // need to kick it again to enable DQUOT_LIMITS_ENABLED.
@@ -2234,15 +2319,29 @@ binder::Status InstalldNativeService::invalidateMounts() {
                 }
             }
         }
+#endif
     }
     return ok();
 }
 
+std::string InstalldNativeService::findDataMediaPath(
+        const std::unique_ptr<std::string>& uuid, userid_t userid) {
+    std::lock_guard<std::recursive_mutex> lock(mMountsLock);
+    const char* uuid_ = uuid ? uuid->c_str() : nullptr;
+    auto path = StringPrintf("%s/media", create_data_path(uuid_).c_str());
+    auto resolved = mStorageMounts[path];
+    if (resolved.empty()) {
+        LOG(WARNING) << "Failed to find storage mount for " << path;
+        resolved = path;
+    }
+    return StringPrintf("%s/%u", resolved.c_str(), userid);
+}
+
 std::string InstalldNativeService::findQuotaDeviceForUuid(
         const std::unique_ptr<std::string>& uuid) {
-    std::lock_guard<std::recursive_mutex> lock(mQuotaDevicesLock);
+    std::lock_guard<std::recursive_mutex> lock(mMountsLock);
     auto path = create_data_path(uuid ? uuid->c_str() : nullptr);
-    return mQuotaDevices[path];
+    return mQuotaReverseMounts[path];
 }
 
 binder::Status InstalldNativeService::isQuotaSupported(

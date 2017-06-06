@@ -34,6 +34,11 @@
 #include <utils/StopWatch.h>
 #include <utils/Trace.h>
 
+#ifdef QTI_BSP
+#include <gralloc_priv.h>
+#include <qdMetaData.h>
+#endif
+
 #include <ui/GraphicBuffer.h>
 #include <ui/PixelFormat.h>
 
@@ -103,7 +108,7 @@ Layer::Layer(SurfaceFlinger* flinger, const sp<Client>& client,
         mLastFrameNumberReceived(0),
         mUpdateTexImageFailed(false),
         mAutoRefresh(false),
-        mFreezePositionUpdates(false)
+        mFreezeGeometryUpdates(false)
 {
 #ifdef USE_HWC2
     ALOGV("Creating Layer %s", name.string());
@@ -131,6 +136,8 @@ Layer::Layer(SurfaceFlinger* flinger, const sp<Client>& client,
     mCurrentState.active.transform.set(0, 0);
     mCurrentState.crop.makeInvalid();
     mCurrentState.finalCrop.makeInvalid();
+    mCurrentState.requestedFinalCrop = mCurrentState.finalCrop;
+    mCurrentState.requestedCrop = mCurrentState.crop;
     mCurrentState.z = 0;
 #ifdef USE_HWC2
     mCurrentState.alpha = 1.0f;
@@ -287,7 +294,20 @@ void Layer::onSidebandStreamChanged() {
 // the layer has been remove from the current state list (and just before
 // it's removed from the drawing state list)
 void Layer::onRemoved() {
+    if (mCurrentState.zOrderRelativeOf != nullptr) {
+        sp<Layer> strongRelative = mCurrentState.zOrderRelativeOf.promote();
+        if (strongRelative != nullptr) {
+            strongRelative->removeZOrderRelative(this);
+        }
+        mCurrentState.zOrderRelativeOf = nullptr;
+    }
+
     mSurfaceFlingerConsumer->abandon();
+
+#ifdef USE_HWC2
+    clearHwcLayers();
+#endif
+
     for (const auto& child : mCurrentChildren) {
         child->onRemoved();
     }
@@ -363,7 +383,7 @@ Rect Layer::getContentCrop() const {
     return crop;
 }
 
-static Rect reduce(const Rect& win, const Region& exclude) {
+Rect Layer::reduce(const Rect& win, const Region& exclude) const {
     if (CC_LIKELY(exclude.isEmpty())) {
         return win;
     }
@@ -667,6 +687,7 @@ void Layer::setGeometry(
         hwcInfo.displayFrame = transformedFrame;
     }
 
+    setPosition(displayDevice, s);
     FloatRect sourceCrop = computeCrop(displayDevice);
     error = hwcLayer->setSourceCrop(sourceCrop);
     if (error != HWC2::Error::None) {
@@ -689,7 +710,16 @@ void Layer::setGeometry(
             mName.string(), z, to_string(error).c_str(),
             static_cast<int32_t>(error));
 
-    error = hwcLayer->setInfo(s.type, s.appId);
+    int type = s.type;
+    int appId = s.appId;
+    sp<Layer> parent = mParent.promote();
+    if (parent.get()) {
+        auto& parentState = parent->getDrawingState();
+        type = parentState.type;
+        appId = parentState.appId;
+    }
+
+    error = hwcLayer->setInfo(type, appId);
     ALOGE_IF(error != HWC2::Error::None, "[%s] Failed to set info (%d)",
              mName.string(), static_cast<int32_t>(error));
 #else
@@ -698,6 +728,7 @@ void Layer::setGeometry(
     }
     const Transform& tr(hw->getTransform());
     layer.setFrame(tr.transform(frame));
+    setPosition(hw, layer, s);
     layer.setCrop(computeCrop(hw));
     layer.setPlaneAlpha(getAlpha());
 #endif
@@ -1025,7 +1056,7 @@ void Layer::onDraw(const sp<const DisplayDevice>& hw, const Region& clip,
         // figure out if there is something below us
         Region under;
         bool finished = false;
-        mFlinger->mDrawingState.layersSortedByZ.traverseInZOrder([&](Layer* layer) {
+        mFlinger->mDrawingState.traverseInZOrder([&](Layer* layer) {
             if (finished || layer == static_cast<Layer const*>(this)) {
                 finished = true;
                 return;
@@ -1048,8 +1079,7 @@ void Layer::onDraw(const sp<const DisplayDevice>& hw, const Region& clip,
         // Go ahead and draw the buffer anyway; no matter what we do the screen
         // is probably going to have something visibly wrong.
     }
-
-    bool blackOutLayer = isProtected() || (isSecure() && !hw->isSecure());
+    bool blackOutLayer = isProtected() || (isSecure() && !hw->isSecure()) || isHDRLayer();
 
     RenderEngine& engine(mFlinger->getRenderEngine());
 
@@ -1619,12 +1649,25 @@ uint32_t Layer::doTransaction(uint32_t flags) {
         }
     }
 
-    // always set active to requested, unless we're asked not to
-    // this is used by Layer, which special cases resizes.
-    if (flags & eDontUpdateGeometryState)  {
-    } else {
+    // Here we apply various requested geometry states, depending on our
+    // latching configuration. See Layer.h for a detailed discussion of
+    // how geometry latching is controlled.
+    if (!(flags & eDontUpdateGeometryState)) {
         Layer::State& editCurrentState(getCurrentState());
-        if (mFreezePositionUpdates) {
+
+        // If mFreezeGeometryUpdates is true we are in the setGeometryAppliesWithResize
+        // mode, which causes attributes which normally latch regardless of scaling mode,
+        // to be delayed. We copy the requested state to the active state making sure
+        // to respect these rules (again see Layer.h for a detailed discussion).
+        //
+        // There is an awkward asymmetry in the handling of the crop states in the position
+        // states, as can be seen below. Largely this arises from position and transform
+        // being stored in the same data structure while having different latching rules.
+        // b/38182305
+        //
+        // Careful that "c" and editCurrentState may not begin as equivalent due to
+        // applyPendingStates in the presence of deferred transactions.
+        if (mFreezeGeometryUpdates) {
             float tx = c.active.transform.tx();
             float ty = c.active.transform.ty();
             c.active = c.requested;
@@ -1685,10 +1728,14 @@ bool Layer::setPosition(float x, float y, bool immediate) {
     // we want to apply the position portion of the transform matrix immediately,
     // but still delay scaling when resizing a SCALING_MODE_FREEZE layer.
     mCurrentState.requested.transform.set(x, y);
-    if (immediate && !mFreezePositionUpdates) {
+    if (immediate && !mFreezeGeometryUpdates) {
+        // Here we directly update the active state
+        // unlike other setters, because we store it within
+        // the transform, but use different latching rules.
+        // b/38182305
         mCurrentState.active.transform.set(x, y);
     }
-    mFreezePositionUpdates = mFreezePositionUpdates || !immediate;
+    mFreezeGeometryUpdates = mFreezeGeometryUpdates || !immediate;
 
     mCurrentState.modified = true;
     setTransactionFlags(eTransactionNeeded);
@@ -1811,26 +1858,30 @@ bool Layer::setFlags(uint8_t flags, uint8_t mask) {
 }
 
 bool Layer::setCrop(const Rect& crop, bool immediate) {
-    if (mCurrentState.crop == crop)
+    if (mCurrentState.requestedCrop == crop)
         return false;
     mCurrentState.sequence++;
     mCurrentState.requestedCrop = crop;
-    if (immediate) {
+    if (immediate && !mFreezeGeometryUpdates) {
         mCurrentState.crop = crop;
     }
+    mFreezeGeometryUpdates = mFreezeGeometryUpdates || !immediate;
+
     mCurrentState.modified = true;
     setTransactionFlags(eTransactionNeeded);
     return true;
 }
 
 bool Layer::setFinalCrop(const Rect& crop, bool immediate) {
-    if (mCurrentState.finalCrop == crop)
+    if (mCurrentState.requestedFinalCrop == crop)
         return false;
     mCurrentState.sequence++;
     mCurrentState.requestedFinalCrop = crop;
-    if (immediate) {
+    if (immediate && !mFreezeGeometryUpdates) {
         mCurrentState.finalCrop = crop;
     }
+    mFreezeGeometryUpdates = mFreezeGeometryUpdates || !immediate;
+
     mCurrentState.modified = true;
     setTransactionFlags(eTransactionNeeded);
     return true;
@@ -2120,7 +2171,7 @@ Region Layer::latchBuffer(bool& recomputeVisibleRegions, nsecs_t latchTime)
     bool queuedBuffer = false;
     LayerRejecter r(mDrawingState, getCurrentState(), recomputeVisibleRegions,
                     getProducerStickyTransform() != 0, mName.string(),
-                    mOverrideScalingMode, mFreezePositionUpdates);
+                    mOverrideScalingMode, mFreezeGeometryUpdates);
     status_t updateResult = mSurfaceFlingerConsumer->updateTexImage(&r,
             mFlinger->mPrimaryDispSync, &mAutoRefresh, &queuedBuffer,
             mLastFrameNumberReceived);
@@ -2166,9 +2217,14 @@ Region Layer::latchBuffer(bool& recomputeVisibleRegions, nsecs_t latchTime)
 
         // Remove any stale buffers that have been dropped during
         // updateTexImage
-        while (mQueueItems[0].mFrameNumber != currentFrameNumber) {
+        while ((mQueuedFrames > 0) && (mQueueItems[0].mFrameNumber != currentFrameNumber)) {
             mQueueItems.removeAt(0);
             android_atomic_dec(&mQueuedFrames);
+        }
+
+        if (mQueuedFrames == 0) {
+                ALOGE("[%s] mQueuedFrames is zero !!!", mName.string());
+                return outDirtyRegion;
         }
 
         mQueueItems.removeAt(0);
@@ -2511,7 +2567,7 @@ bool Layer::reparentChildren(const sp<IBinder>& newParentHandle) {
 }
 
 bool Layer::detachChildren() {
-    traverseInZOrder([this](Layer* child) {
+    traverseInZOrder(LayerVector::StateSet::Drawing, [this](Layer* child) {
         if (child == this) {
             return;
         }
@@ -2545,25 +2601,26 @@ int32_t Layer::getZ() const {
     return mDrawingState.z;
 }
 
-LayerVector Layer::makeTraversalList() {
-    if (mDrawingState.zOrderRelatives.size() == 0) {
-        return mDrawingChildren;
+LayerVector Layer::makeTraversalList(LayerVector::StateSet stateSet) {
+    LOG_ALWAYS_FATAL_IF(stateSet == LayerVector::StateSet::Invalid,
+                        "makeTraversalList received invalid stateSet");
+    const bool useDrawing = stateSet == LayerVector::StateSet::Drawing;
+    const LayerVector& children = useDrawing ? mDrawingChildren : mCurrentChildren;
+    const State& state = useDrawing ? mDrawingState : mCurrentState;
+
+    if (state.zOrderRelatives.size() == 0) {
+        return children;
     }
     LayerVector traverse;
 
-    for (const wp<Layer>& weakRelative : mDrawingState.zOrderRelatives) {
+    for (const wp<Layer>& weakRelative : state.zOrderRelatives) {
         sp<Layer> strongRelative = weakRelative.promote();
         if (strongRelative != nullptr) {
             traverse.add(strongRelative);
-        } else {
-            // We need to erase from current state instead of drawing
-            // state so we don't overwrite when copying
-            // the current state to the drawing state.
-            mCurrentState.zOrderRelatives.remove(weakRelative);
         }
     }
 
-    for (const sp<Layer>& child : mDrawingChildren) {
+    for (const sp<Layer>& child : children) {
         traverse.add(child);
     }
 
@@ -2573,8 +2630,8 @@ LayerVector Layer::makeTraversalList() {
 /**
  * Negatively signed relatives are before 'this' in Z-order.
  */
-void Layer::traverseInZOrder(const std::function<void(Layer*)>& exec) {
-    LayerVector list = makeTraversalList();
+void Layer::traverseInZOrder(LayerVector::StateSet stateSet, const LayerVector::Visitor& visitor) {
+    LayerVector list = makeTraversalList(stateSet);
 
     size_t i = 0;
     for (; i < list.size(); i++) {
@@ -2582,20 +2639,21 @@ void Layer::traverseInZOrder(const std::function<void(Layer*)>& exec) {
         if (relative->getZ() >= 0) {
             break;
         }
-        relative->traverseInZOrder(exec);
+        relative->traverseInZOrder(stateSet, visitor);
     }
-    exec(this);
+    visitor(this);
     for (; i < list.size(); i++) {
         const auto& relative = list[i];
-        relative->traverseInZOrder(exec);
+        relative->traverseInZOrder(stateSet, visitor);
     }
 }
 
 /**
  * Positively signed relatives are before 'this' in reverse Z-order.
  */
-void Layer::traverseInReverseZOrder(const std::function<void(Layer*)>& exec) {
-    LayerVector list = makeTraversalList();
+void Layer::traverseInReverseZOrder(LayerVector::StateSet stateSet,
+                                    const LayerVector::Visitor& visitor) {
+    LayerVector list = makeTraversalList(stateSet);
 
     int32_t i = 0;
     for (i = list.size()-1; i>=0; i--) {
@@ -2603,12 +2661,12 @@ void Layer::traverseInReverseZOrder(const std::function<void(Layer*)>& exec) {
         if (relative->getZ() < 0) {
             break;
         }
-        relative->traverseInReverseZOrder(exec);
+        relative->traverseInReverseZOrder(stateSet, visitor);
     }
-    exec(this);
+    visitor(this);
     for (; i>=0; i--) {
         const auto& relative = list[i];
-        relative->traverseInReverseZOrder(exec);
+        relative->traverseInReverseZOrder(stateSet, visitor);
     }
 }
 
@@ -2624,10 +2682,19 @@ Transform Layer::getTransform() const {
         // or we will break the contract where WM can treat child surfaces as
         // pixels in the parent surface.
         if (p->isFixedSize()) {
+            int bufferWidth;
+            int bufferHeight;
+            if ((p->mCurrentTransform & NATIVE_WINDOW_TRANSFORM_ROT_90) == 0) {
+                bufferWidth = p->mActiveBuffer->getWidth();
+                bufferHeight = p->mActiveBuffer->getHeight();
+            } else {
+                bufferHeight = p->mActiveBuffer->getWidth();
+                bufferWidth = p->mActiveBuffer->getHeight();
+            }
             float sx = p->getDrawingState().active.w /
-                    static_cast<float>(p->mActiveBuffer->getWidth());
+                    static_cast<float>(bufferWidth);
             float sy = p->getDrawingState().active.h /
-                    static_cast<float>(p->mActiveBuffer->getHeight());
+                    static_cast<float>(bufferHeight);
             Transform extraParentScaling;
             extraParentScaling.set(sx, 0, 0, sy);
             t = t * extraParentScaling;

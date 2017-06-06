@@ -64,6 +64,25 @@ using android::base::StringPrintf;
 namespace android {
 namespace installd {
 
+// Check expected values for dexopt flags. If you need to change this:
+//
+//   RUN AN A/B OTA TO MAKE SURE THINGS STILL WORK!
+//
+// You most likely need to increase the protocol version and all that entails!
+
+static_assert(DEXOPT_PUBLIC         == 1 << 1, "DEXOPT_PUBLIC unexpected.");
+static_assert(DEXOPT_DEBUGGABLE     == 1 << 2, "DEXOPT_DEBUGGABLE unexpected.");
+static_assert(DEXOPT_BOOTCOMPLETE   == 1 << 3, "DEXOPT_BOOTCOMPLETE unexpected.");
+static_assert(DEXOPT_PROFILE_GUIDED == 1 << 4, "DEXOPT_PROFILE_GUIDED unexpected.");
+static_assert(DEXOPT_SECONDARY_DEX  == 1 << 5, "DEXOPT_SECONDARY_DEX unexpected.");
+static_assert(DEXOPT_FORCE          == 1 << 6, "DEXOPT_FORCE unexpected.");
+static_assert(DEXOPT_STORAGE_CE     == 1 << 7, "DEXOPT_STORAGE_CE unexpected.");
+static_assert(DEXOPT_STORAGE_DE     == 1 << 8, "DEXOPT_STORAGE_DE unexpected.");
+
+static_assert(DEXOPT_MASK           == 0x1fe, "DEXOPT_MASK unexpected.");
+
+
+
 template<typename T>
 static constexpr T RoundDown(T x, typename std::decay<T>::type n) {
     return DCHECK_CONSTEXPR(IsPowerOfTwo(n), , T(0))(x & -n);
@@ -472,7 +491,8 @@ private:
                 case 6: {
                     // Version 1 had:
                     constexpr int OLD_DEXOPT_PUBLIC         = 1 << 1;
-                    constexpr int OLD_DEXOPT_SAFEMODE       = 1 << 2;
+                    // Note: DEXOPT_SAFEMODE has been removed.
+                    // constexpr int OLD_DEXOPT_SAFEMODE       = 1 << 2;
                     constexpr int OLD_DEXOPT_DEBUGGABLE     = 1 << 3;
                     constexpr int OLD_DEXOPT_BOOTCOMPLETE   = 1 << 4;
                     constexpr int OLD_DEXOPT_PROFILE_GUIDED = 1 << 5;
@@ -480,7 +500,6 @@ private:
                     int input = atoi(param);
                     package_parameters_.dexopt_flags =
                             ReplaceMask(input, OLD_DEXOPT_PUBLIC, DEXOPT_PUBLIC) |
-                            ReplaceMask(input, OLD_DEXOPT_SAFEMODE, DEXOPT_SAFEMODE) |
                             ReplaceMask(input, OLD_DEXOPT_DEBUGGABLE, DEXOPT_DEBUGGABLE) |
                             ReplaceMask(input, OLD_DEXOPT_BOOTCOMPLETE, DEXOPT_BOOTCOMPLETE) |
                             ReplaceMask(input, OLD_DEXOPT_PROFILE_GUIDED, DEXOPT_PROFILE_GUIDED) |
@@ -734,6 +753,10 @@ private:
     }
 
     static const char* ParseNull(const char* arg) {
+        // b/38186355. Revert soon.
+        if (strcmp(arg, "!null") == 0) {
+            return nullptr;
+        }
         return (strcmp(arg, "!") == 0) ? nullptr : arg;
     }
 

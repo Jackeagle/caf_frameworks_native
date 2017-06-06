@@ -1070,7 +1070,7 @@ int SensorService::setOperationParameter(
     for (sensors_event_t* i = event; i < event + 3; i++) {
         *i = (sensors_event_t) {
             .version = sizeof(sensors_event_t),
-            .sensor = 0,
+            .sensor = SENSORS_HANDLE_BASE - 1, // sensor that never exists
             .type = SENSOR_TYPE_ADDITIONAL_INFO,
             .timestamp = timestamp++,
             .additional_info = (additional_info_event_t) {
@@ -1247,6 +1247,12 @@ status_t SensorService::enable(const sp<SensorEventConnection>& connection,
     } else {
         ALOGW("sensor %08x already enabled in connection %p (ignoring)",
             handle, connection.get());
+    }
+
+    // Check maximum delay for the sensor.
+    nsecs_t maxDelayNs = sensor->getSensor().getMaxDelay() * 1000LL;
+    if (maxDelayNs > 0 && (samplingPeriodNs > maxDelayNs)) {
+        samplingPeriodNs = maxDelayNs;
     }
 
     nsecs_t minDelayNs = sensor->getSensor().getMinDelayNs();
@@ -1505,4 +1511,3 @@ bool SensorService::isOperationRestricted(const String16& opPackageName) {
 }
 
 }; // namespace android
-

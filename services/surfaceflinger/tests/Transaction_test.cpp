@@ -33,7 +33,7 @@ namespace android {
 
 // Fill an RGBA_8888 formatted surface with a single color.
 static void fillSurfaceRGBA8(const sp<SurfaceControl>& sc,
-        uint8_t r, uint8_t g, uint8_t b) {
+        uint8_t r, uint8_t g, uint8_t b, bool unlock=true) {
     ANativeWindow_Buffer outBuffer;
     sp<Surface> s = sc->getSurface();
     ASSERT_TRUE(s != NULL);
@@ -48,7 +48,9 @@ static void fillSurfaceRGBA8(const sp<SurfaceControl>& sc,
             pixel[3] = 255;
         }
     }
-    ASSERT_EQ(NO_ERROR, s->unlockAndPost());
+    if (unlock) {
+        ASSERT_EQ(NO_ERROR, s->unlockAndPost());
+    }
 }
 
 // A ScreenCapture is a screenshot from SurfaceFlinger that can be used to check
@@ -479,6 +481,17 @@ protected:
         sc->expectFGColor(127, 127);
         sc->expectBGColor(128, 128);
     }
+
+    void lockAndFillFGBuffer() {
+        fillSurfaceRGBA8(mFGSurfaceControl, 195, 63, 63, false);
+    }
+
+    void unlockFGBuffer() {
+        sp<Surface> s = mFGSurfaceControl->getSurface();
+        ASSERT_EQ(NO_ERROR, s->unlockAndPost());
+        waitForPostedBuffers();
+    }
+
     void completeFGResize() {
         fillSurfaceRGBA8(mFGSurfaceControl, 195, 63, 63);
         waitForPostedBuffers();
@@ -603,6 +616,65 @@ TEST_F(CropLatchingTest, FinalCropLatching) {
     completeFGResize();
 
     EXPECT_CROPPED_STATE("after the resize finishes");
+}
+
+// In this test we ensure that setGeometryAppliesWithResize actually demands
+// a buffer of the new size, and not just any size.
+TEST_F(CropLatchingTest, FinalCropLatchingBufferOldSize) {
+    EXPECT_INITIAL_STATE("before anything");
+    // Normally the crop applies immediately even while a resize is pending.
+    SurfaceComposerClient::openGlobalTransaction();
+    mFGSurfaceControl->setSize(128, 128);
+    mFGSurfaceControl->setFinalCrop(Rect(64, 64, 127, 127));
+    SurfaceComposerClient::closeGlobalTransaction(true);
+
+    EXPECT_CROPPED_STATE("after setting crop (without geometryAppliesWithResize)");
+
+    restoreInitialState();
+
+    // In order to prepare to submit a buffer at the wrong size, we acquire it prior to
+    // initiating the resize.
+    lockAndFillFGBuffer();
+
+    SurfaceComposerClient::openGlobalTransaction();
+    mFGSurfaceControl->setSize(128, 128);
+    mFGSurfaceControl->setGeometryAppliesWithResize();
+    mFGSurfaceControl->setFinalCrop(Rect(64, 64, 127, 127));
+    SurfaceComposerClient::closeGlobalTransaction(true);
+
+    EXPECT_INITIAL_STATE("after setting crop (with geometryAppliesWithResize)");
+
+    // We now submit our old buffer, at the old size, and ensure it doesn't
+    // trigger geometry latching.
+    unlockFGBuffer();
+
+    EXPECT_INITIAL_STATE("after unlocking FG buffer (with geometryAppliesWithResize)");
+
+    completeFGResize();
+
+    EXPECT_CROPPED_STATE("after the resize finishes");
+}
+
+TEST_F(CropLatchingTest, FinalCropLatchingRegressionForb37531386) {
+    EXPECT_INITIAL_STATE("before anything");
+    // In this scenario, we attempt to set the final crop a second time while the resize
+    // is still pending, and ensure we are successful. Success meaning the second crop
+    // is the one which eventually latches and not the first.
+    SurfaceComposerClient::openGlobalTransaction();
+    mFGSurfaceControl->setSize(128, 128);
+    mFGSurfaceControl->setGeometryAppliesWithResize();
+    mFGSurfaceControl->setFinalCrop(Rect(64, 64, 127, 127));
+    SurfaceComposerClient::closeGlobalTransaction(true);
+
+    SurfaceComposerClient::openGlobalTransaction();
+    mFGSurfaceControl->setFinalCrop(Rect(0, 0, -1, -1));
+    SurfaceComposerClient::closeGlobalTransaction(true);
+
+    EXPECT_INITIAL_STATE("after setting crops with geometryAppliesWithResize");
+
+    completeFGResize();
+
+    EXPECT_INITIAL_STATE("after the resize finishes");
 }
 
 TEST_F(LayerUpdateTest, DeferredTransactionTest) {
@@ -939,6 +1011,73 @@ TEST_F(ChildLayerTest, ChildrenInheritNonTransformScalingFromParent) {
         // And now it should be scaled all the way to 20x20
         mCapture->expectFGColor(20, 20);
     }
+}
+
+// Regression test for b/37673612
+TEST_F(ChildLayerTest, ChildrenWithParentBufferTransform) {
+    SurfaceComposerClient::openGlobalTransaction();
+    mChild->show();
+    mChild->setPosition(0, 0);
+    mFGSurfaceControl->setPosition(0, 0);
+    SurfaceComposerClient::closeGlobalTransaction(true);
+
+    {
+        ScreenCapture::captureScreen(&mCapture);
+        // We've positioned the child in the top left.
+        mCapture->expectChildColor(0, 0);
+        // But it's only 10x10.
+        mCapture->expectFGColor(10, 10);
+    }
+
+
+    // We set things up as in b/37673612 so that there is a mismatch between the buffer size and
+    // the WM specified state size.
+    mFGSurfaceControl->setSize(128, 64);
+    sp<Surface> s = mFGSurfaceControl->getSurface();
+    auto anw = static_cast<ANativeWindow*>(s.get());
+    native_window_set_buffers_transform(anw, NATIVE_WINDOW_TRANSFORM_ROT_90);
+    native_window_set_buffers_dimensions(anw, 64, 128);
+    fillSurfaceRGBA8(mFGSurfaceControl, 195, 63, 63);
+    waitForPostedBuffers();
+
+    {
+        // The child should still be in the same place and not have any strange scaling as in
+        // b/37673612.
+        ScreenCapture::captureScreen(&mCapture);
+        mCapture->expectChildColor(0, 0);
+        mCapture->expectFGColor(10, 10);
+    }
+}
+
+TEST_F(ChildLayerTest, Bug36858924) {
+    // Destroy the child layer
+    mChild.clear();
+
+    // Now recreate it as hidden
+    mChild = mComposerClient->createSurface(String8("Child surface"), 10, 10,
+                                            PIXEL_FORMAT_RGBA_8888, ISurfaceComposerClient::eHidden,
+                                            mFGSurfaceControl.get());
+
+    // Show the child layer in a deferred transaction
+    SurfaceComposerClient::openGlobalTransaction();
+    mChild->deferTransactionUntil(mFGSurfaceControl->getHandle(),
+                                  mFGSurfaceControl->getSurface()->getNextFrameNumber());
+    mChild->show();
+    SurfaceComposerClient::closeGlobalTransaction(true);
+
+    // Render the foreground surface a few times
+    //
+    // Prior to the bugfix for b/36858924, this would usually hang while trying to fill the third
+    // frame because SurfaceFlinger would never process the deferred transaction and would therefore
+    // never acquire/release the first buffer
+    ALOGI("Filling 1");
+    fillSurfaceRGBA8(mFGSurfaceControl, 0, 255, 0);
+    ALOGI("Filling 2");
+    fillSurfaceRGBA8(mFGSurfaceControl, 0, 0, 255);
+    ALOGI("Filling 3");
+    fillSurfaceRGBA8(mFGSurfaceControl, 255, 0, 0);
+    ALOGI("Filling 4");
+    fillSurfaceRGBA8(mFGSurfaceControl, 0, 255, 0);
 }
 
 }
