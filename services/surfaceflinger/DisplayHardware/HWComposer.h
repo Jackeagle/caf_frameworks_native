@@ -58,7 +58,6 @@ class DisplayDevice;
 class Fence;
 class FloatRect;
 class GraphicBuffer;
-class HWC2On1Adapter;
 class NativeHandle;
 class Region;
 class String8;
@@ -119,6 +118,9 @@ public:
 
     // does this display have layers handled by HWC
     bool hasDeviceComposition(int32_t displayId) const;
+
+    // does this display have pending request to flip FBT
+    bool hasFlipFBTRequest(int32_t displayId) const;
 
     // does this display have layers handled by GLES
     bool hasClientComposition(int32_t displayId) const;
@@ -205,7 +207,6 @@ private:
         HWC2::Vsync vsyncEnabled;
     };
 
-    std::unique_ptr<HWC2On1Adapter> mAdapter;
     std::unique_ptr<HWC2::Device>   mHwcDevice;
     std::vector<DisplayData>        mDisplayData;
     std::set<size_t>                mFreeDisplaySlots;

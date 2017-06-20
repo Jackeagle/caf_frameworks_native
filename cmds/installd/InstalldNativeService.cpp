@@ -78,6 +78,7 @@ static constexpr const char* PKG_LIB_POSTFIX = "/lib";
 static constexpr const char* CACHE_DIR_POSTFIX = "/cache";
 static constexpr const char* CODE_CACHE_DIR_POSTFIX = "/code_cache";
 
+static constexpr const char *kIdMapPath = "/system/bin/idmap";
 static constexpr const char* IDMAP_PREFIX = "/data/resource-cache/";
 static constexpr const char* IDMAP_SUFFIX = "@idmap";
 
@@ -914,15 +915,8 @@ binder::Status InstalldNativeService::destroyUserData(const std::unique_ptr<std:
     return res;
 }
 
-/* Try to ensure free_size bytes of storage are available.
- * Returns 0 on success.
- * This is rather simple-minded because doing a full LRU would
- * be potentially memory-intensive, and without atime it would
- * also require that apps constantly modify file metadata even
- * when just reading from the cache, which is pretty awful.
- */
 binder::Status InstalldNativeService::freeCache(const std::unique_ptr<std::string>& uuid,
-        int64_t freeStorageSize, int32_t flags) {
+        int64_t targetFreeBytes, int64_t cacheReservedBytes, int32_t flags) {
     ENFORCE_UID(AID_SYSTEM);
     CHECK_ARGUMENT_UUID(uuid);
     std::lock_guard<std::recursive_mutex> lock(mLock);
@@ -937,11 +931,12 @@ binder::Status InstalldNativeService::freeCache(const std::unique_ptr<std::strin
         return error("Failed to determine free space for " + data_path);
     }
 
-    int64_t needed = freeStorageSize - free;
+    int64_t cleared = 0;
+    int64_t needed = targetFreeBytes - free;
     LOG(DEBUG) << "Device " << data_path << " has " << free << " free; requested "
-            << freeStorageSize << "; needed " << needed;
+            << targetFreeBytes << "; needed " << needed;
 
-    if (free >= freeStorageSize) {
+    if (free >= targetFreeBytes) {
         return ok();
     }
 
@@ -998,6 +993,7 @@ binder::Status InstalldNativeService::freeCache(const std::unique_ptr<std::strin
 
         // 2. Populate tracker stats and insert into priority queue
         ATRACE_BEGIN("populate");
+        int64_t cacheTotal = 0;
         auto cmp = [](std::shared_ptr<CacheTracker> left, std::shared_ptr<CacheTracker> right) {
             return (left->getCacheRatio() < right->getCacheRatio());
         };
@@ -1006,6 +1002,7 @@ binder::Status InstalldNativeService::freeCache(const std::unique_ptr<std::strin
         for (const auto& it : trackers) {
             it.second->loadStats();
             queue.push(it.second);
+            cacheTotal += it.second->cacheUsed;
         }
         ATRACE_END();
 
@@ -1019,6 +1016,12 @@ binder::Status InstalldNativeService::freeCache(const std::unique_ptr<std::strin
                     && !(flags & FLAG_FREE_CACHE_V2_DEFY_QUOTA)) {
                 LOG(DEBUG) << "Active ratio " << active->getCacheRatio()
                         << " isn't over quota, and defy not requested";
+                break;
+            }
+
+            // Only keep clearing when we haven't pushed into reserved area
+            if (cacheReservedBytes > 0 && cleared >= (cacheTotal - cacheReservedBytes)) {
+                LOG(DEBUG) << "Refusing to clear cached data in reserved space";
                 break;
             }
 
@@ -1051,13 +1054,14 @@ binder::Status InstalldNativeService::freeCache(const std::unique_ptr<std::strin
                 }
                 active->cacheUsed -= item->size;
                 needed -= item->size;
+                cleared += item->size;
             }
 
             // Verify that we're actually done before bailing, since sneaky
             // apps might be using hardlinks
             if (needed <= 0) {
                 free = data_disk_free(data_path);
-                needed = freeStorageSize - free;
+                needed = targetFreeBytes - free;
                 if (needed <= 0) {
                     break;
                 } else {
@@ -1072,11 +1076,11 @@ binder::Status InstalldNativeService::freeCache(const std::unique_ptr<std::strin
     }
 
     free = data_disk_free(data_path);
-    if (free >= freeStorageSize) {
+    if (free >= targetFreeBytes) {
         return ok();
     } else {
         return error(StringPrintf("Failed to free up %" PRId64 " on %s; final free space %" PRId64,
-                freeStorageSize, data_path.c_str(), free));
+                targetFreeBytes, data_path.c_str(), free));
     }
 }
 
@@ -1941,14 +1945,58 @@ out:
 
 static void run_idmap(const char *target_apk, const char *overlay_apk, int idmap_fd)
 {
-    static const char *IDMAP_BIN = "/system/bin/idmap";
-    static const size_t MAX_INT_LEN = 32;
-    char idmap_str[MAX_INT_LEN];
+    execl(kIdMapPath, kIdMapPath, "--fd", target_apk, overlay_apk,
+            StringPrintf("%d", idmap_fd).c_str(), (char*)NULL);
+    PLOG(ERROR) << "execl (" << kIdMapPath << ") failed";
+}
 
-    snprintf(idmap_str, sizeof(idmap_str), "%d", idmap_fd);
+static void run_verify_idmap(const char *target_apk, const char *overlay_apk, int idmap_fd)
+{
+    execl(kIdMapPath, kIdMapPath, "--verify", target_apk, overlay_apk,
+            StringPrintf("%d", idmap_fd).c_str(), (char*)NULL);
+    PLOG(ERROR) << "execl (" << kIdMapPath << ") failed";
+}
 
-    execl(IDMAP_BIN, IDMAP_BIN, "--fd", target_apk, overlay_apk, idmap_str, (char*)NULL);
-    ALOGE("execl(%s) failed: %s\n", IDMAP_BIN, strerror(errno));
+static bool delete_stale_idmap(const char* target_apk, const char* overlay_apk,
+        const char* idmap_path, int32_t uid) {
+    int idmap_fd = open(idmap_path, O_RDWR);
+    if (idmap_fd < 0) {
+        PLOG(ERROR) << "idmap open failed: " << idmap_path;
+        unlink(idmap_path);
+        return true;
+    }
+
+    pid_t pid;
+    pid = fork();
+    if (pid == 0) {
+        /* child -- drop privileges before continuing */
+        if (setgid(uid) != 0) {
+            LOG(ERROR) << "setgid(" << uid << ") failed during idmap";
+            exit(1);
+        }
+        if (setuid(uid) != 0) {
+            LOG(ERROR) << "setuid(" << uid << ") failed during idmap";
+            exit(1);
+        }
+        if (flock(idmap_fd, LOCK_EX | LOCK_NB) != 0) {
+            PLOG(ERROR) << "flock(" << idmap_path << ") failed during idmap";
+            exit(1);
+        }
+
+        run_verify_idmap(target_apk, overlay_apk, idmap_fd);
+        exit(1); /* only if exec call to deleting stale idmap failed */
+    } else {
+        int status = wait_child(pid);
+        close(idmap_fd);
+
+        if (status != 0) {
+            // Failed on verifying if idmap is made from target_apk and overlay_apk.
+            LOG(DEBUG) << "delete stale idmap: " << idmap_path;
+            unlink(idmap_path);
+            return true;
+        }
+    }
+    return false;
 }
 
 // Transform string /a/b/c.apk to (prefix)/a@b@c.apk@(suffix)
@@ -1997,6 +2045,8 @@ binder::Status InstalldNativeService::idmap(const std::string& targetApkPath,
 
     int idmap_fd = -1;
     char idmap_path[PATH_MAX];
+    struct stat idmap_stat;
+    bool outdated = false;
 
     if (flatten_path(IDMAP_PREFIX, IDMAP_SUFFIX, overlay_apk,
                 idmap_path, sizeof(idmap_path)) == -1) {
@@ -2004,8 +2054,18 @@ binder::Status InstalldNativeService::idmap(const std::string& targetApkPath,
         goto fail;
     }
 
-    unlink(idmap_path);
-    idmap_fd = open(idmap_path, O_RDWR | O_CREAT | O_EXCL, 0644);
+    if (stat(idmap_path, &idmap_stat) < 0) {
+        outdated = true;
+    } else {
+        outdated = delete_stale_idmap(target_apk, overlay_apk, idmap_path, uid);
+    }
+
+    if (outdated) {
+        idmap_fd = open(idmap_path, O_RDWR | O_CREAT | O_EXCL, 0644);
+    } else {
+        idmap_fd = open(idmap_path, O_RDWR);
+    }
+
     if (idmap_fd < 0) {
         ALOGE("idmap cannot open '%s' for output: %s\n", idmap_path, strerror(errno));
         goto fail;
@@ -2017,6 +2077,11 @@ binder::Status InstalldNativeService::idmap(const std::string& targetApkPath,
     if (fchmod(idmap_fd, S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH) < 0) {
         ALOGE("idmap cannot chmod '%s'\n", idmap_path);
         goto fail;
+    }
+
+    if (!outdated) {
+        close(idmap_fd);
+        return ok();
     }
 
     pid_t pid;
@@ -2184,13 +2249,13 @@ binder::Status InstalldNativeService::moveAb(const std::string& apkPath,
 }
 
 binder::Status InstalldNativeService::deleteOdex(const std::string& apkPath,
-        const std::string& instructionSet, const std::string& outputPath) {
+        const std::string& instructionSet, const std::unique_ptr<std::string>& outputPath) {
     ENFORCE_UID(AID_SYSTEM);
     std::lock_guard<std::recursive_mutex> lock(mLock);
 
     const char* apk_path = apkPath.c_str();
     const char* instruction_set = instructionSet.c_str();
-    const char* oat_dir = outputPath.c_str();
+    const char* oat_dir = outputPath ? outputPath->c_str() : nullptr;
 
     bool res = delete_odex(apk_path, instruction_set, oat_dir);
     return res ? ok() : error();

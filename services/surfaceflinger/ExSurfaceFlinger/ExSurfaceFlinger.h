@@ -63,6 +63,7 @@ protected:
                      bool& freezeSurfacePresent,
                      const int32_t& id);
     virtual void updateVisibleRegionsDirty();
+    virtual bool IsHWCDisabled() { return mDebugDisableHWC; }
     virtual ~ExSurfaceFlinger();
 
     /* Extended Mode
@@ -75,13 +76,16 @@ protected:
     bool isDebug() { return mDebugLogs; }
     bool mDisableExtAnimation;
 
+    static bool sAllowHDRFallBack;
+    static bool AllowHDRFallBack() { return sAllowHDRFallBack; }
+
 #ifdef DEBUG_CONT_DUMPSYS
     virtual status_t dump(int fd, const Vector<String16>& args);
     virtual void dumpDrawCycle(bool prePrepare );
 
     struct {
       Mutex lock;
-      const char *name = "/data/misc/display/dumpsys.txt";
+      const char *name = "/data/vendor/display/dumpsys.txt";
       bool running = false;
       bool noLimit = false;
       bool replaceAfterCommit = false;
