@@ -30,11 +30,14 @@
 
 #include <gui/BufferItem.h>
 #include <gui/BufferQueueCore.h>
+#include <gui/GraphicBufferAlloc.h>
 #include <gui/IConsumerListener.h>
 #include <gui/IGraphicBufferAlloc.h>
 #include <gui/IProducerListener.h>
 #include <gui/ISurfaceComposer.h>
 #include <private/gui/ComposerService.h>
+
+#include <cutils/properties.h>
 
 namespace android {
 
@@ -93,8 +96,14 @@ BufferQueueCore::BufferQueueCore(const sp<IGraphicBufferAlloc>& allocator) :
     mUniqueId(getUniqueId())
 {
     if (allocator == NULL) {
-        sp<ISurfaceComposer> composer(ComposerService::getComposerService());
-        mAllocator = composer->createGraphicBufferAlloc();
+        // Run time check for headless, where we also allocate in-process.
+        if (property_get_bool("ro.config.headless", false)) {
+            mAllocator = new GraphicBufferAlloc();
+        } else {
+            sp<ISurfaceComposer> composer(ComposerService::getComposerService());
+            mAllocator = composer->createGraphicBufferAlloc();
+        }
+
         if (mAllocator == NULL) {
             BQ_LOGE("createGraphicBufferAlloc failed");
         }
