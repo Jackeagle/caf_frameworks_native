@@ -183,7 +183,9 @@ LOCAL_LDFLAGS := -Wl,--version-script,art/sigchainlib/version-script.txt -Wl,--e
 LOCAL_CFLAGS := -DLOG_TAG=\"SurfaceFlinger\"
 LOCAL_CPPFLAGS := -std=c++14
 
+ifneq ($(CAMERA_BOOT_OPTS),true)
 LOCAL_INIT_RC := surfaceflinger.rc
+endif
 
 ifneq ($(ENABLE_CPUSETS),)
     LOCAL_CFLAGS += -DENABLE_CPUSETS
