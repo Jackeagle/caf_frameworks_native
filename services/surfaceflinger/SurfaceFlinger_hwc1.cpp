@@ -157,6 +157,7 @@ SurfaceFlinger::SurfaceFlinger()
         mDebugInTransaction(0),
         mLastTransactionTime(0),
         mBootFinished(false),
+        mEarlyCameraFinished(false),
         mForceFullDamage(false),
         mPrimaryDispSync("PrimaryDispSync"),
         mPrimaryHWVsyncEnabled(false),
@@ -316,6 +317,15 @@ void SurfaceFlinger::bootFinished()
     // formerly we would just kill the process, but we now ask it to exit so it
     // can choose where to stop the animation.
     property_set("service.bootanim.exit", "1");
+    {
+        int fd = open("/sys/class/earlycamera/earlycamera/earlycamera_status", O_WRONLY);
+        if(fd < 0) {
+            ALOGE("open early camera node failed");
+        } else {
+            write(fd, "1", 1);
+            close(fd);
+        }
+    }
 
     const int LOGTAG_SF_STOP_BOOTANIM = 60110;
     LOG_EVENT_LONG(LOGTAG_SF_STOP_BOOTANIM,
@@ -1044,7 +1054,16 @@ void SurfaceFlinger::onMessageReceived(int32_t what) {
             break;
         }
         case MessageQueue::REFRESH: {
-            handleMessageRefresh();
+            char value[PROPERTY_VALUE_MAX] = {0};
+            if(!mEarlyCameraFinished){
+                property_get("sys.earlycamera_finished", value, "0");
+                if(!strcmp(value, "1")) {
+                    mEarlyCameraFinished = true;
+                    property_set("sys.boot_completed", "1");
+                }
+            }
+            if(mEarlyCameraFinished)
+                handleMessageRefresh();
             break;
         }
     }
