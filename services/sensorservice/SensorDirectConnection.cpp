@@ -18,8 +18,6 @@
 #include "SensorDirectConnection.h"
 #include <hardware/sensors.h>
 
-#include <sys/stat.h>
-
 #define UNUSED(x) (void)(x)
 
 namespace android {
@@ -29,12 +27,21 @@ SensorService::SensorDirectConnection::SensorDirectConnection(const sp<SensorSer
         const String16& opPackageName)
         : mService(service), mUid(uid), mMem(*mem),
         mHalChannelHandle(halChannelHandle),
-        mOpPackageName(opPackageName) {
+        mOpPackageName(opPackageName), mDestroyed(false) {
     ALOGD_IF(DEBUG_CONNECTIONS, "Created SensorDirectConnection");
 }
 
 SensorService::SensorDirectConnection::~SensorDirectConnection() {
     ALOGD_IF(DEBUG_CONNECTIONS, "~SensorDirectConnection %p", this);
+    destroy();
+}
+
+void SensorService::SensorDirectConnection::destroy() {
+    Mutex::Autolock _l(mDestroyLock);
+    // destroy once only
+    if (mDestroyed) {
+        return;
+    }
 
     stopAll();
     mService->cleanupConnection(this);
@@ -42,6 +49,7 @@ SensorService::SensorDirectConnection::~SensorDirectConnection() {
         native_handle_close(mMem.handle);
         native_handle_delete(const_cast<struct native_handle*>(mMem.handle));
     }
+    mDestroyed = true;
 }
 
 void SensorService::SensorDirectConnection::onFirstRef() {
@@ -182,13 +190,12 @@ bool SensorService::SensorDirectConnection::isEquivalent(const sensors_direct_me
     if (mMem.type == mem->type) {
         switch (mMem.type) {
             case SENSOR_DIRECT_MEM_TYPE_ASHMEM: {
-                struct stat s1, s2;
-                int fd1, fd2;
-                fd1 = mMem.handle->data[0];
-                fd2 = mem->handle->data[0];
-                if (fstat(fd1, &s1) < 0 || fstat(fd2, &s2) < 0 || s1.st_ino == s2.st_ino) {
-                    ret = true;
-                }
+                // there is no known method to test if two ashmem fds are equivalent besides
+                // trivially comparing the fd values (ino number from fstat() are always the
+                // same, pointing to "/dev/ashmem").
+                int fd1 = mMem.handle->data[0];
+                int fd2 = mem->handle->data[0];
+                ret = (fd1 == fd2);
                 break;
             }
             case SENSOR_DIRECT_MEM_TYPE_GRALLOC:

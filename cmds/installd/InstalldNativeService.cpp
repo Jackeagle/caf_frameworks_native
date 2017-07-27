@@ -915,15 +915,8 @@ binder::Status InstalldNativeService::destroyUserData(const std::unique_ptr<std:
     return res;
 }
 
-/* Try to ensure free_size bytes of storage are available.
- * Returns 0 on success.
- * This is rather simple-minded because doing a full LRU would
- * be potentially memory-intensive, and without atime it would
- * also require that apps constantly modify file metadata even
- * when just reading from the cache, which is pretty awful.
- */
 binder::Status InstalldNativeService::freeCache(const std::unique_ptr<std::string>& uuid,
-        int64_t freeStorageSize, int32_t flags) {
+        int64_t targetFreeBytes, int64_t cacheReservedBytes, int32_t flags) {
     ENFORCE_UID(AID_SYSTEM);
     CHECK_ARGUMENT_UUID(uuid);
     std::lock_guard<std::recursive_mutex> lock(mLock);
@@ -938,11 +931,12 @@ binder::Status InstalldNativeService::freeCache(const std::unique_ptr<std::strin
         return error("Failed to determine free space for " + data_path);
     }
 
-    int64_t needed = freeStorageSize - free;
+    int64_t cleared = 0;
+    int64_t needed = targetFreeBytes - free;
     LOG(DEBUG) << "Device " << data_path << " has " << free << " free; requested "
-            << freeStorageSize << "; needed " << needed;
+            << targetFreeBytes << "; needed " << needed;
 
-    if (free >= freeStorageSize) {
+    if (free >= targetFreeBytes) {
         return ok();
     }
 
@@ -999,6 +993,7 @@ binder::Status InstalldNativeService::freeCache(const std::unique_ptr<std::strin
 
         // 2. Populate tracker stats and insert into priority queue
         ATRACE_BEGIN("populate");
+        int64_t cacheTotal = 0;
         auto cmp = [](std::shared_ptr<CacheTracker> left, std::shared_ptr<CacheTracker> right) {
             return (left->getCacheRatio() < right->getCacheRatio());
         };
@@ -1007,6 +1002,7 @@ binder::Status InstalldNativeService::freeCache(const std::unique_ptr<std::strin
         for (const auto& it : trackers) {
             it.second->loadStats();
             queue.push(it.second);
+            cacheTotal += it.second->cacheUsed;
         }
         ATRACE_END();
 
@@ -1020,6 +1016,12 @@ binder::Status InstalldNativeService::freeCache(const std::unique_ptr<std::strin
                     && !(flags & FLAG_FREE_CACHE_V2_DEFY_QUOTA)) {
                 LOG(DEBUG) << "Active ratio " << active->getCacheRatio()
                         << " isn't over quota, and defy not requested";
+                break;
+            }
+
+            // Only keep clearing when we haven't pushed into reserved area
+            if (cacheReservedBytes > 0 && cleared >= (cacheTotal - cacheReservedBytes)) {
+                LOG(DEBUG) << "Refusing to clear cached data in reserved space";
                 break;
             }
 
@@ -1052,13 +1054,14 @@ binder::Status InstalldNativeService::freeCache(const std::unique_ptr<std::strin
                 }
                 active->cacheUsed -= item->size;
                 needed -= item->size;
+                cleared += item->size;
             }
 
             // Verify that we're actually done before bailing, since sneaky
             // apps might be using hardlinks
             if (needed <= 0) {
                 free = data_disk_free(data_path);
-                needed = freeStorageSize - free;
+                needed = targetFreeBytes - free;
                 if (needed <= 0) {
                     break;
                 } else {
@@ -1073,11 +1076,11 @@ binder::Status InstalldNativeService::freeCache(const std::unique_ptr<std::strin
     }
 
     free = data_disk_free(data_path);
-    if (free >= freeStorageSize) {
+    if (free >= targetFreeBytes) {
         return ok();
     } else {
         return error(StringPrintf("Failed to free up %" PRId64 " on %s; final free space %" PRId64,
-                freeStorageSize, data_path.c_str(), free));
+                targetFreeBytes, data_path.c_str(), free));
     }
 }
 
@@ -1638,6 +1641,7 @@ binder::Status InstalldNativeService::getExternalSize(const std::unique_ptr<std:
     int64_t videoSize = 0;
     int64_t imageSize = 0;
     int64_t appSize = 0;
+    int64_t obbSize = 0;
 
     auto device = findQuotaDeviceForUuid(uuid);
     if (device.empty()) {
@@ -1685,6 +1689,13 @@ binder::Status InstalldNativeService::getExternalSize(const std::unique_ptr<std:
 #endif
             imageSize = dq.dqb_curspace;
         }
+        if (quotactl(QCMD(Q_GETQUOTA, GRPQUOTA), device.c_str(), AID_MEDIA_OBB,
+                reinterpret_cast<char*>(&dq)) == 0) {
+#if MEASURE_DEBUG
+            LOG(DEBUG) << "quotactl() for GID " << AID_MEDIA_OBB << " " << dq.dqb_curspace;
+#endif
+            obbSize = dq.dqb_curspace;
+        }
         ATRACE_END();
 
         ATRACE_BEGIN("apps");
@@ -1695,7 +1706,7 @@ binder::Status InstalldNativeService::getExternalSize(const std::unique_ptr<std:
                 collectQuotaStats(device, userId, appId, nullptr, &extStats);
             }
         }
-        appSize = extStats.dataSize + extStats.cacheSize;
+        appSize = extStats.dataSize;
         ATRACE_END();
     } else {
         ATRACE_BEGIN("manual");
@@ -1741,6 +1752,11 @@ binder::Status InstalldNativeService::getExternalSize(const std::unique_ptr<std:
         }
         fts_close(fts);
         ATRACE_END();
+
+        ATRACE_BEGIN("obb");
+        auto obbPath = create_data_media_obb_path(uuid_, "");
+        calculate_tree_size(obbPath, &obbSize);
+        ATRACE_END();
     }
 
     std::vector<int64_t> ret;
@@ -1749,6 +1765,7 @@ binder::Status InstalldNativeService::getExternalSize(const std::unique_ptr<std:
     ret.push_back(videoSize);
     ret.push_back(imageSize);
     ret.push_back(appSize);
+    ret.push_back(obbSize);
 #if MEASURE_DEBUG
     LOG(DEBUG) << "Final result " << toString(ret);
 #endif
@@ -1780,6 +1797,16 @@ binder::Status InstalldNativeService::dumpProfiles(int32_t uid, const std::strin
     const char* code_paths = codePaths.c_str();
 
     *_aidl_return = dump_profiles(uid, pkgname, code_paths);
+    return ok();
+}
+
+// Copy the contents of a system profile over the data profile.
+binder::Status InstalldNativeService::copySystemProfile(const std::string& systemProfile,
+        int32_t packageUid, const std::string& packageName, bool* _aidl_return) {
+    ENFORCE_UID(AID_SYSTEM);
+    CHECK_ARGUMENT_PACKAGE_NAME(packageName);
+    std::lock_guard<std::recursive_mutex> lock(mLock);
+    *_aidl_return = copy_system_profile(systemProfile, packageUid, packageName);
     return ok();
 }
 
@@ -2246,13 +2273,13 @@ binder::Status InstalldNativeService::moveAb(const std::string& apkPath,
 }
 
 binder::Status InstalldNativeService::deleteOdex(const std::string& apkPath,
-        const std::string& instructionSet, const std::string& outputPath) {
+        const std::string& instructionSet, const std::unique_ptr<std::string>& outputPath) {
     ENFORCE_UID(AID_SYSTEM);
     std::lock_guard<std::recursive_mutex> lock(mLock);
 
     const char* apk_path = apkPath.c_str();
     const char* instruction_set = instructionSet.c_str();
-    const char* oat_dir = outputPath.c_str();
+    const char* oat_dir = outputPath ? outputPath->c_str() : nullptr;
 
     bool res = delete_odex(apk_path, instruction_set, oat_dir);
     return res ? ok() : error();

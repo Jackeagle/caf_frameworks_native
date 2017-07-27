@@ -15,6 +15,8 @@ on post-fs
     chown root shell /sys/kernel/tracing/options/overwrite
     chown root shell /sys/kernel/debug/tracing/options/print-tgid
     chown root shell /sys/kernel/tracing/options/print-tgid
+    chown root shell /sys/kernel/debug/tracing/saved_cmdlines_size
+    chown root shell /sys/kernel/tracing/saved_cmdlines_size
     chown root shell /sys/kernel/debug/tracing/events/sched/sched_switch/enable
     chown root shell /sys/kernel/tracing/events/sched/sched_switch/enable
     chown root shell /sys/kernel/debug/tracing/events/sched/sched_wakeup/enable
@@ -23,6 +25,8 @@ on post-fs
     chown root shell /sys/kernel/tracing/events/sched/sched_blocked_reason/enable
     chown root shell /sys/kernel/debug/tracing/events/sched/sched_cpu_hotplug/enable
     chown root shell /sys/kernel/tracing/events/sched/sched_cpu_hotplug/enable
+    chown root shell /sys/kernel/debug/tracing/events/cgroup/enable
+    chown root shell /sys/kernel/tracing/events/cgroup/enable
     chown root shell /sys/kernel/debug/tracing/events/power/cpu_frequency/enable
     chown root shell /sys/kernel/tracing/events/power/cpu_frequency/enable
     chown root shell /sys/kernel/debug/tracing/events/power/cpu_idle/enable
@@ -51,6 +55,8 @@ on post-fs
     chown root shell /sys/kernel/tracing/events/binder/binder_locked/enable
     chown root shell /sys/kernel/debug/tracing/events/binder/binder_unlock/enable
     chown root shell /sys/kernel/tracing/events/binder/binder_unlock/enable
+    chown root shell /sys/kernel/debug/tracing/events/lowmemorykiller/enable
+    chown root shell /sys/kernel/tracing/events/lowmemorykiller/enable
 
     chown root shell /sys/kernel/debug/tracing/tracing_on
     chown root shell /sys/kernel/tracing/tracing_on
@@ -63,6 +69,8 @@ on post-fs
     chmod 0664 /sys/kernel/tracing/options/overwrite
     chmod 0664 /sys/kernel/debug/tracing/options/print-tgid
     chmod 0664 /sys/kernel/tracing/options/print-tgid
+    chmod 0664 /sys/kernel/debug/tracing/saved_cmdlines_size
+    chmod 0664 /sys/kernel/tracing/saved_cmdlines_size
     chmod 0664 /sys/kernel/debug/tracing/events/sched/sched_switch/enable
     chmod 0664 /sys/kernel/tracing/events/sched/sched_switch/enable
     chmod 0664 /sys/kernel/debug/tracing/events/sched/sched_wakeup/enable
@@ -71,6 +79,8 @@ on post-fs
     chmod 0664 /sys/kernel/tracing/events/sched/sched_blocked_reason/enable
     chmod 0664 /sys/kernel/debug/tracing/events/sched/sched_cpu_hotplug/enable
     chmod 0664 /sys/kernel/tracing/events/sched/sched_cpu_hotplug/enable
+    chmod 0664 /sys/kernel/debug/tracing/events/cgroup/enable
+    chmod 0664 /sys/kernel/tracing/events/cgroup/enable
     chmod 0664 /sys/kernel/debug/tracing/events/power/cpu_frequency/enable
     chmod 0664 /sys/kernel/tracing/events/power/cpu_frequency/enable
     chmod 0664 /sys/kernel/debug/tracing/events/power/cpu_idle/enable
@@ -119,6 +129,8 @@ on post-fs
     chmod 0664 /sys/kernel/tracing/events/i2c/smbus_result/enable
     chmod 0664 /sys/kernel/debug/tracing/events/i2c/smbus_reply/enable
     chmod 0664 /sys/kernel/tracing/events/i2c/smbus_reply/enable
+    chmod 0664 /sys/kernel/debug/tracing/events/lowmemorykiller/enable
+    chmod 0664 /sys/kernel/tracing/events/lowmemorykiller/enable
 
     # Tracing disabled by default
     write /sys/kernel/debug/tracing/tracing_on 0

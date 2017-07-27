@@ -17,7 +17,10 @@
 #ifndef ANDROID_FRAMEWORKS_SENSORSERVICE_V1_0_SENSORMANAGER_H
 #define ANDROID_FRAMEWORKS_SENSORSERVICE_V1_0_SENSORMANAGER_H
 
+#include <jni.h>
+
 #include <mutex>
+#include <thread>
 
 #include <android/frameworks/sensorservice/1.0/ISensorManager.h>
 #include <android/frameworks/sensorservice/1.0/types.h>
@@ -36,10 +39,11 @@ using ::android::hardware::sensors::V1_0::SensorType;
 using ::android::hardware::hidl_handle;
 using ::android::hardware::hidl_memory;
 using ::android::hardware::Return;
+using ::android::sp;
 
 struct SensorManager final : public ISensorManager {
 
-    SensorManager();
+    SensorManager(JavaVM* vm);
     ~SensorManager();
 
     // Methods from ::android::frameworks::sensorservice::V1_0::ISensorManager follow.
@@ -50,11 +54,19 @@ struct SensorManager final : public ISensorManager {
     Return<void> createEventQueue(const sp<IEventQueueCallback> &callback, createEventQueue_cb _hidl_cb);
 
 private:
-    sp<::android::Looper> getLooper();
+    // Block until ::android::SensorManager is initialized.
+    ::android::SensorManager& getInternalManager();
+    sp<Looper> getLooper();
 
-    ::android::SensorManager& mInternalManager;
-    std::mutex mLooperMutex;
-    sp<::android::Looper> mLooper;
+    std::mutex mInternalManagerMutex;
+    ::android::SensorManager* mInternalManager = nullptr; // does not own
+    sp<Looper> mLooper;
+
+    volatile bool mStopThread;
+    std::mutex mThreadMutex; //protects mPollThread
+    std::thread mPollThread;
+
+    JavaVM* mJavaVm;
 };
 
 }  // namespace implementation

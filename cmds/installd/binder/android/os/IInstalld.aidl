@@ -57,6 +57,8 @@ interface IInstalld {
 
     boolean mergeProfiles(int uid, @utf8InCpp String packageName);
     boolean dumpProfiles(int uid, @utf8InCpp String packageName, @utf8InCpp String codePaths);
+    boolean copySystemProfile(@utf8InCpp String systemProfile, int uid,
+            @utf8InCpp String packageName);
     void clearAppProfiles(@utf8InCpp String packageName);
     void destroyAppProfiles(@utf8InCpp String packageName);
 
@@ -64,7 +66,8 @@ interface IInstalld {
     void removeIdmap(@utf8InCpp String overlayApkPath);
     void rmPackageDir(@utf8InCpp String packageDir);
     void markBootComplete(@utf8InCpp String instructionSet);
-    void freeCache(@nullable @utf8InCpp String uuid, long freeStorageSize, int flags);
+    void freeCache(@nullable @utf8InCpp String uuid, long targetFreeBytes,
+            long cacheReservedBytes, int flags);
     void linkNativeLibraryDirectory(@nullable @utf8InCpp String uuid,
             @utf8InCpp String packageName, @utf8InCpp String nativeLibPath32, int userId);
     void createOatDir(@utf8InCpp String oatDir, @utf8InCpp String instructionSet);
@@ -73,7 +76,7 @@ interface IInstalld {
     void moveAb(@utf8InCpp String apkPath, @utf8InCpp String instructionSet,
             @utf8InCpp String outputPath);
     void deleteOdex(@utf8InCpp String apkPath, @utf8InCpp String instructionSet,
-            @utf8InCpp String outputPath);
+            @nullable @utf8InCpp String outputPath);
 
     boolean reconcileSecondaryDexFile(@utf8InCpp String dexPath, @utf8InCpp String pkgName,
         int uid, in @utf8InCpp String[] isas, @nullable @utf8InCpp String volume_uuid,

@@ -280,7 +280,8 @@ private:
         const sp<IGraphicBufferProducer>& bufferProducer) const;
     virtual status_t getSupportedFrameTimestamps(
             std::vector<FrameEvent>* outSupported) const;
-    virtual sp<IDisplayEventConnection> createDisplayEventConnection();
+    virtual sp<IDisplayEventConnection> createDisplayEventConnection(
+            ISurfaceComposer::VsyncSource vsyncSource = eVsyncSourceApp);
     virtual status_t captureScreen(const sp<IBinder>& display,
             const sp<IGraphicBufferProducer>& producer,
             Rect sourceCrop, uint32_t reqWidth, uint32_t reqHeight,
@@ -429,7 +430,7 @@ private:
     status_t onLayerDestroyed(const wp<Layer>& layer);
 
     // remove a layer from SurfaceFlinger immediately
-    status_t removeLayer(const sp<Layer>& layer);
+    status_t removeLayer(const sp<Layer>& layer, bool topLevelOnly = false);
 
     // add a layer to SurfaceFlinger
     status_t addClientLayer(const sp<Client>& client,
@@ -546,8 +547,10 @@ private:
 
     // Given a dataSpace, returns the appropriate color_mode to use
     // to display that dataSpace.
-    android_color_mode pickColorMode(android_dataspace dataSpace);
-    android_dataspace bestTargetDataSpace(android_dataspace a, android_dataspace b);
+    android_color_mode pickColorMode(android_dataspace dataSpace) const;
+    android_dataspace bestTargetDataSpace(android_dataspace a, android_dataspace b) const;
+
+    mat4 computeSaturationMatrix() const;
 
     void setUpHWComposer();
     void doComposition();
@@ -785,7 +788,9 @@ private:
     std::atomic<bool> mVrFlingerRequestsDisplay;
     static bool useVrFlinger;
 #endif
-    };
+
+    float mSaturation = 1.0f;
+};
 }; // namespace android
 
 #endif // ANDROID_SURFACE_FLINGER_H

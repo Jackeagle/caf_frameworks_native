@@ -536,7 +536,8 @@ void SurfaceFlinger::init() {
             *static_cast<HWComposer::EventHandler *>(this));
 
     // get a RenderEngine for the given display / config (can't fail)
-    mRenderEngine = RenderEngine::create(mEGLDisplay, mHwc->getVisualID());
+    mRenderEngine = RenderEngine::create(mEGLDisplay,
+            mHwc->getVisualID(), 0);
 
     // retrieve the EGL context that was selected/created
     mEGLContext = mRenderEngine->getEGLContext();
@@ -932,8 +933,13 @@ status_t SurfaceFlinger::injectVSync(nsecs_t when) {
 
 // ----------------------------------------------------------------------------
 
-sp<IDisplayEventConnection> SurfaceFlinger::createDisplayEventConnection() {
-    return mEventThread->createEventConnection();
+sp<IDisplayEventConnection> SurfaceFlinger::createDisplayEventConnection(
+        ISurfaceComposer::VsyncSource vsyncSource) {
+    if (vsyncSource == eVsyncSourceSurfaceFlinger) {
+        return mSFEventThread->createEventConnection();
+    } else {
+        return mEventThread->createEventConnection();
+    }
 }
 
 // ----------------------------------------------------------------------------
@@ -1251,6 +1257,7 @@ void SurfaceFlinger::postComposition(nsecs_t refreshStartTime)
     const HWComposer& hwc = getHwComposer();
     const sp<const DisplayDevice> hw(getDefaultDisplayDevice());
 
+    mGlCompositionDoneTimeline.updateSignalTimes();
     std::shared_ptr<FenceTime> glCompositionDoneFenceTime;
     if (getHwComposer().hasGlesComposition(hw->getHwcDisplayId())) {
         glCompositionDoneFenceTime =
@@ -1259,12 +1266,11 @@ void SurfaceFlinger::postComposition(nsecs_t refreshStartTime)
     } else {
         glCompositionDoneFenceTime = FenceTime::NO_FENCE;
     }
-    mGlCompositionDoneTimeline.updateSignalTimes();
 
+    mDisplayTimeline.updateSignalTimes();
     sp<Fence> retireFence = mHwc->getDisplayFence(HWC_DISPLAY_PRIMARY);
     auto retireFenceTime = std::make_shared<FenceTime>(retireFence);
     mDisplayTimeline.push(retireFenceTime);
-    mDisplayTimeline.updateSignalTimes();
 
     nsecs_t vsyncPhase = mPrimaryDispSync.computeNextRefresh(0);
     nsecs_t vsyncInterval = mPrimaryDispSync.getPeriod();
@@ -1292,7 +1298,7 @@ void SurfaceFlinger::postComposition(nsecs_t refreshStartTime)
     });
 
     if (retireFence->isValid()) {
-        if (mPrimaryDispSync.addPresentFence(retireFence)) {
+        if (mPrimaryDispSync.addPresentFence(retireFenceTime)) {
             enableHardwareVsync();
         } else {
             disableHardwareVsync(false);
@@ -2321,8 +2327,13 @@ status_t SurfaceFlinger::addClientLayer(const sp<Client>& client,
         if (parent == nullptr) {
             mCurrentState.layersSortedByZ.add(lbc);
         } else {
+            if (mCurrentState.layersSortedByZ.indexOf(parent) < 0) {
+                ALOGE("addClientLayer called with a removed parent");
+                return NAME_NOT_FOUND;
+            }
             parent->addChild(lbc);
         }
+
         mGraphicBufferProducerList.add(IInterface::asBinder(gbc));
         mLayersAdded = true;
         mNumLayers++;
@@ -2334,12 +2345,29 @@ status_t SurfaceFlinger::addClientLayer(const sp<Client>& client,
     return NO_ERROR;
 }
 
-status_t SurfaceFlinger::removeLayer(const sp<Layer>& layer) {
+status_t SurfaceFlinger::removeLayer(const sp<Layer>& layer, bool topLevelOnly) {
     Mutex::Autolock _l(mStateLock);
 
     const auto& p = layer->getParent();
-    const ssize_t index = (p != nullptr) ? p->removeChild(layer) :
-             mCurrentState.layersSortedByZ.remove(layer);
+    ssize_t index;
+    if (p != nullptr) {
+        if (topLevelOnly) {
+            return NO_ERROR;
+        }
+
+        sp<Layer> ancestor = p;
+        while (ancestor->getParent() != nullptr) {
+            ancestor = ancestor->getParent();
+        }
+        if (mCurrentState.layersSortedByZ.indexOf(ancestor) < 0) {
+            ALOGE("removeLayer called with a layer whose parent has been removed");
+            return NAME_NOT_FOUND;
+        }
+
+        index = p->removeChild(layer);
+    } else {
+        index = mCurrentState.layersSortedByZ.remove(layer);
+    }
 
     // As a matter of normal operation, the LayerCleaner will produce a second
     // attempt to remove the surface. The Layer will be kept alive in mDrawingState
@@ -2357,7 +2385,7 @@ status_t SurfaceFlinger::removeLayer(const sp<Layer>& layer) {
 
     mLayersPendingRemoval.add(layer);
     mLayersRemoved = true;
-    mNumLayers--;
+    mNumLayers -= 1 + layer->getChildrenCount();
     setTransactionFlags(eTransactionNeeded);
     return NO_ERROR;
 }
@@ -2764,11 +2792,9 @@ status_t SurfaceFlinger::onLayerDestroyed(const wp<Layer>& layer)
     if (l == nullptr) {
         // The layer has already been removed, carry on
         return NO_ERROR;
-    } if (l->getParent() != nullptr) {
-        // If we have a parent, then we can continue to live as long as it does.
-        return NO_ERROR;
     }
-    return removeLayer(l);
+    // If we have a parent, then we can continue to live as long as it does.
+    return removeLayer(l, true);
 }
 
 // ---------------------------------------------------------------------------
@@ -2845,7 +2871,8 @@ void SurfaceFlinger::setPowerModeInternal(const sp<DisplayDevice>& hw,
     if (currentMode == HWC_POWER_MODE_OFF) {
         // Turn on the display
         getHwComposer().setPowerMode(type, mode);
-        if (type == DisplayDevice::DISPLAY_PRIMARY) {
+        if (type == DisplayDevice::DISPLAY_PRIMARY &&
+            mode != HWC_POWER_MODE_DOZE_SUSPEND) {
             // FIXME: eventthread only knows about the main display right now
             mEventThread->onScreenAcquired();
             resyncToHardwareVsync(true);
@@ -2877,7 +2904,25 @@ void SurfaceFlinger::setPowerModeInternal(const sp<DisplayDevice>& hw,
         getHwComposer().setPowerMode(type, mode);
         mVisibleRegionsDirty = true;
         // from this point on, SF will stop drawing on this display
+    } else if (mode == HWC_POWER_MODE_DOZE ||
+               mode == HWC_POWER_MODE_NORMAL) {
+        // Update display while dozing
+        getHwComposer().setPowerMode(type, mode);
+        if (type == DisplayDevice::DISPLAY_PRIMARY) {
+            // FIXME: eventthread only knows about the main display right now
+            mEventThread->onScreenAcquired();
+            resyncToHardwareVsync(true);
+        }
+    } else if (mode == HWC_POWER_MODE_DOZE_SUSPEND) {
+        // Leave display going to doze
+        if (type == DisplayDevice::DISPLAY_PRIMARY) {
+            disableHardwareVsync(true); // also cancels any in-progress resync
+            // FIXME: eventthread only knows about the main display right now
+            mEventThread->onScreenReleased();
+        }
+        getHwComposer().setPowerMode(type, mode);
     } else {
+        ALOGE("Attempting to set unknown power mode: %d\n", mode);
         getHwComposer().setPowerMode(type, mode);
     }
 }

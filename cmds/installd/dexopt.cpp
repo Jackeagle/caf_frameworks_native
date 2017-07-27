@@ -847,6 +847,70 @@ bool dump_profiles(int32_t uid, const std::string& pkgname, const char* code_pat
     return true;
 }
 
+bool copy_system_profile(const std::string& system_profile,
+        uid_t packageUid, const std::string& data_profile_location) {
+    unique_fd in_fd(open(system_profile.c_str(), O_RDONLY | O_NOFOLLOW | O_CLOEXEC));
+    unique_fd out_fd(open_reference_profile(packageUid,
+                     data_profile_location,
+                     /*read_write*/ true,
+                     /*secondary*/ false));
+    if (in_fd.get() < 0) {
+        PLOG(WARNING) << "Could not open profile " << system_profile;
+        return false;
+    }
+    if (out_fd.get() < 0) {
+        PLOG(WARNING) << "Could not open profile " << data_profile_location;
+        return false;
+    }
+
+    // As a security measure we want to write the profile information with the reduced capabilities
+    // of the package user id. So we fork and drop capabilities in the child.
+    pid_t pid = fork();
+    if (pid == 0) {
+        /* child -- drop privileges before continuing */
+        drop_capabilities(packageUid);
+
+        if (flock(out_fd.get(), LOCK_EX | LOCK_NB) != 0) {
+            if (errno != EWOULDBLOCK) {
+                PLOG(WARNING) << "Error locking profile " << data_profile_location;
+            }
+            // This implies that the app owning this profile is running
+            // (and has acquired the lock).
+            //
+            // The app never acquires the lock for the reference profiles of primary apks.
+            // Only dex2oat from installd will do that. Since installd is single threaded
+            // we should not see this case. Nevertheless be prepared for it.
+            PLOG(WARNING) << "Failed to flock " << data_profile_location;
+            return false;
+        }
+
+        bool truncated = ftruncate(out_fd.get(), 0) == 0;
+        if (!truncated) {
+            PLOG(WARNING) << "Could not truncate " << data_profile_location;
+        }
+
+        // Copy over data.
+        static constexpr size_t kBufferSize = 4 * 1024;
+        char buffer[kBufferSize];
+        while (true) {
+            ssize_t bytes = read(in_fd.get(), buffer, kBufferSize);
+            if (bytes == 0) {
+                break;
+            }
+            write(out_fd.get(), buffer, bytes);
+        }
+        if (flock(out_fd.get(), LOCK_UN) != 0) {
+            PLOG(WARNING) << "Error unlocking profile " << data_profile_location;
+        }
+        // Use _exit since we don't want to run the global destructors in the child.
+        // b/62597429
+        _exit(0);
+    }
+    /* parent */
+    int return_code = wait_child(pid);
+    return return_code == 0;
+}
+
 static std::string replace_file_extension(const std::string& oat_path, const std::string& new_ext) {
   // A standard dalvik-cache entry. Replace ".dex" with `new_ext`.
   if (EndsWith(oat_path, ".dex")) {
@@ -926,14 +990,22 @@ static bool IsOutputDalvikCache(const char* oat_dir) {
   return oat_dir == nullptr || oat_dir[0] == '!';
 }
 
+// Best-effort check whether we can fit the the path into our buffers.
+// Note: the cache path will require an additional 5 bytes for ".swap", but we'll try to run
+// without a swap file, if necessary. Reference profiles file also add an extra ".prof"
+// extension to the cache path (5 bytes).
+// TODO(calin): move away from char* buffers and PKG_PATH_MAX.
+static bool validate_dex_path_size(const std::string& dex_path) {
+    if (dex_path.size() >= (PKG_PATH_MAX - 8)) {
+        LOG(ERROR) << "dex_path too long: " << dex_path;
+        return false;
+    }
+    return true;
+}
+
 static bool create_oat_out_path(const char* apk_path, const char* instruction_set,
             const char* oat_dir, bool is_secondary_dex, /*out*/ char* out_oat_path) {
-    // Early best-effort check whether we can fit the the path into our buffers.
-    // Note: the cache path will require an additional 5 bytes for ".swap", but we'll try to run
-    // without a swap file, if necessary. Reference profiles file also add an extra ".prof"
-    // extension to the cache path (5 bytes).
-    if (strlen(apk_path) >= (PKG_PATH_MAX - 8)) {
-        ALOGE("apk_path too long '%s'\n", apk_path);
+    if (!validate_dex_path_size(apk_path)) {
         return false;
     }
 
@@ -1154,7 +1226,7 @@ Dex2oatFileWrapper maybe_open_reference_profile(const std::string& pkgname,
 // out_vdex_wrapper_fd. Returns true for success or false in case of errors.
 bool open_vdex_files(const char* apk_path, const char* out_oat_path, int dexopt_needed,
         const char* instruction_set, bool is_public, int uid, bool is_secondary_dex,
-        Dex2oatFileWrapper* in_vdex_wrapper_fd,
+        bool profile_guided, Dex2oatFileWrapper* in_vdex_wrapper_fd,
         Dex2oatFileWrapper* out_vdex_wrapper_fd) {
     CHECK(in_vdex_wrapper_fd != nullptr);
     CHECK(out_vdex_wrapper_fd != nullptr);
@@ -1164,6 +1236,14 @@ bool open_vdex_files(const char* apk_path, const char* out_oat_path, int dexopt_
     int dexopt_action = abs(dexopt_needed);
     bool is_odex_location = dexopt_needed < 0;
     std::string in_vdex_path_str;
+
+    // Infer the name of the output VDEX.
+    const std::string out_vdex_path_str = create_vdex_filename(out_oat_path);
+    if (out_vdex_path_str.empty()) {
+        return false;
+    }
+
+    bool update_vdex_in_place = false;
     if (dexopt_action != DEX2OAT_FROM_SCRATCH) {
         // Open the possibly existing vdex. If none exist, we pass -1 to dex2oat for input-vdex-fd.
         const char* path = nullptr;
@@ -1182,26 +1262,32 @@ bool open_vdex_files(const char* apk_path, const char* out_oat_path, int dexopt_
             ALOGE("installd cannot compute input vdex location for '%s'\n", path);
             return false;
         }
-        if (dexopt_action == DEX2OAT_FOR_BOOT_IMAGE) {
-            // When we dex2oat because of boot image change, we are going to update
-            // in-place the vdex file.
+        // We can update in place when all these conditions are met:
+        // 1) The vdex location to write to is the same as the vdex location to read (vdex files
+        //    on /system typically cannot be updated in place).
+        // 2) We dex2oat due to boot image change, because we then know the existing vdex file
+        //    cannot be currently used by a running process.
+        // 3) We are not doing a profile guided compilation, because dexlayout requires two
+        //    different vdex files to operate.
+        update_vdex_in_place =
+            (in_vdex_path_str == out_vdex_path_str) &&
+            (dexopt_action == DEX2OAT_FOR_BOOT_IMAGE) &&
+            !profile_guided;
+        if (update_vdex_in_place) {
+            // Open the file read-write to be able to update it.
             in_vdex_wrapper_fd->reset(open(in_vdex_path_str.c_str(), O_RDWR, 0));
+            if (in_vdex_wrapper_fd->get() == -1) {
+                // If we failed to open the file, we cannot update it in place.
+                update_vdex_in_place = false;
+            }
         } else {
             in_vdex_wrapper_fd->reset(open(in_vdex_path_str.c_str(), O_RDONLY, 0));
         }
     }
 
-    // Infer the name of the output VDEX and create it.
-    const std::string out_vdex_path_str = create_vdex_filename(out_oat_path);
-    if (out_vdex_path_str.empty()) {
-        return false;
-    }
-
-    // If we are compiling because the boot image is out of date, we do not
-    // need to recreate a vdex, and can use the same existing one.
-    if (dexopt_action == DEX2OAT_FOR_BOOT_IMAGE &&
-            in_vdex_wrapper_fd->get() != -1 &&
-            in_vdex_path_str == out_vdex_path_str) {
+    // If we are updating the vdex in place, we do not need to recreate a vdex,
+    // and can use the same existing one.
+    if (update_vdex_in_place) {
         // We unlink the file in case the invocation of dex2oat fails, to ensure we don't
         // have bogus stale vdex files.
         out_vdex_wrapper_fd->reset(
@@ -1272,33 +1358,29 @@ void update_out_oat_access_times(const char* apk_path, const char* out_oat_path)
 // The analyzer will check if the dex_file needs to be (re)compiled to match the compiler_filter.
 // If this is for a profile guided compilation, profile_was_updated will tell whether or not
 // the profile has changed.
-static void exec_dexoptanalyzer(const std::string& dex_file, const char* instruction_set,
-        const char* compiler_filter, bool profile_was_updated) {
+static void exec_dexoptanalyzer(const std::string& dex_file, const std::string& instruction_set,
+        const std::string& compiler_filter, bool profile_was_updated) {
     static const char* DEXOPTANALYZER_BIN = "/system/bin/dexoptanalyzer";
     static const unsigned int MAX_INSTRUCTION_SET_LEN = 7;
 
-    if (strlen(instruction_set) >= MAX_INSTRUCTION_SET_LEN) {
-        ALOGE("Instruction set %s longer than max length of %d",
-              instruction_set, MAX_INSTRUCTION_SET_LEN);
+    if (instruction_set.size() >= MAX_INSTRUCTION_SET_LEN) {
+        LOG(ERROR) << "Instruction set " << instruction_set
+                << " longer than max length of " << MAX_INSTRUCTION_SET_LEN;
         return;
     }
 
-    char dex_file_arg[strlen("--dex-file=") + PKG_PATH_MAX];
-    char isa_arg[strlen("--isa=") + MAX_INSTRUCTION_SET_LEN];
-    char compiler_filter_arg[strlen("--compiler-filter=") + kPropertyValueMax];
+    std::string dex_file_arg = "--dex-file=" + dex_file;
+    std::string isa_arg = "--isa=" + instruction_set;
+    std::string compiler_filter_arg = "--compiler-filter=" + compiler_filter;
     const char* assume_profile_changed = "--assume-profile-changed";
-
-    sprintf(dex_file_arg, "--dex-file=%s", dex_file.c_str());
-    sprintf(isa_arg, "--isa=%s", instruction_set);
-    sprintf(compiler_filter_arg, "--compiler-filter=%s", compiler_filter);
 
     // program name, dex file, isa, filter, the final NULL
     const char* argv[5 + (profile_was_updated ? 1 : 0)];
     int i = 0;
     argv[i++] = DEXOPTANALYZER_BIN;
-    argv[i++] = dex_file_arg;
-    argv[i++] = isa_arg;
-    argv[i++] = compiler_filter_arg;
+    argv[i++] = dex_file_arg.c_str();
+    argv[i++] = isa_arg.c_str();
+    argv[i++] = compiler_filter_arg.c_str();
     if (profile_was_updated) {
         argv[i++] = assume_profile_changed;
     }
@@ -1412,6 +1494,9 @@ static bool process_secondary_dex_dexopt(const char* original_dex_path, const ch
         }
     }
     const std::string& dex_path = *dex_path_out;
+    if (!validate_dex_path_size(dex_path)) {
+        return false;
+    }
     if (!validate_secondary_dex_path(pkgname, dex_path, volume_uuid, uid, storage_flag)) {
         LOG(ERROR) << "Could not validate secondary dex path " << dex_path;
         return false;
@@ -1482,6 +1567,10 @@ int dexopt(const char* dex_path, uid_t uid, const char* pkgname, const char* ins
         LOG_FATAL("dexopt flags contains unknown fields\n");
     }
 
+    if (!validate_dex_path_size(dex_path)) {
+        return false;
+    }
+
     bool is_public = (dexopt_flags & DEXOPT_PUBLIC) != 0;
     bool debuggable = (dexopt_flags & DEXOPT_DEBUGGABLE) != 0;
     bool boot_complete = (dexopt_flags & DEXOPT_BOOTCOMPLETE) != 0;
@@ -1529,7 +1618,7 @@ int dexopt(const char* dex_path, uid_t uid, const char* pkgname, const char* ins
     Dex2oatFileWrapper in_vdex_fd;
     Dex2oatFileWrapper out_vdex_fd;
     if (!open_vdex_files(dex_path, out_oat_path, dexopt_needed, instruction_set, is_public, uid,
-            is_secondary_dex, &in_vdex_fd, &out_vdex_fd)) {
+            is_secondary_dex, profile_guided, &in_vdex_fd, &out_vdex_fd)) {
         return -1;
     }
 
@@ -1671,6 +1760,10 @@ bool reconcile_secondary_dex_file(const std::string& dex_path,
         /*out*/bool* out_secondary_dex_exists) {
     // Set out to false to start with, just in case we have validation errors.
     *out_secondary_dex_exists = false;
+    if (!validate_dex_path_size(dex_path)) {
+        return false;
+    }
+
     if (isas.size() == 0) {
         LOG(ERROR) << "reconcile_secondary_dex_file called with empty isas vector";
         return false;
@@ -1880,8 +1973,11 @@ bool delete_odex(const char* apk_path, const char* instruction_set, const char* 
     // Derive and delete the app image.
     bool return_value_art = unlink_and_check(create_image_filename(out_path).c_str());
 
+    // Derive and delete the vdex file.
+    bool return_value_vdex = unlink_and_check(create_vdex_filename(out_path).c_str());
+
     // Report success.
-    return return_value_oat && return_value_art;
+    return return_value_oat && return_value_art && return_value_vdex;
 }
 
 }  // namespace installd

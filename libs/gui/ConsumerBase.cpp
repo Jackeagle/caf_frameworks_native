@@ -106,7 +106,7 @@ void ConsumerBase::onFrameAvailable(const BufferItem& item) {
 
     sp<FrameAvailableListener> listener;
     { // scope for the lock
-        Mutex::Autolock lock(mMutex);
+        Mutex::Autolock lock(mFrameAvailableMutex);
         listener = mFrameAvailableListener.promote();
     }
 
@@ -121,7 +121,7 @@ void ConsumerBase::onFrameReplaced(const BufferItem &item) {
 
     sp<FrameAvailableListener> listener;
     {
-        Mutex::Autolock lock(mMutex);
+        Mutex::Autolock lock(mFrameAvailableMutex);
         listener = mFrameAvailableListener.promote();
     }
 
@@ -185,7 +185,7 @@ bool ConsumerBase::isAbandoned() {
 void ConsumerBase::setFrameAvailableListener(
         const wp<FrameAvailableListener>& listener) {
     CB_LOGV("setFrameAvailableListener");
-    Mutex::Autolock lock(mMutex);
+    Mutex::Autolock lock(mFrameAvailableMutex);
     mFrameAvailableListener = listener;
 }
 
@@ -253,7 +253,18 @@ status_t ConsumerBase::discardFreeBuffers() {
         CB_LOGE("discardFreeBuffers: ConsumerBase is abandoned!");
         return NO_INIT;
     }
-    return mConsumer->discardFreeBuffers();
+    status_t err = mConsumer->discardFreeBuffers();
+    if (err != OK) {
+        return err;
+    }
+    uint64_t mask;
+    mConsumer->getReleasedBuffers(&mask);
+    for (int i = 0; i < BufferQueue::NUM_BUFFER_SLOTS; i++) {
+        if (mask & (1ULL << i)) {
+            freeBufferLocked(i);
+        }
+    }
+    return OK;
 }
 
 void ConsumerBase::dumpState(String8& result) const {

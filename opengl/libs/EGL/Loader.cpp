@@ -28,7 +28,10 @@
 #include <cutils/properties.h>
 #include <log/log.h>
 
-#include <ui/GraphicsEnv.h>
+#ifndef __ANDROID_VNDK__
+#include <graphicsenv/GraphicsEnv.h>
+#endif
+#include <vndksupport/linker.h>
 
 #include "egl_trace.h"
 #include "egldefs.h"
@@ -113,6 +116,11 @@ static void* do_dlopen(const char* path, int mode) {
 static void* do_android_dlopen_ext(const char* path, int mode, const android_dlextinfo* info) {
     ATRACE_CALL();
     return android_dlopen_ext(path, mode, info);
+}
+
+static void* do_android_load_sphal_library(const char* path, int mode) {
+    ATRACE_CALL();
+    return android_load_sphal_library(path, mode);
 }
 
 // ----------------------------------------------------------------------------
@@ -319,17 +327,17 @@ static void* load_system_driver(const char* kind) {
             switch (emulationStatus) {
                 case 0:
 #if defined(__LP64__)
-                    result = "/system/lib64/egl/libGLES_android.so";
+                    result = "/vendor/lib64/egl/libGLES_android.so";
 #else
-                    result = "/system/lib/egl/libGLES_android.so";
+                    result = "/vendor/lib/egl/libGLES_android.so";
 #endif
                     return result;
                 case 1:
                     // Use host-side OpenGL through the "emulation" library
 #if defined(__LP64__)
-                    result = std::string("/system/lib64/egl/lib") + kind + "_emulation.so";
+                    result = std::string("/vendor/lib64/egl/lib") + kind + "_emulation.so";
 #else
-                    result = std::string("/system/lib/egl/lib") + kind + "_emulation.so";
+                    result = std::string("/vendor/lib/egl/lib") + kind + "_emulation.so";
 #endif
                     return result;
                 default:
@@ -424,27 +432,11 @@ static void* load_system_driver(const char* kind) {
     const char* const driver_absolute_path = absolutePath.c_str();
 
     // Try to load drivers from the 'sphal' namespace, if it exist. Fall back to
-    // the original routine when the namespace does not exist or the load from
-    // the namespace fails.
+    // the original routine when the namespace does not exist.
     // See /system/core/rootdir/etc/ld.config.txt for the configuration of the
     // sphal namespace.
-    android_namespace_t* sphal_namespace = android_get_exported_namespace("sphal");
-    if (sphal_namespace != NULL) {
-        const android_dlextinfo dlextinfo = {
-            .flags = ANDROID_DLEXT_USE_NAMESPACE,
-            .library_namespace = sphal_namespace,
-        };
-        void* dso = do_android_dlopen_ext(driver_absolute_path, RTLD_LOCAL | RTLD_NOW, &dlextinfo);
-        if (dso) {
-            ALOGD("loaded %s from sphal namespace", driver_absolute_path);
-            return dso;
-        }
-        else {
-            ALOGW("failed to load %s from sphal namespace: %s", driver_absolute_path, dlerror());
-        }
-    }
-
-    void* dso = do_dlopen(driver_absolute_path, RTLD_NOW | RTLD_LOCAL);
+    void* dso = do_android_load_sphal_library(driver_absolute_path,
+                                              RTLD_NOW | RTLD_LOCAL);
     if (dso == 0) {
         const char* err = dlerror();
         ALOGE("load_driver(%s): %s", driver_absolute_path, err ? err : "unknown");
@@ -487,10 +479,12 @@ void *Loader::load_driver(const char* kind,
     ATRACE_CALL();
 
     void* dso = nullptr;
+#ifndef __ANDROID_VNDK__
     android_namespace_t* ns = android_getDriverNamespace();
     if (ns) {
         dso = load_updated_driver(kind, ns);
     }
+#endif
     if (!dso) {
         dso = load_system_driver(kind);
         if (!dso)

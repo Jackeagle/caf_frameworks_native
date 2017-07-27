@@ -232,6 +232,7 @@ public:
     bool setFlags(uint8_t flags, uint8_t mask);
     bool setLayerStack(uint32_t layerStack);
     bool setDataSpace(android_dataspace dataSpace);
+    android_dataspace getDataSpace() const;
     uint32_t getLayerStack() const;
     void deferTransactionUntil(const sp<IBinder>& barrierHandle, uint64_t frameNumber);
     void deferTransactionUntil(const sp<Layer>& barrierLayer, uint64_t frameNumber);
@@ -314,8 +315,6 @@ public:
     void setGeometry(const sp<const DisplayDevice>& displayDevice, uint32_t z);
     void forceClientComposition(int32_t hwcId);
     void setPerFrameData(const sp<const DisplayDevice>& displayDevice);
-
-    android_dataspace getDataSpace() const;
 
     // callIntoHwc exists so we can update our local state and call
     // acceptDisplayChanges without unnecessarily updating the device's state
@@ -410,6 +409,7 @@ public:
      * to figure out if the content or size of a surface has changed.
      */
     Region latchBuffer(bool& recomputeVisibleRegions, nsecs_t latchTime);
+    bool isBufferLatched() const { return mRefreshPending; }
 
     bool isPotentialCursor() const { return mPotentialCursor;}
 
@@ -422,7 +422,7 @@ public:
 
     // Updates the transform hint in our SurfaceFlingerConsumer to match
     // the current orientation of the display device.
-    void updateTransformHint(const sp<const DisplayDevice>& hw) const;
+    void updateTransformHint(const sp<const DisplayDevice>& hw);
 
     /* ------------------------------------------------------------------------
      * Extensions
@@ -539,11 +539,12 @@ public:
                                  const LayerVector::Visitor& visitor);
     void traverseInZOrder(LayerVector::StateSet stateSet, const LayerVector::Visitor& visitor);
 
+    size_t getChildrenCount() const;
     void addChild(const sp<Layer>& layer);
     // Returns index if removed, or negative value otherwise
     // for symmetry with Vector::remove
     ssize_t removeChild(const sp<Layer>& layer);
-    sp<Layer> getParent() const { return mParent.promote(); }
+    sp<Layer> getParent() const { return mCurrentParent.promote(); }
     bool hasParent() const { return getParent() != nullptr; }
 
     Rect computeScreenBounds(bool reduceTransparentRegion = true) const;
@@ -718,6 +719,7 @@ private:
     uint32_t mTextureName;      // from GLES
     bool mPremultipliedAlpha;
     String8 mName;
+    String8 mTransactionName; // A cached version of "TX - " + mName for systraces
     PixelFormat mFormat;
 
     // these are protected by an external lock
@@ -815,13 +817,17 @@ private:
 
     bool mAutoRefresh;
     bool mFreezeGeometryUpdates;
+    uint32_t mTransformHint;
+    // debug mdp and gpu crop
+    uint32_t mDebugAndRecomputeCrop;
 
     // Child list about to be committed/used for editing.
     LayerVector mCurrentChildren;
     // Child list used for rendering.
     LayerVector mDrawingChildren;
 
-    wp<Layer> mParent;
+    wp<Layer> mCurrentParent;
+    wp<Layer> mDrawingParent;
 };
 
 // ---------------------------------------------------------------------------
