@@ -195,6 +195,8 @@ SurfaceFlinger::SurfaceFlinger()
     hasWideColorDisplay =
             getBool<ISurfaceFlingerConfigs, &ISurfaceFlingerConfigs::hasWideColorDisplay>(false);
 
+    mPrimaryDispSync.init(hasSyncFramework, dispSyncPresentTimeOffset);
+
     // debugging stuff...
     char value[PROPERTY_VALUE_MAX];
 
@@ -823,8 +825,10 @@ void SurfaceFlinger::setActiveConfigInternal(const sp<DisplayDevice>& hw, int mo
         return;
     }
 
-    hw->setActiveConfig(mode);
-    getHwComposer().setActiveConfig(type, mode);
+    status_t status = getHwComposer().setActiveConfig(type, mode);
+    if (status == NO_ERROR) {
+        hw->setActiveConfig(mode);
+    }
 }
 
 status_t SurfaceFlinger::setActiveConfig(const sp<IBinder>& display, int mode) {
@@ -1191,6 +1195,14 @@ void SurfaceFlinger::createDefaultDisplayDevice() {
     sp<DisplayDevice> hw = new DisplayDevice(this, DisplayDevice::DISPLAY_PRIMARY, type, isSecure,
                                              token, fbs, producer, mRenderEngine->getEGLConfig(),
                                              hasWideColorModes && hasWideColorDisplay);
+
+    // When a non-virtual display device is added at boot time,
+    // update the active config by querying HWC otherwise the
+    // default config (config 0) will be used.
+    int activeConfig = mHwc->getActiveConfig(type)->getId();
+    if (activeConfig >= 0) {
+        hw->setActiveConfig(activeConfig);
+    }
     mDisplays.add(token, hw);
     android_color_mode defaultColorMode = HAL_COLOR_MODE_NATIVE;
     if (hasWideColorModes && hasWideColorDisplay) {
@@ -2117,6 +2129,16 @@ void SurfaceFlinger::handleTransactionLocked(uint32_t transactionFlags)
                         hw->setProjection(state.orientation,
                                 state.viewport, state.frame);
                         hw->setDisplayName(state.displayName);
+                        // When a new display device is added update the active
+                        // config by querying HWC otherwise the default config
+                        // (config 0) will be used.
+                        if (hwcId >= DisplayDevice::DISPLAY_PRIMARY &&
+                                hwcId < DisplayDevice::NUM_BUILTIN_DISPLAY_TYPES) {
+                            int activeConfig = mHwc->getActiveConfig(hwcId)->getId();
+                            if (activeConfig >= 0) {
+                                hw->setActiveConfig(activeConfig);
+                            }
+                        }
                         mDisplays.add(display, hw);
                         if (!state.isVirtualDisplay()) {
                             mEventThread->onHotplugReceived(state.type, true);
@@ -3978,6 +4000,32 @@ status_t SurfaceFlinger::onTransact(
             case 1021: { // Disable HWC virtual displays
                 n = data.readInt32();
                 mUseHwcVirtualDisplays = !n;
+                return NO_ERROR;
+            }
+            case 10000: { // Get frame stats of specific layer
+                Layer* rightLayer = nullptr;
+                bool isSurfaceView = false;
+                FrameStats frameStats;
+                size_t arraySize = 0;
+                String8 activityName = String8(data.readString16());
+                String8 surfaceView = String8("SurfaceView -");
+                mCurrentState.traverseInZOrder([&](Layer* layer) {
+                    if (!isSurfaceView && layer->getName().contains(activityName)) {
+                        rightLayer = layer;
+                        if (strncmp(layer->getName().string(), surfaceView.string(),
+                                surfaceView.size()) == 0) {
+                            isSurfaceView = true;
+                        }
+                    }
+                });
+                if (rightLayer != nullptr) {
+                    rightLayer->getFrameStats(&frameStats);
+                    arraySize = frameStats.actualPresentTimesNano.size();
+                }
+                reply->writeInt32(arraySize);
+                if (arraySize > 0) {
+                    reply->write(frameStats.actualPresentTimesNano.array(), 8*arraySize);
+                }
                 return NO_ERROR;
             }
         }
