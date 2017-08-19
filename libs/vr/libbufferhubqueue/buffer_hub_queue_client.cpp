@@ -417,6 +417,28 @@ void BufferHubQueue::SetBufferRemovedCallback(BufferRemovedCallback callback) {
   on_buffer_removed_ = callback;
 }
 
+pdx::Status<void> BufferHubQueue::FreeAllBuffers() {
+  // Clear all available buffers.
+  available_buffers_.Clear();
+
+  pdx::Status<void> last_error;  // No error.
+  // Clear all buffers this producer queue is tracking.
+  for (size_t slot = 0; slot < BufferHubQueue::kMaxQueueCapacity; slot++) {
+    if (buffers_[slot] != nullptr) {
+      auto status = RemoveBuffer(slot);
+      if (!status) {
+        ALOGE(
+            "ProducerQueue::FreeAllBuffers: Failed to remove buffer at "
+            "slot=%d.",
+            slot);
+        last_error = status.error_status();
+      }
+    }
+  }
+
+  return last_error;
+}
+
 ProducerQueue::ProducerQueue(LocalChannelHandle handle)
     : BASE(std::move(handle)) {
   auto status = ImportQueue();
@@ -488,7 +510,7 @@ Status<std::vector<size_t>> ProducerQueue::AllocateBuffers(
 
   if (buffer_slots.size() == 0) {
     // Error out if no buffer is allocated and improted.
-    ALOGE(TRACE, "ProducerQueue::AllocateBuffers: no buffer allocated.");
+    ALOGE_IF(TRACE, "ProducerQueue::AllocateBuffers: no buffer allocated.");
     ErrorStatus(ENOMEM);
   }
 
@@ -509,7 +531,7 @@ Status<size_t> ProducerQueue::AllocateBuffer(uint32_t width, uint32_t height,
   }
 
   if (status.get().size() == 0) {
-    ALOGE(TRACE, "ProducerQueue::AllocateBuffer: no buffer allocated.");
+    ALOGE_IF(TRACE, "ProducerQueue::AllocateBuffer: no buffer allocated.");
     ErrorStatus(ENOMEM);
   }
 
@@ -613,6 +635,12 @@ Status<size_t> ConsumerQueue::ImportBuffers() {
 
     std::unique_ptr<BufferConsumer> buffer_consumer =
         BufferConsumer::Import(std::move(buffer_handle_slot.first));
+    if (!buffer_consumer) {
+      ALOGE("ConsumerQueue::ImportBuffers: Failed to import buffer: slot=%zu",
+            buffer_handle_slot.second);
+      last_error = ErrorStatus(EPIPE);
+      continue;
+    }
 
     // Setup ignore state before adding buffer to the queue.
     if (ignore_on_import_) {

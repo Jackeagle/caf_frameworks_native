@@ -126,8 +126,7 @@ static const std::string ZIP_ROOT_DIR = "FS";
 static const std::string kDumpstateBoardPath = "/bugreports/";
 static const std::string kDumpstateBoardFiles[] = {
     "dumpstate_board.txt",
-    // TODO: rename to dumpstate_board.bin once vendors can handle it
-    "modem_log_all.tar"
+    "dumpstate_board.bin"
 };
 static const int NUM_OF_DUMPS = arraysize(kDumpstateBoardFiles);
 
@@ -930,8 +929,10 @@ static void AddAnrTraceDir(const bool add_to_zip, const std::string& anr_traces_
                  "VM TRACES AT LAST ANR", add_to_zip);
 
         if (anr_data->size() > 1) {
+            // NOTE: Historical ANRs are always added as separate entries in the
+            // bugreport zip file.
             AddDumps(anr_data->begin() + 1, anr_data->end(),
-                     "HISTORICAL ANR", add_to_zip);
+                     "HISTORICAL ANR", true /* add_to_zip */);
         }
     } else {
         printf("*** NO ANRs to dump in %s\n\n", ANR_DIR.c_str());
