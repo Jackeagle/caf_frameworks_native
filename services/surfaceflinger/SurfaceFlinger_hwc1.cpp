@@ -157,7 +157,6 @@ SurfaceFlinger::SurfaceFlinger()
         mDebugInTransaction(0),
         mLastTransactionTime(0),
         mBootFinished(false),
-        mEarlyCameraFinished(false),
         mForceFullDamage(false),
         mPrimaryDispSync("PrimaryDispSync"),
         mPrimaryHWVsyncEnabled(false),
@@ -1054,16 +1053,7 @@ void SurfaceFlinger::onMessageReceived(int32_t what) {
             break;
         }
         case MessageQueue::REFRESH: {
-            char value[PROPERTY_VALUE_MAX] = {0};
-            if(!mEarlyCameraFinished){
-                property_get("sys.earlycamera_finished", value, "0");
-                if(!strcmp(value, "1")) {
-                    mEarlyCameraFinished = true;
-                    property_set("sys.boot_completed", "1");
-                }
-            }
-            if(mEarlyCameraFinished)
-                handleMessageRefresh();
+            handleMessageRefresh();
             break;
         }
     }

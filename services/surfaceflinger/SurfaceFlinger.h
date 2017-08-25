@@ -569,7 +569,6 @@ private:
     volatile nsecs_t mDebugInTransaction;
     nsecs_t mLastTransactionTime;
     bool mBootFinished;
-    bool mEarlyCameraFinished;
     bool mForceFullDamage;
     FenceTracker mFenceTracker;
 #ifdef USE_HWC2
