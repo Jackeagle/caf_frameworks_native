@@ -32,6 +32,7 @@
 #include <time.h>
 #include <unistd.h>
 #include <sys/prctl.h>
+#include <selinux/android.h>
 
 #include <cutils/debugger.h>
 #include <cutils/properties.h>
@@ -633,6 +634,11 @@ const char *dump_traces() {
         if (!mkdir(anr_traces_dir, 0775)) {
             chown(anr_traces_dir, AID_SYSTEM, AID_SYSTEM);
             chmod(anr_traces_dir, 0775);
+            //chcon(anr_traces_dir, "u:object_r:anr_data_file:s0", true);
+            if (selinux_android_restorecon(anr_traces_dir, SELINUX_ANDROID_RESTORECON_RECURSE) != 0) {
+                fprintf(stderr, "restorecon(%s): %s\n", anr_traces_dir, strerror(errno));
+                return NULL;
+            }
         } else if (errno != EEXIST) {
             fprintf(stderr, "mkdir(%s): %s\n", anr_traces_dir, strerror(errno));
             return NULL;
@@ -652,6 +658,7 @@ const char *dump_traces() {
         close(fd);
         return NULL;
     }
+
 
     /* walk /proc and kill -QUIT all Dalvik processes */
     DIR *proc = opendir("/proc");
