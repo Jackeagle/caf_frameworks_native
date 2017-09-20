@@ -18,7 +18,6 @@
      that this currently requires having auto-focus as well. -->
 <permissions>
     <feature name="android.hardware.camera.any" />
-    <feature name="android.hardware.camera" />
     <feature name="android.hardware.camera.autofocus" />
     <feature name="android.hardware.camera.flash" />
 </permissions>
