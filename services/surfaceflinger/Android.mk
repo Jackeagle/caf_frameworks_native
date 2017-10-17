@@ -63,7 +63,9 @@ LOCAL_CFLAGS += -DQTI_BSP
   ifeq ($(TARGET_USES_COLOR_METADATA), true)
     LOCAL_CFLAGS += -DUSE_COLOR_METADATA
   endif
-LOCAL_HEADER_LIBRARIES := display_headers
+#LOCAL_HEADER_LIBRARIES := display_headers
+    LOCAL_C_INCLUDES += hardware/qcom/display/libgralloc
+    LOCAL_C_INCLUDES += hardware/qcom/display/libqdutils
 endif
 
 ifeq ($(TARGET_USES_HWC2),true)
@@ -118,7 +120,9 @@ LOCAL_SHARED_LIBRARIES := \
     libsync \
     libprotobuf-cpp-lite \
     libbase \
-    android.hardware.power@1.0
+    android.hardware.power@1.0 \
+    libqdutils \
+    libqdMetaData \
 
 LOCAL_EXPORT_SHARED_LIBRARY_HEADERS := \
     android.hardware.graphics.allocator@2.0 \
