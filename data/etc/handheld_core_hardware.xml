@@ -53,9 +53,6 @@
     <!-- Feature to specify if the device supports adding device admins. -->
     <feature name="android.software.device_admin" />
 
-    <!-- Feature to specify if the device support managed users. -->
-    <feature name="android.software.managed_users" />
-
     <!-- Feature to specify if the device supports a VR mode.
          feature name="android.software.vr.mode" -->
     <!-- Devices with all optimizations required to be a "VR Ready" device that
