@@ -2741,7 +2741,12 @@ bool SurfaceFlinger::doComposeSurfaces(
         }
     } else {
         // we're not using h/w composer
+        DisplayUtils* displayUtils = DisplayUtils::getInstance();
         for (auto& layer : displayDevice->getVisibleLayersSortedByZ()) {
+            if(displayUtils->skipDimLayer(layer->getTypeId())) {
+                // Skipping DimLayer for WFD direct streaming case.
+                continue;
+            }
             const Region clip(dirty.intersect(
                     displayTransform.transform(layer->visibleRegion)));
             if (!clip.isEmpty()) {
@@ -4140,6 +4145,32 @@ status_t SurfaceFlinger::onTransact(
             }
             case 1024: { // Is wide color gamut rendering/color management supported?
                 reply->writeBool(hasWideColorDisplay);
+                return NO_ERROR;
+            }
+            case 10000: { // Get frame stats of specific layer
+                Layer* rightLayer = nullptr;
+                bool isSurfaceView = false;
+                FrameStats frameStats;
+                size_t arraySize = 0;
+                String8 activityName = String8(data.readString16());
+                String8 surfaceView = String8("SurfaceView -");
+                mCurrentState.traverseInZOrder([&](Layer* layer) {
+                    if (!isSurfaceView && layer->getName().contains(activityName)) {
+                        rightLayer = layer;
+                        if (strncmp(layer->getName().string(), surfaceView.string(),
+                                surfaceView.size()) == 0) {
+                            isSurfaceView = true;
+                        }
+                    }
+                });
+                if (rightLayer != nullptr) {
+                    rightLayer->getFrameStats(&frameStats);
+                    arraySize = frameStats.actualPresentTimesNano.size();
+                }
+                reply->writeInt32(arraySize);
+                if (arraySize > 0) {
+                    reply->write(frameStats.actualPresentTimesNano.array(), 8*arraySize);
+                }
                 return NO_ERROR;
             }
         }
