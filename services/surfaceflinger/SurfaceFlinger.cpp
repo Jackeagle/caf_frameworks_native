@@ -1775,7 +1775,7 @@ void SurfaceFlinger::setUpHWComposer() {
             if (hwcId >= 0) {
                 const Vector<sp<Layer>>& currentLayers(
                         displayDevice->getVisibleLayersSortedByZ());
-                setDisplayAnimating(displayDevice, dpy);
+                setDisplayAnimating(displayDevice);
                 for (size_t i = 0; i < currentLayers.size(); i++) {
                     const auto& layer = currentLayers[i];
                     if (!layer->hasHwcLayer(hwcId)) {
@@ -2801,7 +2801,7 @@ void SurfaceFlinger::setTransactionState(
 {
     ATRACE_CALL();
 
-    delayDPTransactionIfNeeded(displays);
+    handleDPTransactionIfNeeded(displays);
     Mutex::Autolock _l(mStateLock);
     uint32_t transactionFlags = 0;
 
