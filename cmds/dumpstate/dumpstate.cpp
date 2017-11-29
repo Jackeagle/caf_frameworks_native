@@ -1708,6 +1708,8 @@ int main(int argc, char *argv[]) {
 
         /* Run some operations that require root. */
         get_tombstone_fds(tombstone_data);
+        /* Dump Bluetooth logs */
+        ds.AddDir("/data/vendor/ramdump/bluetooth", true);
         ds.AddDir(RECOVERY_DIR, true);
         ds.AddDir(RECOVERY_DATA_DIR, true);
         ds.AddDir(LOGPERSIST_DATA_DIR, false);
