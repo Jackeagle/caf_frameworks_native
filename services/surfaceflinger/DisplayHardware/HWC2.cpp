@@ -167,6 +167,7 @@ Error Device::createVirtualDisplay(uint32_t width, uint32_t height,
         return Error::BadDisplay;
     }
     (*outDisplay)->setConnected(true);
+    mComposer->setClientTargetSlotCount((*outDisplay)->getId());
     return Error::None;
 }
 
