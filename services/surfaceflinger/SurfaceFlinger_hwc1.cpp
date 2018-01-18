@@ -316,15 +316,6 @@ void SurfaceFlinger::bootFinished()
     // formerly we would just kill the process, but we now ask it to exit so it
     // can choose where to stop the animation.
     property_set("service.bootanim.exit", "1");
-    {
-        int fd = open("/sys/class/earlycamera/earlycamera/earlycamera_status", O_WRONLY);
-        if(fd < 0) {
-            ALOGE("open early camera node failed");
-        } else {
-            write(fd, "1", 1);
-            close(fd);
-        }
-    }
 
     const int LOGTAG_SF_STOP_BOOTANIM = 60110;
     LOG_EVENT_LONG(LOGTAG_SF_STOP_BOOTANIM,
