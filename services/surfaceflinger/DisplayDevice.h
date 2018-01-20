@@ -88,7 +88,7 @@ public:
             const sp<SurfaceFlinger>& flinger,
             DisplayType type,
             int32_t hwcId,
-#ifndef USE_HWC2
+#if defined(GET_FRAMEBUFFER_FORMAT_FROM_HWC) || !defined(USE_HWC2)
             int format,
 #endif
             bool isSecure,

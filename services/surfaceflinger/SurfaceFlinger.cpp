@@ -1223,7 +1223,9 @@ void SurfaceFlinger::createDefaultDisplayDevice() {
 
     // All non-virtual displays are currently considered secure.
     const bool isSecure = true;
-
+#ifdef GET_FRAMEBUFFER_FORMAT_FROM_HWC
+    int fbformat = 0;
+#endif
     sp<IGraphicBufferProducer> producer;
     sp<IGraphicBufferConsumer> consumer;
     BufferQueue::createBufferQueue(&producer, &consumer);
@@ -1244,9 +1246,19 @@ void SurfaceFlinger::createDefaultDisplayDevice() {
         }
     }
     bool useWideColorMode = hasWideColorModes && hasWideColorDisplay && !mForceNativeColorMode;
+#ifdef GET_FRAMEBUFFER_FORMAT_FROM_HWC
+    for (const auto& hwConfig : getHwComposer().getConfigs(DisplayDevice::DISPLAY_PRIMARY)) {
+        fbformat = hwConfig->getFbFormat();
+    }
+    sp<DisplayDevice> hw = new DisplayDevice(this, DisplayDevice::DISPLAY_PRIMARY, type, fbformat, isSecure,
+                                             token, fbs, producer, mRenderEngine->getEGLConfig(),
+                                             useWideColorMode);
+#else
+
     sp<DisplayDevice> hw = new DisplayDevice(this, DisplayDevice::DISPLAY_PRIMARY, type, isSecure,
                                              token, fbs, producer, mRenderEngine->getEGLConfig(),
                                              useWideColorMode);
+#endif
     mDisplays.add(token, hw);
     android_color_mode defaultColorMode = HAL_COLOR_MODE_NATIVE;
     if (useWideColorMode) {
@@ -2034,7 +2046,9 @@ void SurfaceFlinger::handleTransactionLocked(uint32_t transactionFlags)
      * Traversal of the children
      * (perform the transaction for each of them if needed)
      */
-
+#ifdef GET_FRAMEBUFFER_FORMAT_FROM_HWC
+    int fbformat = 0;
+#endif
     if (transactionFlags & eTraversalNeeded) {
         mCurrentState.traverseInZOrder([&](Layer* layer) {
             uint32_t trFlags = layer->getTransactionFlags(eTransactionNeeded);
@@ -2198,18 +2212,29 @@ void SurfaceFlinger::handleTransactionLocked(uint32_t transactionFlags)
 
                     const wp<IBinder>& display(curr.keyAt(i));
                     if (dispSurface != NULL && producer != NULL) {
-                        sp<DisplayDevice> hw =
-                                new DisplayDevice(this, state.type, hwcId, state.isSecure, display,
-                                                  dispSurface, producer,
-                                                  mRenderEngine->getEGLConfig(),
-                                                  hasWideColorDisplay);
-                        hw->setLayerStack(state.layerStack);
-                        hw->setProjection(state.orientation,
-                                state.viewport, state.frame);
-                        hw->setDisplayName(state.displayName);
-                        mDisplays.add(display, hw);
-                        if (!state.isVirtualDisplay()) {
-                            mEventThread->onHotplugReceived(state.type, true);
+#ifdef GET_FRAMEBUFFER_FORMAT_FROM_HWC
+                    for (const auto& hwConfig : getHwComposer().getConfigs(DisplayDevice::DISPLAY_PRIMARY)) {
+                       fbformat = hwConfig->getFbFormat();
+                    }
+                    sp<DisplayDevice> hw =
+                           new DisplayDevice(this, state.type, hwcId, fbformat,state.isSecure, display,
+                                             dispSurface, producer,
+                                             mRenderEngine->getEGLConfig(),
+                                             hasWideColorDisplay);
+#else
+                    sp<DisplayDevice> hw =
+                            new DisplayDevice(this, state.type, hwcId, state.isSecure, display,
+                                              dispSurface, producer,
+                                              mRenderEngine->getEGLConfig(),
+                                              hasWideColorDisplay);
+#endif
+                      hw->setLayerStack(state.layerStack);
+                      hw->setProjection(state.orientation,
+                              state.viewport, state.frame);
+                      hw->setDisplayName(state.displayName);
+                      mDisplays.add(display, hw);
+                      if (!state.isVirtualDisplay()) {
+                          mEventThread->onHotplugReceived(state.type, true);
                         }
                     }
                 }

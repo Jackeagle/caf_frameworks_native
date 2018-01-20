@@ -85,7 +85,7 @@ DisplayDevice::DisplayDevice(
         const sp<SurfaceFlinger>& flinger,
         DisplayType type,
         int32_t hwcId,
-#ifndef USE_HWC2
+#if defined(GET_FRAMEBUFFER_FORMAT_FROM_HWC) || !defined(USE_HWC2)
         int format,
 #endif
         bool isSecure,
@@ -134,7 +134,7 @@ DisplayDevice::DisplayDevice(
     EGLSurface eglSurface;
     EGLDisplay display = eglGetDisplay(EGL_DEFAULT_DISPLAY);
     if (config == EGL_NO_CONFIG) {
-#ifdef USE_HWC2
+#if !defined(GET_FRAMEBUFFER_FORMAT_FROM_HWC) && defined(USE_HWC2)
         config = RenderEngine::chooseEglConfig(display, PIXEL_FORMAT_RGBA_8888,
                                                /*logConfig*/ false);
 #else
