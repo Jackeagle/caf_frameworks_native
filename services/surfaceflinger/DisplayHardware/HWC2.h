@@ -169,7 +169,10 @@ public:
                 }
                 return *this;
             }
-
+            Builder& setFbFormat(int32_t fbformat) {
+               mConfig->fbformat = fbformat;
+               return *this;
+            }
         private:
             float getDefaultDensity();
             std::shared_ptr<Config> mConfig;
@@ -183,6 +186,7 @@ public:
         nsecs_t getVsyncPeriod() const { return mVsyncPeriod; }
         float getDpiX() const { return mDpiX; }
         float getDpiY() const { return mDpiY; }
+        int32_t getFbFormat() const { return fbformat; }
 
     private:
         Config(Display& display, hwc2_config_t id);
@@ -195,6 +199,7 @@ public:
         nsecs_t mVsyncPeriod;
         float mDpiX;
         float mDpiY;
+        int32_t fbformat;
     };
 
     // Required by HWC2

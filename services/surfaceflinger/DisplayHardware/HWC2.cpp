@@ -674,6 +674,7 @@ void Display::loadConfig(hwc2_config_t configId)
             .setVsyncPeriod(getAttribute(configId, Attribute::VsyncPeriod))
             .setDpiX(getAttribute(configId, Attribute::DpiX))
             .setDpiY(getAttribute(configId, Attribute::DpiY))
+            .setFbFormat(getAttribute(configId, Attribute::FbFormat))
             .build();
     mConfigs.emplace(configId, std::move(config));
 }

@@ -383,12 +383,20 @@ static status_t selectEGLConfig(EGLDisplay display, EGLint format,
         attribs[EGL_RECORDABLE_ANDROID]         = EGL_TRUE;
         attribs[EGL_SURFACE_TYPE]               = EGL_WINDOW_BIT|EGL_PBUFFER_BIT;
         attribs[EGL_FRAMEBUFFER_TARGET_ANDROID] = EGL_TRUE;
-        attribs[EGL_RED_SIZE]                   = 8;
-        attribs[EGL_GREEN_SIZE]                 = 8;
-        attribs[EGL_BLUE_SIZE]                  = 8;
-        attribs[EGL_ALPHA_SIZE]                 = 8;
-        wantedAttribute                         = EGL_NONE;
-        wantedAttributeValue                    = EGL_NONE;
+       if(PIXEL_FORMAT_RGB_565 == format) {
+            attribs[EGL_RED_SIZE]                   = 5;
+            attribs[EGL_GREEN_SIZE]                 = 6;
+            attribs[EGL_BLUE_SIZE]                  = 5;
+            wantedAttribute                         = EGL_NATIVE_VISUAL_ID;
+            wantedAttributeValue                    = format;
+        } else {
+            attribs[EGL_RED_SIZE]                   = 8;
+            attribs[EGL_GREEN_SIZE]                 = 8;
+            attribs[EGL_BLUE_SIZE]                  = 8;
+            attribs[EGL_ALPHA_SIZE]                 = 8;
+            wantedAttribute                         = EGL_NONE;
+            wantedAttributeValue                    = EGL_NONE;
+       }
     } else {
         // if no renderable type specified, fallback to a simplified query
         wantedAttribute                         = EGL_NATIVE_VISUAL_ID;
