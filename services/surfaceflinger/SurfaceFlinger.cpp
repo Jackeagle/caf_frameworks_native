@@ -1727,6 +1727,7 @@ void SurfaceFlinger::rebuildLayerStacks() {
             Region opaqueRegion;
             Region dirtyRegion;
             Vector<sp<Layer>> layersSortedByZ;
+            Vector<sp<Layer>> layersNeedingFences;
             const sp<DisplayDevice>& displayDevice(mDisplays[dpy]);
             const Transform& tr(displayDevice->getTransform());
             const Rect bounds(displayDevice->getBounds());
@@ -1734,6 +1735,7 @@ void SurfaceFlinger::rebuildLayerStacks() {
                 computeVisibleRegions(displayDevice, dirtyRegion, opaqueRegion);
 
                 mDrawingState.traverseInZOrder([&](Layer* layer) {
+                    bool hwcLayerDestroyed = false;
                     if (layer->belongsToDisplay(displayDevice->getLayerStack(),
                                 displayDevice->isPrimary())) {
                         Region drawRegion(tr.transform(
@@ -1744,6 +1746,8 @@ void SurfaceFlinger::rebuildLayerStacks() {
                         } else {
                             // Clear out the HWC layer if this layer was
                             // previously visible, but no longer is
+                            hwcLayerDestroyed = layer->hasHwcLayer(
+                                    displayDevice->getHwcDisplayId());
                             layer->destroyHwcLayer(
                                     displayDevice->getHwcDisplayId());
                         }
@@ -1751,11 +1755,25 @@ void SurfaceFlinger::rebuildLayerStacks() {
                         // WM changes displayDevice->layerStack upon sleep/awake.
                         // Here we make sure we delete the HWC layers even if
                         // WM changed their layer stack.
+                        hwcLayerDestroyed = layer->hasHwcLayer(displayDevice->getHwcDisplayId());
                         layer->destroyHwcLayer(displayDevice->getHwcDisplayId());
+                    }
+
+                    // If a layer is not going to get a release fence because
+                    // it is invisible, but it is also going to release its
+                    // old buffer, add it to the list of layers needing
+                    // fences.
+                    if (hwcLayerDestroyed) {
+                        auto found = std::find(mLayersWithQueuedFrames.cbegin(),
+                                mLayersWithQueuedFrames.cend(), layer);
+                        if (found != mLayersWithQueuedFrames.cend()) {
+                            layersNeedingFences.add(layer);
+                        }
                     }
                 });
             }
             displayDevice->setVisibleLayersSortedByZ(layersSortedByZ);
+            displayDevice->setLayersNeedingFences(layersNeedingFences);
             displayDevice->undefinedRegion.set(bounds);
             displayDevice->undefinedRegion.subtractSelf(
                     tr.transform(opaqueRegion));
@@ -1858,6 +1876,9 @@ void SurfaceFlinger::setUpHWComposer() {
         }
     }
 
+    mat4 colorMatrix = mColorMatrix * computeSaturationMatrix() * mDaltonizer();
+    bool isIdentity = (colorMatrix == mat4());
+
     // build the h/w work list
     if (CC_UNLIKELY(mGeometryInvalid)) {
         mGeometryInvalid = false;
@@ -1867,6 +1888,7 @@ void SurfaceFlinger::setUpHWComposer() {
             if (hwcId >= 0) {
                 const Vector<sp<Layer>>& currentLayers(
                         displayDevice->getVisibleLayersSortedByZ());
+                setDisplayAnimating(displayDevice);
                 for (size_t i = 0; i < currentLayers.size(); i++) {
                     const auto& layer = currentLayers[i];
                     if (!layer->hasHwcLayer(hwcId)) {
@@ -1877,16 +1899,13 @@ void SurfaceFlinger::setUpHWComposer() {
                     }
 
                     layer->setGeometry(displayDevice, i);
-                    if (mDebugDisableHWC || mDebugRegion) {
+                    if (mDebugDisableHWC || mDebugRegion || (hwcId !=0 && !isIdentity)) {
                         layer->forceClientComposition(hwcId);
                     }
                 }
             }
         }
     }
-
-
-    mat4 colorMatrix = mColorMatrix * computeSaturationMatrix() * mDaltonizer();
 
     // Set the per-frame data
     for (size_t displayId = 0; displayId < mDisplays.size(); ++displayId) {
@@ -1981,15 +2000,35 @@ void SurfaceFlinger::postFramebuffer()
         displayDevice->onSwapBuffersCompleted();
         displayDevice->makeCurrent(mEGLDisplay, mEGLContext);
         for (auto& layer : displayDevice->getVisibleLayersSortedByZ()) {
-            sp<Fence> releaseFence = Fence::NO_FENCE;
+            // The layer buffer from the previous frame (if any) is released
+            // by HWC only when the release fence from this frame (if any) is
+            // signaled.  Always get the release fence from HWC first.
+            auto hwcLayer = layer->getHwcLayer(hwcId);
+            sp<Fence> releaseFence = mHwc->getLayerReleaseFence(hwcId, hwcLayer);
+
+            // If the layer was client composited in the previous frame, we
+            // need to merge with the previous client target acquire fence.
+            // Since we do not track that, always merge with the current
+            // client target acquire fence when it is available, even though
+            // this is suboptimal.
             if (layer->getCompositionType(hwcId) == HWC2::Composition::Client) {
-                releaseFence = displayDevice->getClientTargetAcquireFence();
-            } else {
-                auto hwcLayer = layer->getHwcLayer(hwcId);
-                releaseFence = mHwc->getLayerReleaseFence(hwcId, hwcLayer);
+                releaseFence = Fence::merge("LayerRelease", releaseFence,
+                        displayDevice->getClientTargetAcquireFence());
             }
+
             layer->onLayerDisplayed(releaseFence);
         }
+
+        // We've got a list of layers needing fences, that are disjoint with
+        // displayDevice->getVisibleLayersSortedByZ.  The best we can do is to
+        // supply them with the present fence.
+        if (!displayDevice->getLayersNeedingFences().isEmpty()) {
+            sp<Fence> presentFence = mHwc->getPresentFence(hwcId);
+            for (auto& layer : displayDevice->getLayersNeedingFences()) {
+                layer->onLayerDisplayed(presentFence);
+            }
+        }
+
         if (hwcId >= 0) {
             mHwc->clearReleaseFences(hwcId);
         }
@@ -2450,7 +2489,7 @@ void SurfaceFlinger::computeVisibleRegions(const sp<const DisplayDevice>& displa
 
                 // compute the opaque region
                 const int32_t layerOrientation = tr.getOrientation();
-                if (s.alpha == 1.0f && !translucent &&
+                if (layer->getAlpha() == 1.0f && !translucent &&
                         ((layerOrientation & Transform::ROT_INVALID) == false)) {
                     // the opaque region is the layer's footprint
                     opaqueRegion = visibleRegion;
@@ -2639,7 +2678,7 @@ bool SurfaceFlinger::doComposeSurfaces(
 
     mat4 oldColorMatrix;
     const bool applyColorMatrix = !mHwc->hasDeviceComposition(hwcId) &&
-            !mHwc->hasCapability(HWC2::Capability::SkipClientColorTransform);
+            !(mHwc->hasCapability(HWC2::Capability::SkipClientColorTransform) && hwcId == 0);
     if (applyColorMatrix) {
         mat4 colorMatrix = mColorMatrix * mDaltonizer();
         oldColorMatrix = getRenderEngine().setupColorTransform(colorMatrix);
@@ -2740,7 +2779,7 @@ bool SurfaceFlinger::doComposeSurfaces(
                     case HWC2::Composition::SolidColor: {
                         const Layer::State& state(layer->getDrawingState());
                         if (layer->getClearClientTarget(hwcId) && !firstLayer &&
-                                layer->isOpaque(state) && (state.alpha == 1.0f)
+                                layer->isOpaque(state) && (layer->getAlpha() == 1.0f)
                                 && hasClientComposition) {
                             // never clear the very first layer since we're
                             // guaranteed the FB is already cleared
@@ -2895,7 +2934,7 @@ void SurfaceFlinger::setTransactionState(
 {
     ATRACE_CALL();
 
-    delayDPTransactionIfNeeded(displays);
+    handleDPTransactionIfNeeded(displays);
     Mutex::Autolock _l(mStateLock);
     uint32_t transactionFlags = 0;
 
