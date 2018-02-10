@@ -323,6 +323,8 @@ sp<IBinder> SurfaceFlinger::createDisplay(const String8& displayName,
     info.displayName = displayName;
     mCurrentState.displays.add(token, info);
     mInterceptor.saveDisplayCreation(info);
+    mDebugDisableHWC = true;
+    invalidateHwcGeometry();
     return token;
 }
 
@@ -343,6 +345,8 @@ void SurfaceFlinger::destroyDisplay(const sp<IBinder>& display) {
     mInterceptor.saveDisplayDeletion(info.displayId);
     mCurrentState.displays.removeItemsAt(idx);
     setTransactionFlags(eDisplayTransactionNeeded);
+    mDebugDisableHWC = false;
+    invalidateHwcGeometry();
 }
 
 void SurfaceFlinger::createBuiltinDisplayLocked(DisplayDevice::DisplayType type) {

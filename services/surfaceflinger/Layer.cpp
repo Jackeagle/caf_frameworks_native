@@ -674,7 +674,7 @@ void Layer::setGeometry(
 #ifdef USE_HWC2
     hwcInfo.forceClientComposition = false;
 
-    if (isSecure() && !displayDevice->isSecure()) {
+    if ((isSecure() && !displayDevice->isSecure()) || mFlinger->mDebugDisableHWC) {
         hwcInfo.forceClientComposition = true;
     }
 
@@ -854,7 +854,7 @@ void Layer::setGeometry(
     // this gives us only the "orientation" component of the transform
     const uint32_t orientation = transform.getOrientation();
 #ifdef USE_HWC2
-    if (orientation & Transform::ROT_INVALID) {
+    if ((orientation & Transform::ROT_INVALID) || mFlinger->mDebugDisableHWC) {
         // we can only handle simple transformation
         hwcInfo.forceClientComposition = true;
     } else {

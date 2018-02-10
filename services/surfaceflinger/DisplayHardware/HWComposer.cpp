@@ -505,9 +505,11 @@ status_t HWComposer::prepare(DisplayDevice& displayDevice) {
         if (changedTypes.count(hwcLayer) != 0) {
             // We pass false so we only update our state and don't call back
             // into the HWC device
-            validateChange(layer->getCompositionType(displayId),
+            if (!layer->isForceClientComposition(displayId)) {
+                validateChange(layer->getCompositionType(displayId),
                     changedTypes[hwcLayer]);
-            layer->setCompositionType(displayId, changedTypes[hwcLayer], false);
+                layer->setCompositionType(displayId, changedTypes[hwcLayer], false);
+            }
         }
 
         switch (layer->getCompositionType(displayId)) {

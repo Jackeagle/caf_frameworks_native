@@ -478,6 +478,11 @@ public:
         return mHwcLayers.count(hwcId) > 0;
     }
 
+    bool isForceClientComposition(int32_t hwcId) {
+        auto& hwcInfo = mHwcLayers[hwcId];
+        return hwcInfo.forceClientComposition;
+    }
+
     HWC2::Layer* getHwcLayer(int32_t hwcId) {
         if (mHwcLayers.count(hwcId) == 0) {
             return nullptr;
