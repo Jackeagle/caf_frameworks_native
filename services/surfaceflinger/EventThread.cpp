@@ -49,6 +49,7 @@ EventThread::EventThread(const sp<VSyncSource>& src, SurfaceFlinger& flinger, bo
       mVSyncEvent(DisplayDevice::NUM_BUILTIN_DISPLAY_TYPES),
       mUseSoftwareVSync(false),
       mVsyncEnabled(false),
+      mFirstConnectionInited(false),
       mDebugVsyncEnabled(false),
       mVsyncHintSent(false),
       mInterceptVSyncs(interceptVSyncs) {
@@ -104,12 +105,16 @@ status_t EventThread::registerDisplayEventConnection(
     Mutex::Autolock _l(mLock);
     mDisplayEventConnections.add(connection);
 
-    // additional external displays can't be enumerated by default,
-    // need to report additional hotplug to listeners
-    for (int32_t type = DisplayDevice::NUM_BUILTIN_DISPLAY_TYPES;
-          type < (int32_t)mHotplugEvent.size(); type++) {
-        if (mHotplugEvent[type].hotplug.connected)
-            connection->postEvent(mHotplugEvent[type]);
+    if (!mFirstConnectionInited) {
+      // additional external displays can't be enumerated by default,
+      // need to report additional hotplug to listeners
+      for (int32_t type = DisplayDevice::NUM_BUILTIN_DISPLAY_TYPES;
+            type < (int32_t)mHotplugEvent.size(); type++) {
+          if (mHotplugEvent[type].hotplug.connected) {
+              connection->postEvent(mHotplugEvent[type]);
+          }
+      }
+      mFirstConnectionInited = true;
     }
 
     mCondition.broadcast();
@@ -195,10 +200,12 @@ void EventThread::onHotplugReceived(int type, bool connected) {
         mPendingEvents.add(event);
         mCondition.broadcast();
 
-        // record display hotplug status
-        if (mHotplugEvent.size() <= (size_t)type)
-            mHotplugEvent.resize(type + 1);
-        mHotplugEvent[type] = event;
+        if (!mFirstConnectionInited) {
+          // record display hotplug status
+          if (mHotplugEvent.size() <= (size_t)type)
+              mHotplugEvent.resize(type + 1);
+          mHotplugEvent[type] = event;
+        }
     }
 }
 

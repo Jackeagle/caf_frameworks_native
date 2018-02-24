@@ -131,6 +131,7 @@ private:
     std::vector<DisplayEventReceiver::Event> mHotplugEvent;
     bool mUseSoftwareVSync;
     bool mVsyncEnabled;
+    bool mFirstConnectionInited;
 
     // for debugging
     bool mDebugVsyncEnabled;
