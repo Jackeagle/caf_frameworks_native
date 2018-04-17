@@ -1,6 +1,6 @@
 #pragma once
 
-#include <ui/GraphicsTypes.h>
+#include <ui/GraphicTypes.h>
 
 #include "Transform.h"
 
@@ -25,15 +25,15 @@ public:
     virtual bool isSecure() const = 0;
     virtual bool needsFiltering() const = 0;
     virtual Rect getSourceCrop() const = 0;
+    virtual bool getWideColorSupport() const = 0;
+    virtual ui::Dataspace getDataSpace() const = 0;
+    virtual std::string getType() const = 0;
 
     virtual void render(std::function<void()> drawLayers) { drawLayers(); }
 
     int getReqHeight() const { return mReqHeight; };
     int getReqWidth() const { return mReqWidth; };
     Transform::orientation_flags getRotationFlags() const { return mRotationFlags; };
-    virtual bool getWideColorSupport() const = 0;
-    virtual ColorMode getActiveColorMode() const = 0;
-
     status_t updateDimensions();
 
 private:

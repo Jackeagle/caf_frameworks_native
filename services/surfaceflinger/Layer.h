@@ -113,7 +113,8 @@ public:
                 layer(nullptr),
                 forceClientComposition(false),
                 compositionType(HWC2::Composition::Invalid),
-                clearClientTarget(false) {}
+                clearClientTarget(false),
+                transform(HWC2::Transform::None) {}
 
         HWComposer* hwc;
         HWC2::Layer* layer;
@@ -123,6 +124,7 @@ public:
         Rect displayFrame;
         FloatRect sourceCrop;
         HWComposerBufferCache bufferCache;
+        HWC2::Transform transform;
     };
 
     // A layer can be attached to multiple displays when operating in mirror mode
@@ -205,7 +207,7 @@ public:
         // dependent.
         Region activeTransparentRegion;
         Region requestedTransparentRegion;
-        android_dataspace dataSpace;
+        ui::Dataspace dataSpace;
 
         int32_t appId;
         int32_t type;
@@ -283,8 +285,8 @@ public:
     bool setTransparentRegionHint(const Region& transparent);
     bool setFlags(uint8_t flags, uint8_t mask);
     bool setLayerStack(uint32_t layerStack);
-    bool setDataSpace(android_dataspace dataSpace);
-    android_dataspace getDataSpace() const;
+    bool setDataSpace(ui::Dataspace dataSpace);
+    ui::Dataspace getDataSpace() const;
     uint32_t getLayerStack() const;
     void deferTransactionUntil(const sp<IBinder>& barrierHandle, uint64_t frameNumber);
     void deferTransactionUntil(const sp<Layer>& barrierLayer, uint64_t frameNumber);
@@ -294,6 +296,13 @@ public:
     void setChildrenDrawingParent(const sp<Layer>& layer);
     bool reparent(const sp<IBinder>& newParentHandle);
     bool detachChildren();
+
+    // Before color management is introduced, contents on Android have to be
+    // desaturated in order to match what they appears like visually.
+    // With color management, these contents will appear desaturated, thus
+    // needed to be saturated so that they match what they are designed for
+    // visually. When returns true, legacy SRGB data space is passed to HWC.
+    bool isLegacySrgbDataSpace() const;
 
     // If we have received a new buffer this frame, we will pass its surface
     // damage down to hardware composer. Otherwise, we must send a region with
@@ -357,7 +366,10 @@ public:
     bool isPendingRemoval() const { return mPendingRemoval; }
 
     void writeToProto(LayerProto* layerInfo,
-                      LayerVector::StateSet stateSet = LayerVector::StateSet::Drawing);
+                      LayerVector::StateSet stateSet = LayerVector::StateSet::Drawing,
+                      bool enableRegionDump = true);
+
+    void writeToProto(LayerProto* layerInfo, int32_t hwcId);
 
 protected:
     /*
