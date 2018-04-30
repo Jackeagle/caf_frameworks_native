@@ -47,6 +47,10 @@ using android::hardware::Void;
 namespace HWC2 {
 
 namespace Hwc2 = android::Hwc2;
+using android::ui::ColorMode;
+using android::ui::Dataspace;
+using android::ui::PixelFormat;
+using android::ui::RenderIntent;
 
 namespace {
 
@@ -114,14 +118,13 @@ uint32_t Device::getMaxVirtualDisplayCount() const
 }
 
 Error Device::createVirtualDisplay(uint32_t width, uint32_t height,
-        android_pixel_format_t* format, Display** outDisplay)
+        PixelFormat* format, Display** outDisplay)
 {
     ALOGI("Creating virtual display");
 
     hwc2_display_t displayId = 0;
-    auto intFormat = static_cast<Hwc2::PixelFormat>(*format);
     auto intError = mComposer->createVirtualDisplay(width, height,
-            &intFormat, &displayId);
+            format, &displayId);
     auto error = static_cast<Error>(intError);
     if (error != Error::None) {
         return error;
@@ -131,7 +134,6 @@ Error Device::createVirtualDisplay(uint32_t width, uint32_t height,
             *mComposer.get(), mCapabilities, displayId, DisplayType::Virtual);
     display->setConnected(true);
     *outDisplay = display.get();
-    *format = static_cast<android_pixel_format_t>(intFormat);
     mDisplays.emplace(displayId, std::move(display));
     ALOGI("Created virtual display");
     return Error::None;
@@ -362,21 +364,23 @@ Error Display::getChangedCompositionTypes(
     return Error::None;
 }
 
-Error Display::getColorModes(std::vector<android::ColorMode>* outModes) const
+Error Display::getColorModes(std::vector<ColorMode>* outModes) const
 {
-    std::vector<android::ColorMode> modes;
-    auto intError = mComposer.getColorModes(mId, &modes);
-    uint32_t numModes = modes.size();
-    auto error = static_cast<Error>(intError);
-    if (error != Error::None) {
-        return error;
-    }
+    auto intError = mComposer.getColorModes(mId, outModes);
+    return static_cast<Error>(intError);
+}
 
-    outModes->resize(numModes);
-    for (size_t i = 0; i < numModes; i++) {
-        (*outModes)[i] = modes[i];
-    }
-    return Error::None;
+Error Display::getRenderIntents(ColorMode colorMode,
+        std::vector<RenderIntent>* outRenderIntents) const
+{
+    auto intError = mComposer.getRenderIntents(mId, colorMode, outRenderIntents);
+    return static_cast<Error>(intError);
+}
+
+Error Display::getDataspaceSaturationMatrix(Dataspace dataspace, android::mat4* outMatrix)
+{
+    auto intError = mComposer.getDataspaceSaturationMatrix(dataspace, outMatrix);
+    return static_cast<Error>(intError);
 }
 
 std::vector<std::shared_ptr<const Display::Config>> Display::getConfigs() const
@@ -527,19 +531,18 @@ Error Display::setActiveConfig(const std::shared_ptr<const Config>& config)
 }
 
 Error Display::setClientTarget(uint32_t slot, const sp<GraphicBuffer>& target,
-        const sp<Fence>& acquireFence, android_dataspace_t dataspace)
+        const sp<Fence>& acquireFence, Dataspace dataspace)
 {
     // TODO: Properly encode client target surface damage
     int32_t fenceFd = acquireFence->dup();
     auto intError = mComposer.setClientTarget(mId, slot, target,
-            fenceFd, static_cast<Hwc2::Dataspace>(dataspace),
-            std::vector<Hwc2::IComposerClient::Rect>());
+            fenceFd, dataspace, std::vector<Hwc2::IComposerClient::Rect>());
     return static_cast<Error>(intError);
 }
 
-Error Display::setColorMode(android::ColorMode mode)
+Error Display::setColorMode(ColorMode mode, RenderIntent renderIntent)
 {
-    auto intError = mComposer.setColorMode(mId, mode);
+    auto intError = mComposer.setColorMode(mId, mode, renderIntent);
     return static_cast<Error>(intError);
 }
 
@@ -776,14 +779,13 @@ Error Layer::setCompositionType(Composition type)
     return static_cast<Error>(intError);
 }
 
-Error Layer::setDataspace(android_dataspace_t dataspace)
+Error Layer::setDataspace(Dataspace dataspace)
 {
     if (dataspace == mDataSpace) {
         return Error::None;
     }
     mDataSpace = dataspace;
-    auto intDataspace = static_cast<Hwc2::Dataspace>(dataspace);
-    auto intError = mComposer.setLayerDataspace(mDisplayId, mId, intDataspace);
+    auto intError = mComposer.setLayerDataspace(mDisplayId, mId, mDataSpace);
     return static_cast<Error>(intError);
 }
 

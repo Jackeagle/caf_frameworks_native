@@ -157,7 +157,7 @@ status_t VirtualDisplaySurface::prepareFrame(CompositionType compositionType) {
 
     if (mCompositionType != COMPOSITION_GLES &&
             (mOutputFormat != mDefaultOutputFormat ||
-             mOutputUsage != GRALLOC_USAGE_HW_COMPOSER)) {
+             !(mOutputUsage & GRALLOC_USAGE_HW_COMPOSER))) {
         // We must have just switched from GLES-only to MIXED or HWC
         // composition. Stop using the format and usage requested by the GLES
         // driver; they may be suboptimal when HWC is writing to the output
@@ -222,7 +222,7 @@ status_t VirtualDisplaySurface::advanceFrame() {
 
         // TODO: Correctly propagate the dataspace from GL composition
         result = mHwc.setClientTarget(mDisplayId, hwcSlot, mFbFence,
-                hwcBuffer, HAL_DATASPACE_UNKNOWN);
+                hwcBuffer, ui::Dataspace::UNKNOWN);
     }
 
     return result;

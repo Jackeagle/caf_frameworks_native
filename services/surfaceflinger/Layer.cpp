@@ -42,6 +42,7 @@
 #include <gui/LayerDebugInfo.h>
 #include <gui/Surface.h>
 
+#include "BufferLayer.h"
 #include "Colorizer.h"
 #include "DisplayDevice.h"
 #include "Layer.h"
@@ -122,7 +123,7 @@ Layer::Layer(SurfaceFlinger* flinger, const sp<Client>& client, const String8& n
     mCurrentState.layerStack = 0;
     mCurrentState.sequence = 0;
     mCurrentState.requested = mCurrentState.active;
-    mCurrentState.dataSpace = HAL_DATASPACE_UNKNOWN;
+    mCurrentState.dataSpace = ui::Dataspace::UNKNOWN;
     mCurrentState.appId = 0;
     mCurrentState.type = 0;
 
@@ -636,6 +637,7 @@ void Layer::setGeometry(const sp<const DisplayDevice>& displayDevice, uint32_t z
         hwcInfo.forceClientComposition = true;
     } else {
         auto transform = static_cast<HWC2::Transform>(orientation);
+        hwcInfo.transform = transform;
         auto error = hwcLayer->setTransform(transform);
         ALOGE_IF(error != HWC2::Error::None,
                  "[%s] Failed to set transform %s: "
@@ -1331,7 +1333,7 @@ bool Layer::setLayerStack(uint32_t layerStack) {
     return true;
 }
 
-bool Layer::setDataSpace(android_dataspace dataSpace) {
+bool Layer::setDataSpace(ui::Dataspace dataSpace) {
     if (mCurrentState.dataSpace == dataSpace) return false;
     mCurrentState.sequence++;
     mCurrentState.dataSpace = dataSpace;
@@ -1340,7 +1342,7 @@ bool Layer::setDataSpace(android_dataspace dataSpace) {
     return true;
 }
 
-android_dataspace Layer::getDataSpace() const {
+ui::Dataspace Layer::getDataSpace() const {
     return mCurrentState.dataSpace;
 }
 
@@ -1436,7 +1438,7 @@ LayerDebugInfo Layer::getLayerDebugInfo() const {
     info.mColor = ds.color;
     info.mFlags = ds.flags;
     info.mPixelFormat = getPixelFormat();
-    info.mDataSpace = getDataSpace();
+    info.mDataSpace = static_cast<android_dataspace>(getDataSpace());
     info.mMatrix[0][0] = ds.active.transform[0][0];
     info.mMatrix[0][1] = ds.active.transform[0][1];
     info.mMatrix[1][0] = ds.active.transform[1][0];
@@ -1494,7 +1496,11 @@ void Layer::miniDump(String8& result, int32_t hwcId) const {
 
     const Layer::State& layerState(getDrawingState());
     const LayerBE::HWCInfo& hwcInfo = getBE().mHwcLayers.at(hwcId);
-    result.appendFormat("  %10d | ", layerState.z);
+    if (layerState.zOrderRelativeOf != nullptr || mDrawingParent != nullptr) {
+        result.appendFormat("  rel %6d | ", layerState.z);
+    } else {
+        result.appendFormat("  %10d | ", layerState.z);
+    }
     result.appendFormat("%10s | ", to_string(getCompositionType(hwcId)).c_str());
     const Rect& frame = hwcInfo.displayFrame;
     result.appendFormat("%4d %4d %4d %4d | ", frame.left, frame.top, frame.right, frame.bottom);
@@ -1641,6 +1647,21 @@ bool Layer::detachChildren() {
     }
 
     return true;
+}
+
+// Dataspace::UNKNOWN, Dataspace::SRGB, Dataspace::SRGB_LINEAR,
+// Dataspace::V0_SRGB and Dataspace::V0_SRGB_LINEAR are considered legacy
+// SRGB data space for now.
+// Note that Dataspace::V0_SRGB and Dataspace::V0_SRGB_LINEAR are not legacy
+// data space, however since framework doesn't distinguish them out of legacy
+// SRGB, we have to treat them as the same for now.
+bool Layer::isLegacySrgbDataSpace() const {
+    // TODO(lpy) b/77652630, need to figure out when UNKNOWN can be treated as SRGB.
+    return mDrawingState.dataSpace == ui::Dataspace::UNKNOWN ||
+        mDrawingState.dataSpace == ui::Dataspace::SRGB ||
+        mDrawingState.dataSpace == ui::Dataspace::SRGB_LINEAR ||
+        mDrawingState.dataSpace == ui::Dataspace::V0_SRGB ||
+        mDrawingState.dataSpace == ui::Dataspace::V0_SRGB_LINEAR;
 }
 
 void Layer::setParent(const sp<Layer>& layer) {
@@ -1847,7 +1868,8 @@ void Layer::commitChildList() {
     mDrawingParent = mCurrentParent;
 }
 
-void Layer::writeToProto(LayerProto* layerInfo, LayerVector::StateSet stateSet) {
+void Layer::writeToProto(LayerProto* layerInfo, LayerVector::StateSet stateSet,
+                         bool enableRegionDump) {
     const bool useDrawing = stateSet == LayerVector::StateSet::Drawing;
     const LayerVector& children = useDrawing ? mDrawingChildren : mCurrentChildren;
     const State& state = useDrawing ? mDrawingState : mCurrentState;
@@ -1870,10 +1892,12 @@ void Layer::writeToProto(LayerProto* layerInfo, LayerVector::StateSet stateSet) 
         }
     }
 
-    LayerProtoHelper::writeToProto(state.activeTransparentRegion,
-                                   layerInfo->mutable_transparent_region());
-    LayerProtoHelper::writeToProto(visibleRegion, layerInfo->mutable_visible_region());
-    LayerProtoHelper::writeToProto(surfaceDamageRegion, layerInfo->mutable_damage_region());
+    if (enableRegionDump) {
+        LayerProtoHelper::writeToProto(state.activeTransparentRegion,
+                                       layerInfo->mutable_transparent_region());
+        LayerProtoHelper::writeToProto(visibleRegion, layerInfo->mutable_visible_region());
+        LayerProtoHelper::writeToProto(surfaceDamageRegion, layerInfo->mutable_damage_region());
+    }
 
     layerInfo->set_layer_stack(getLayerStack());
     layerInfo->set_z(state.z);
@@ -1895,7 +1919,7 @@ void Layer::writeToProto(LayerProto* layerInfo, LayerVector::StateSet stateSet) 
 
     layerInfo->set_is_opaque(isOpaque(state));
     layerInfo->set_invalidate(contentDirty);
-    layerInfo->set_dataspace(dataspaceDetails(getDataSpace()));
+    layerInfo->set_dataspace(dataspaceDetails(static_cast<android_dataspace>(getDataSpace())));
     layerInfo->set_pixel_format(decodePixelFormat(getPixelFormat()));
     LayerProtoHelper::writeToProto(getColor(), layerInfo->mutable_color());
     LayerProtoHelper::writeToProto(state.color, layerInfo->mutable_requested_color());
@@ -1923,6 +1947,31 @@ void Layer::writeToProto(LayerProto* layerInfo, LayerVector::StateSet stateSet) 
     layerInfo->set_refresh_pending(isBufferLatched());
     layerInfo->set_window_type(state.type);
     layerInfo->set_app_id(state.appId);
+}
+
+void Layer::writeToProto(LayerProto* layerInfo, int32_t hwcId) {
+    writeToProto(layerInfo, LayerVector::StateSet::Drawing);
+
+    const auto& hwcInfo = getBE().mHwcLayers.at(hwcId);
+
+    const Rect& frame = hwcInfo.displayFrame;
+    LayerProtoHelper::writeToProto(frame, layerInfo->mutable_hwc_frame());
+
+    const FloatRect& crop = hwcInfo.sourceCrop;
+    LayerProtoHelper::writeToProto(crop, layerInfo->mutable_hwc_crop());
+
+    const int32_t transform = static_cast<int32_t>(hwcInfo.transform);
+    layerInfo->set_hwc_transform(transform);
+
+    const int32_t compositionType = static_cast<int32_t>(hwcInfo.compositionType);
+    layerInfo->set_hwc_composition_type(compositionType);
+
+    if (std::strcmp(getTypeId(), "BufferLayer") == 0 &&
+        static_cast<BufferLayer*>(this)->isProtected()) {
+        layerInfo->set_is_protected(true);
+    } else {
+        layerInfo->set_is_protected(false);
+    }
 }
 
 // ---------------------------------------------------------------------------

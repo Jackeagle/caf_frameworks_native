@@ -32,6 +32,7 @@ namespace android {
 using hardware::Return;
 using hardware::hidl_vec;
 using hardware::hidl_handle;
+using namespace hardware::graphics::common;
 using namespace hardware::graphics::composer;
 using PerFrameMetadata = hardware::graphics::composer::V2_2::IComposerClient::PerFrameMetadata;
 using PerFrameMetadataKey =
@@ -256,17 +257,32 @@ Error Composer::createVirtualDisplay(uint32_t width, uint32_t height,
 {
     const uint32_t bufferSlotCount = 1;
     Error error = kDefaultError;
-    mClient->createVirtualDisplay(width, height, *format, bufferSlotCount,
-            [&](const auto& tmpError, const auto& tmpDisplay,
-                const auto& tmpFormat) {
-                error = tmpError;
-                if (error != Error::NONE) {
-                    return;
-                }
+    if (mClient_2_2) {
+        mClient_2_2->createVirtualDisplay_2_2(width, height, *format, bufferSlotCount,
+                [&](const auto& tmpError, const auto& tmpDisplay,
+                    const auto& tmpFormat) {
+                    error = tmpError;
+                    if (error != Error::NONE) {
+                        return;
+                    }
 
-                *outDisplay = tmpDisplay;
-                *format = tmpFormat;
+                    *outDisplay = tmpDisplay;
+                    *format = tmpFormat;
+                });
+    } else {
+        mClient->createVirtualDisplay(width, height,
+                static_cast<V1_0::PixelFormat>(*format), bufferSlotCount,
+                [&](const auto& tmpError, const auto& tmpDisplay,
+                    const auto& tmpFormat) {
+                    error = tmpError;
+                    if (error != Error::NONE) {
+                        return;
+                    }
+
+                    *outDisplay = tmpDisplay;
+                    *format = static_cast<PixelFormat>(tmpFormat);
             });
+    }
 
     return error;
 }
@@ -334,15 +350,29 @@ Error Composer::getColorModes(Display display,
         std::vector<ColorMode>* outModes)
 {
     Error error = kDefaultError;
-    mClient->getColorModes(display,
-            [&](const auto& tmpError, const auto& tmpModes) {
-                error = tmpError;
-                if (error != Error::NONE) {
-                    return;
-                }
 
-                *outModes = tmpModes;
-            });
+    if (mClient_2_2) {
+        mClient_2_2->getColorModes_2_2(display,
+                [&](const auto& tmpError, const auto& tmpModes) {
+                    error = tmpError;
+                    if (error != Error::NONE) {
+                        return;
+                    }
+
+                    *outModes = tmpModes;
+                });
+    } else {
+        mClient->getColorModes(display,
+                [&](const auto& tmpError, const auto& tmpModes) {
+                    error = tmpError;
+                    if (error != Error::NONE) {
+                        return;
+                    }
+                    for (V1_0::ColorMode colorMode : tmpModes) {
+                        outModes->push_back(static_cast<ColorMode>(colorMode));
+                    }
+                });
+    }
 
     return error;
 }
@@ -463,25 +493,6 @@ Error Composer::getHdrCapabilities(Display display,
     return error;
 }
 
-Error Composer::getPerFrameMetadataKeys(
-        Display display, std::vector<IComposerClient::PerFrameMetadataKey>* outKeys) {
-    if (!mClient_2_2) {
-        return Error::UNSUPPORTED;
-    }
-
-    Error error = kDefaultError;
-    mClient_2_2->getPerFrameMetadataKeys(display, [&](const auto& tmpError, const auto& tmpKeys) {
-        error = tmpError;
-        if (error != Error::NONE) {
-            return;
-        }
-
-        *outKeys = tmpKeys;
-    });
-
-    return error;
-}
-
 Error Composer::getReleaseFences(Display display,
         std::vector<Layer>* outLayers, std::vector<int>* outReleaseFences)
 {
@@ -522,7 +533,7 @@ Error Composer::setClientTarget(Display display, uint32_t slot,
             .height = target->getHeight(),
             .stride = target->getStride(),
             .layerCount = target->getLayerCount(),
-            .format = static_cast<PixelFormat>(target->getPixelFormat()),
+            .format = static_cast<V1_0::PixelFormat>(target->getPixelFormat()),
             .usage = target->getUsage(),
         };
         mWriter.setClientTargetMetadata(metadata);
@@ -537,9 +548,16 @@ Error Composer::setClientTarget(Display display, uint32_t slot,
     return Error::NONE;
 }
 
-Error Composer::setColorMode(Display display, ColorMode mode)
+Error Composer::setColorMode(Display display, ColorMode mode,
+        RenderIntent renderIntent)
 {
-    auto ret = mClient->setColorMode(display, mode);
+    hardware::Return<Error> ret(kDefaultError);
+    if (mClient_2_2) {
+        ret = mClient_2_2->setColorMode_2_2(display, mode, renderIntent);
+    } else {
+        ret = mClient->setColorMode(display,
+                static_cast<V1_0::ColorMode>(mode));
+    }
     return unwrapRet(ret);
 }
 
@@ -645,7 +663,7 @@ Error Composer::setLayerBuffer(Display display, Layer layer,
             .height = buffer->getHeight(),
             .stride = buffer->getStride(),
             .layerCount = buffer->getLayerCount(),
-            .format = static_cast<PixelFormat>(buffer->getPixelFormat()),
+            .format = static_cast<V1_0::PixelFormat>(buffer->getPixelFormat()),
             .usage = buffer->getUsage(),
         };
         mWriter.setLayerBufferMetadata(metadata);
@@ -742,7 +760,7 @@ Error Composer::setLayerHdrMetadata(Display display, Layer layer, const HdrMetad
                                   metadata.cta8613.maxFrameAverageLightLevel}});
     }
 
-    mWriter.setPerFrameMetadata(composerMetadata);
+    mWriter.setLayerPerFrameMetadata(composerMetadata);
     return Error::NONE;
 }
 
@@ -846,39 +864,44 @@ Error Composer::execute()
     }
 
     Error error = kDefaultError;
-    auto ret = mClient->executeCommands(commandLength, commandHandles,
-            [&](const auto& tmpError, const auto& tmpOutChanged,
-                const auto& tmpOutLength, const auto& tmpOutHandles)
-            {
-                error = tmpError;
+    hardware::Return<void> ret;
+    auto hidl_callback = [&](const auto& tmpError, const auto& tmpOutChanged,
+                             const auto& tmpOutLength, const auto& tmpOutHandles)
+                         {
+                             error = tmpError;
 
-                // set up new output command queue if necessary
-                if (error == Error::NONE && tmpOutChanged) {
-                    error = kDefaultError;
-                    mClient->getOutputCommandQueue(
-                            [&](const auto& tmpError,
-                                const auto& tmpDescriptor)
-                            {
-                                error = tmpError;
-                                if (error != Error::NONE) {
-                                    return;
-                                }
+                             // set up new output command queue if necessary
+                             if (error == Error::NONE && tmpOutChanged) {
+                                 error = kDefaultError;
+                                 mClient->getOutputCommandQueue(
+                                     [&](const auto& tmpError,
+                                         const auto& tmpDescriptor)
+                                     {
+                                         error = tmpError;
+                                         if (error != Error::NONE) {
+                                             return;
+                                     }
 
-                                mReader.setMQDescriptor(tmpDescriptor);
-                            });
-                }
+                                     mReader.setMQDescriptor(tmpDescriptor);
+                                 });
+                             }
 
-                if (error != Error::NONE) {
-                    return;
-                }
+                             if (error != Error::NONE) {
+                                 return;
+                             }
 
-                if (mReader.readQueue(tmpOutLength, tmpOutHandles)) {
-                    error = mReader.parse();
-                    mReader.reset();
-                } else {
-                    error = Error::NO_RESOURCES;
-                }
-            });
+                             if (mReader.readQueue(tmpOutLength, tmpOutHandles)) {
+                                 error = mReader.parse();
+                                 mReader.reset();
+                             } else {
+                                 error = Error::NO_RESOURCES;
+                             }
+                         };
+    if (mClient_2_2) {
+        ret = mClient_2_2->executeCommands_2_2(commandLength, commandHandles, hidl_callback);
+    } else {
+        ret = mClient->executeCommands(commandLength, commandHandles, hidl_callback);
+    }
     // executeCommands can fail because of out-of-fd and we do not want to
     // abort() in that case
     if (!ret.isOk()) {
@@ -905,6 +928,68 @@ Error Composer::execute()
     }
 
     mWriter.reset();
+
+    return error;
+}
+
+// Composer HAL 2.2
+
+Error Composer::getPerFrameMetadataKeys(
+        Display display, std::vector<IComposerClient::PerFrameMetadataKey>* outKeys) {
+    if (!mClient_2_2) {
+        return Error::UNSUPPORTED;
+    }
+
+    Error error = kDefaultError;
+    mClient_2_2->getPerFrameMetadataKeys(display, [&](const auto& tmpError, const auto& tmpKeys) {
+        error = tmpError;
+        if (error != Error::NONE) {
+            return;
+        }
+
+        *outKeys = tmpKeys;
+    });
+
+    return error;
+}
+
+Error Composer::getRenderIntents(Display display, ColorMode colorMode,
+        std::vector<RenderIntent>* outRenderIntents) {
+    if (!mClient_2_2) {
+        outRenderIntents->push_back(RenderIntent::COLORIMETRIC);
+        return Error::NONE;
+    }
+
+    Error error = kDefaultError;
+    mClient_2_2->getRenderIntents(display, colorMode,
+            [&](const auto& tmpError, const auto& tmpKeys) {
+        error = tmpError;
+        if (error != Error::NONE) {
+            return;
+        }
+
+        *outRenderIntents = tmpKeys;
+    });
+
+    return error;
+}
+
+Error Composer::getDataspaceSaturationMatrix(Dataspace dataspace, mat4* outMatrix)
+{
+    if (!mClient_2_2) {
+        *outMatrix = mat4();
+        return Error::NONE;
+    }
+
+    Error error = kDefaultError;
+    mClient_2_2->getDataspaceSaturationMatrix(dataspace, [&](const auto& tmpError, const auto& tmpMatrix) {
+        error = tmpError;
+        if (error != Error::NONE) {
+            return;
+        }
+
+        *outMatrix = mat4(tmpMatrix.data());
+    });
 
     return error;
 }

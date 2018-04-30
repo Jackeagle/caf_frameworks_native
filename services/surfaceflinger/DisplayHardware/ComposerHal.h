@@ -24,10 +24,12 @@
 #include <vector>
 
 #include <android/frameworks/vr/composer/1.0/IVrComposerClient.h>
+#include <android/hardware/graphics/common/1.1/types.h>
 #include <android/hardware/graphics/composer/2.2/IComposer.h>
 #include <android/hardware/graphics/composer/2.2/IComposerClient.h>
 #include <composer-command-buffer/2.2/ComposerCommandBuffer.h>
 #include <gui/HdrMetadata.h>
+#include <math/mat4.h>
 #include <ui/GraphicBuffer.h>
 #include <utils/StrongPointer.h>
 
@@ -37,12 +39,13 @@ namespace Hwc2 {
 
 using android::frameworks::vr::composer::V1_0::IVrComposerClient;
 
-using android::hardware::graphics::common::V1_0::ColorMode;
 using android::hardware::graphics::common::V1_0::ColorTransform;
-using android::hardware::graphics::common::V1_0::Dataspace;
 using android::hardware::graphics::common::V1_0::Hdr;
-using android::hardware::graphics::common::V1_0::PixelFormat;
 using android::hardware::graphics::common::V1_0::Transform;
+using android::hardware::graphics::common::V1_1::ColorMode;
+using android::hardware::graphics::common::V1_1::Dataspace;
+using android::hardware::graphics::common::V1_1::PixelFormat;
+using android::hardware::graphics::common::V1_1::RenderIntent;
 
 using android::hardware::graphics::composer::V2_1::Config;
 using android::hardware::graphics::composer::V2_1::Display;
@@ -113,9 +116,6 @@ public:
                                      float* outMaxLuminance, float* outMaxAverageLuminance,
                                      float* outMinLuminance) = 0;
 
-    virtual Error getPerFrameMetadataKeys(
-            Display display, std::vector<IComposerClient::PerFrameMetadataKey>* outKeys) = 0;
-
     virtual Error getReleaseFences(Display display, std::vector<Layer>* outLayers,
                                    std::vector<int>* outReleaseFences) = 0;
 
@@ -131,7 +131,7 @@ public:
     virtual Error setClientTarget(Display display, uint32_t slot, const sp<GraphicBuffer>& target,
                                   int acquireFence, Dataspace dataspace,
                                   const std::vector<IComposerClient::Rect>& damage) = 0;
-    virtual Error setColorMode(Display display, ColorMode mode) = 0;
+    virtual Error setColorMode(Display display, ColorMode mode, RenderIntent renderIntent) = 0;
     virtual Error setColorTransform(Display display, const float* matrix, ColorTransform hint) = 0;
     virtual Error setOutputBuffer(Display display, const native_handle_t* buffer,
                                   int releaseFence) = 0;
@@ -174,6 +174,13 @@ public:
                                         const std::vector<IComposerClient::Rect>& visible) = 0;
     virtual Error setLayerZOrder(Display display, Layer layer, uint32_t z) = 0;
     virtual Error setLayerInfo(Display display, Layer layer, uint32_t type, uint32_t appId) = 0;
+
+    // Composer HAL 2.2
+    virtual Error getPerFrameMetadataKeys(
+            Display display, std::vector<IComposerClient::PerFrameMetadataKey>* outKeys) = 0;
+    virtual Error getRenderIntents(Display display, ColorMode colorMode,
+            std::vector<RenderIntent>* outRenderIntents) = 0;
+    virtual Error getDataspaceSaturationMatrix(Dataspace dataspace, mat4* outMatrix) = 0;
 };
 
 namespace impl {
@@ -305,9 +312,6 @@ public:
     Error getHdrCapabilities(Display display, std::vector<Hdr>* outTypes, float* outMaxLuminance,
                              float* outMaxAverageLuminance, float* outMinLuminance) override;
 
-    Error getPerFrameMetadataKeys(
-            Display display, std::vector<IComposerClient::PerFrameMetadataKey>* outKeys) override;
-
     Error getReleaseFences(Display display, std::vector<Layer>* outLayers,
                            std::vector<int>* outReleaseFences) override;
 
@@ -323,7 +327,7 @@ public:
     Error setClientTarget(Display display, uint32_t slot, const sp<GraphicBuffer>& target,
                           int acquireFence, Dataspace dataspace,
                           const std::vector<IComposerClient::Rect>& damage) override;
-    Error setColorMode(Display display, ColorMode mode) override;
+    Error setColorMode(Display display, ColorMode mode, RenderIntent renderIntent) override;
     Error setColorTransform(Display display, const float* matrix, ColorTransform hint) override;
     Error setOutputBuffer(Display display, const native_handle_t* buffer,
                           int releaseFence) override;
@@ -362,6 +366,13 @@ public:
                                 const std::vector<IComposerClient::Rect>& visible) override;
     Error setLayerZOrder(Display display, Layer layer, uint32_t z) override;
     Error setLayerInfo(Display display, Layer layer, uint32_t type, uint32_t appId) override;
+
+    // Composer HAL 2.2
+    Error getPerFrameMetadataKeys(
+            Display display, std::vector<IComposerClient::PerFrameMetadataKey>* outKeys) override;
+    Error getRenderIntents(Display display, ColorMode colorMode,
+            std::vector<RenderIntent>* outRenderIntents) override;
+    Error getDataspaceSaturationMatrix(Dataspace dataspace, mat4* outMatrix) override;
 
 private:
     class CommandWriter : public CommandWriterBase {

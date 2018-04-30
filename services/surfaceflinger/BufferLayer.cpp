@@ -778,6 +778,7 @@ bool BufferLayer::getOpacityForFormat(uint32_t format) {
 }
 
 void BufferLayer::drawWithOpenGL(const RenderArea& renderArea, bool useIdentityTransform) const {
+    ATRACE_CALL();
     const State& s(getDrawingState());
 
     computeGeometry(renderArea, getBE().mMesh, useIdentityTransform);
@@ -829,7 +830,7 @@ void BufferLayer::drawWithOpenGL(const RenderArea& renderArea, bool useIdentityT
                               getColor());
     engine.setSourceDataSpace(mCurrentState.dataSpace);
 
-    if (mCurrentState.dataSpace == HAL_DATASPACE_BT2020_ITU_PQ &&
+    if (mCurrentState.dataSpace == ui::Dataspace::BT2020_ITU_PQ &&
         mConsumer->getCurrentApi() == NATIVE_WINDOW_API_MEDIA &&
         getBE().compositionInfo.mBuffer->getPixelFormat() == HAL_PIXEL_FORMAT_RGBA_1010102) {
         engine.setSourceY410BT2020(true);
