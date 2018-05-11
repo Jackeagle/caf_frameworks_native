@@ -179,7 +179,7 @@ bool HWComposer::onVsync(hwc2_display_t displayId, int64_t timestamp,
 }
 
 status_t HWComposer::allocateVirtualDisplay(uint32_t width, uint32_t height,
-        android_pixel_format_t* format, int32_t *outId) {
+        ui::PixelFormat* format, int32_t *outId) {
     if (mRemainingHwcVirtualDisplays == 0) {
         ALOGE("allocateVirtualDisplay: No remaining virtual displays");
         return NO_MEMORY;
@@ -311,8 +311,8 @@ std::shared_ptr<const HWC2::Display::Config>
     return config;
 }
 
-std::vector<ColorMode> HWComposer::getColorModes(int32_t displayId) const {
-    std::vector<ColorMode> modes;
+std::vector<ui::ColorMode> HWComposer::getColorModes(int32_t displayId) const {
+    std::vector<ui::ColorMode> modes;
 
     if (!isValidDisplay(displayId)) {
         ALOGE("getColorModes: Attempted to access invalid display %d",
@@ -324,23 +324,26 @@ std::vector<ColorMode> HWComposer::getColorModes(int32_t displayId) const {
     if (error != HWC2::Error::None) {
         ALOGE("getColorModes failed for display %d: %s (%d)", displayId,
                 to_string(error).c_str(), static_cast<int32_t>(error));
-        return std::vector<ColorMode>();
+        return std::vector<ui::ColorMode>();
     }
 
     return modes;
 }
 
-status_t HWComposer::setActiveColorMode(int32_t displayId, ColorMode mode) {
+status_t HWComposer::setActiveColorMode(int32_t displayId, ui::ColorMode mode,
+        ui::RenderIntent renderIntent) {
     if (!isValidDisplay(displayId)) {
         ALOGE("setActiveColorMode: Display %d is not valid", displayId);
         return BAD_INDEX;
     }
 
     auto& displayData = mDisplayData[displayId];
-    auto error = displayData.hwcDisplay->setColorMode(mode);
+    auto error = displayData.hwcDisplay->setColorMode(mode, renderIntent);
     if (error != HWC2::Error::None) {
-        ALOGE("setActiveConfig: Failed to set color mode %d on display %d: "
-                "%s (%d)", mode, displayId, to_string(error).c_str(),
+        ALOGE("setActiveConfig: Failed to set color mode %d"
+                "with render intent %d on display %d: "
+                "%s (%d)", mode, renderIntent, displayId,
+                to_string(error).c_str(),
                 static_cast<int32_t>(error));
         return UNKNOWN_ERROR;
     }
@@ -387,7 +390,7 @@ void HWComposer::setVsyncEnabled(int32_t displayId, HWC2::Vsync enabled) {
 
 status_t HWComposer::setClientTarget(int32_t displayId, uint32_t slot,
         const sp<Fence>& acquireFence, const sp<GraphicBuffer>& target,
-        android_dataspace_t dataspace) {
+        ui::Dataspace dataspace) {
     if (!isValidDisplay(displayId)) {
         return BAD_INDEX;
     }
@@ -821,24 +824,79 @@ void HWComposer::clearReleaseFences(int32_t displayId) {
     mDisplayData[displayId].releaseFences.clear();
 }
 
-std::unique_ptr<HdrCapabilities> HWComposer::getHdrCapabilities(
-        int32_t displayId) {
+status_t HWComposer::getHdrCapabilities(
+        int32_t displayId, HdrCapabilities* outCapabilities) {
     if (!isValidDisplay(displayId)) {
         ALOGE("getHdrCapabilities: Display %d is not valid", displayId);
-        return nullptr;
+        return BAD_INDEX;
     }
 
     auto& hwcDisplay = mDisplayData[displayId].hwcDisplay;
-    std::unique_ptr<HdrCapabilities> capabilities;
-    auto error = hwcDisplay->getHdrCapabilities(&capabilities);
+    auto error = hwcDisplay->getHdrCapabilities(outCapabilities);
     if (error != HWC2::Error::None) {
         ALOGE("getOutputCapabilities: Failed to get capabilities on display %d:"
-                " %s (%d)", displayId, to_string(error).c_str(),
-                static_cast<int32_t>(error));
-        return nullptr;
+              " %s (%d)", displayId, to_string(error).c_str(),
+              static_cast<int32_t>(error));
+        return UNKNOWN_ERROR;
+    }
+    return NO_ERROR;
+}
+
+int32_t HWComposer::getSupportedPerFrameMetadata(int32_t displayId) const {
+    if (!isValidDisplay(displayId)) {
+        ALOGE("getPerFrameMetadataKeys: Attempted to access invalid display %d",
+                displayId);
+        return 0;
     }
 
-    return capabilities;
+    int32_t supportedMetadata;
+    auto error = mDisplayData[displayId].hwcDisplay->getSupportedPerFrameMetadata(
+            &supportedMetadata);
+    if (error != HWC2::Error::None) {
+        ALOGE("getPerFrameMetadataKeys failed for display %d: %s (%d)", displayId,
+              to_string(error).c_str(), static_cast<int32_t>(error));
+        return 0;
+    }
+
+    return supportedMetadata;
+}
+
+std::vector<ui::RenderIntent> HWComposer::getRenderIntents(int32_t displayId,
+        ui::ColorMode colorMode) const {
+    if (!isValidDisplay(displayId)) {
+        ALOGE("getRenderIntents: Attempted to access invalid display %d",
+                displayId);
+        return {};
+    }
+
+    std::vector<ui::RenderIntent> renderIntents;
+    auto error = mDisplayData[displayId].hwcDisplay->getRenderIntents(colorMode, &renderIntents);
+    if (error != HWC2::Error::None) {
+        ALOGE("getRenderIntents failed for display %d: %s (%d)", displayId,
+                to_string(error).c_str(), static_cast<int32_t>(error));
+        return std::vector<ui::RenderIntent>();
+    }
+
+    return renderIntents;
+}
+
+mat4 HWComposer::getDataspaceSaturationMatrix(int32_t displayId, ui::Dataspace dataspace) {
+    if (!isValidDisplay(displayId)) {
+        ALOGE("getDataSpaceSaturationMatrix: Attempted to access invalid display %d",
+                displayId);
+        return {};
+    }
+
+    mat4 matrix;
+    auto error = mDisplayData[displayId].hwcDisplay->getDataspaceSaturationMatrix(dataspace,
+            &matrix);
+    if (error != HWC2::Error::None) {
+        ALOGE("getDataSpaceSaturationMatrix failed for display %d: %s (%d)", displayId,
+                to_string(error).c_str(), static_cast<int32_t>(error));
+        return mat4();
+    }
+
+    return matrix;
 }
 
 // Converts a PixelFormat to a human-readable string.  Max 11 chars.
