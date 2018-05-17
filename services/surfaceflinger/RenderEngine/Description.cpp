@@ -73,8 +73,8 @@ void Description::setOutputTransferFunction(TransferFunction transferFunction) {
     mOutputTransferFunction = transferFunction;
 }
 
-void Description::enableToneMapping(bool enable) {
-    mToneMappingEnabled = enable;
+void Description::setDisplayMaxLuminance(const float maxLuminance) {
+    mDisplayMaxLuminance = maxLuminance;
 }
 
 } /* namespace android */

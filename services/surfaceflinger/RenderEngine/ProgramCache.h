@@ -28,6 +28,7 @@
 namespace android {
 
 class Description;
+class Formatter;
 class Program;
 class String8;
 
@@ -81,19 +82,16 @@ public:
             INPUT_TF_LINEAR = 0 << INPUT_TF_SHIFT,
             INPUT_TF_SRGB = 1 << INPUT_TF_SHIFT,
             INPUT_TF_ST2084 = 2 << INPUT_TF_SHIFT,
+            INPUT_TF_HLG = 3 << INPUT_TF_SHIFT,
 
             OUTPUT_TF_SHIFT = 8,
             OUTPUT_TF_MASK = 3 << OUTPUT_TF_SHIFT,
             OUTPUT_TF_LINEAR = 0 << OUTPUT_TF_SHIFT,
             OUTPUT_TF_SRGB = 1 << OUTPUT_TF_SHIFT,
             OUTPUT_TF_ST2084 = 2 << OUTPUT_TF_SHIFT,
+            OUTPUT_TF_HLG = 3 << OUTPUT_TF_SHIFT,
 
-            TONE_MAPPING_SHIFT = 10,
-            TONE_MAPPING_MASK = 1 << TONE_MAPPING_SHIFT,
-            TONE_MAPPING_OFF = 0 << TONE_MAPPING_SHIFT,
-            TONE_MAPPING_ON = 1 << TONE_MAPPING_SHIFT,
-
-            Y410_BT2020_SHIFT = 11,
+            Y410_BT2020_SHIFT = 10,
             Y410_BT2020_MASK = 1 << Y410_BT2020_SHIFT,
             Y410_BT2020_OFF = 0 << Y410_BT2020_SHIFT,
             Y410_BT2020_ON = 1 << Y410_BT2020_SHIFT,
@@ -115,7 +113,6 @@ public:
         inline bool hasColorMatrix() const { return (mKey & COLOR_MATRIX_MASK) == COLOR_MATRIX_ON; }
         inline int getInputTF() const { return (mKey & INPUT_TF_MASK); }
         inline int getOutputTF() const { return (mKey & OUTPUT_TF_MASK); }
-        inline bool hasToneMapping() const { return (mKey & TONE_MAPPING_MASK) == TONE_MAPPING_ON; }
         inline bool isY410BT2020() const { return (mKey & Y410_BT2020_MASK) == Y410_BT2020_ON; }
 
         // this is the definition of a friend function -- not a method of class Needs
@@ -136,6 +133,12 @@ private:
     void primeCache();
     // compute a cache Key from a Description
     static Key computeKey(const Description& description);
+    // Generate EOTF based from Key.
+    static void generateEOTF(Formatter& fs, const Key& needs);
+    // Generate OOTF based from Key.
+    static void generateOOTF(Formatter& fs, const Key& needs);
+    // Generate OETF based from Key.
+    static void generateOETF(Formatter& fs, const Key& needs);
     // generates a program from the Key
     static Program* generateProgram(const Key& needs);
     // generates the vertex shader from the Key
