@@ -55,6 +55,7 @@ namespace android {
 using namespace android::hardware::configstore;
 using namespace android::hardware::configstore::V1_0;
 using android::ui::ColorMode;
+using android::ui::Hdr;
 using android::ui::RenderIntent;
 
 /*
@@ -77,7 +78,8 @@ DisplayDevice::DisplayDevice(
         int displayWidth,
         int displayHeight,
         bool hasWideColorGamut,
-        bool hasHdr10,
+        const HdrCapabilities& hdrCapabilities,
+        const int32_t supportedPerFrameMetadata,
         int initialPowerMode)
     : lastCompositionHadVisibleLayers(false),
       mFlinger(flinger),
@@ -100,15 +102,56 @@ DisplayDevice::DisplayDevice(
       mActiveColorMode(ColorMode::NATIVE),
       mColorTransform(HAL_COLOR_TRANSFORM_IDENTITY),
       mHasWideColorGamut(hasWideColorGamut),
-      mHasHdr10(hasHdr10)
+      mHasHdr10(false),
+      mHasHLG(false),
+      mHasDolbyVision(false),
+      mSupportedPerFrameMetadata(supportedPerFrameMetadata),
+      mDisplayHasColorMatrix(false)
 {
     // clang-format on
+    std::vector<Hdr> types = hdrCapabilities.getSupportedHdrTypes();
+    for (Hdr hdrType : types) {
+        switch (hdrType) {
+            case Hdr::HDR10:
+                mHasHdr10 = true;
+                break;
+            case Hdr::HLG:
+                mHasHLG = true;
+                break;
+            case Hdr::DOLBY_VISION:
+                mHasDolbyVision = true;
+                break;
+            default:
+                ALOGE("UNKNOWN HDR capability: %d", static_cast<int32_t>(hdrType));
+        }
+    }
+
     char property[PROPERTY_VALUE_MAX];
 
     mPanelMountFlip = 0;
     // 1: H-Flip, 2: V-Flip, 3: 180 (HV Flip)
     property_get("vendor.display.panel_mountflip", property, "0");
     mPanelMountFlip = atoi(property);
+
+    float minLuminance = hdrCapabilities.getDesiredMinLuminance();
+    float maxLuminance = hdrCapabilities.getDesiredMaxLuminance();
+    float maxAverageLuminance = hdrCapabilities.getDesiredMaxAverageLuminance();
+
+    minLuminance = minLuminance <= 0.0 ? sDefaultMinLumiance : minLuminance;
+    maxLuminance = maxLuminance <= 0.0 ? sDefaultMaxLumiance : maxLuminance;
+    maxAverageLuminance = maxAverageLuminance <= 0.0 ? sDefaultMaxLumiance : maxAverageLuminance;
+    if (this->hasWideColorGamut()) {
+        // insert HDR10/HLG as we will force client composition for HDR10/HLG
+        // layers
+        if (!hasHDR10Support()) {
+          types.push_back(Hdr::HDR10);
+        }
+
+        if (!hasHLGSupport()) {
+          types.push_back(Hdr::HLG);
+        }
+    }
+    mHdrCapabilities = HdrCapabilities(types, maxLuminance, maxAverageLuminance, minLuminance);
 
     // initialize the display orientation transform.
     setProjection(DisplayState::eOrientationDefault, mViewport, mFrame);
