@@ -20,6 +20,7 @@
 #include "Transform.h"
 
 #include <stdlib.h>
+#include <unordered_map>
 
 #include <math/mat4.h>
 
@@ -27,6 +28,7 @@
 #include <gui/ISurfaceComposer.h>
 #include <hardware/hwcomposer_defs.h>
 #include <ui/GraphicTypes.h>
+#include <ui/HdrCapabilities.h>
 #include <ui/Region.h>
 #include <utils/RefBase.h>
 #include <utils/Mutex.h>
@@ -53,6 +55,9 @@ class HWComposer;
 class DisplayDevice : public LightRefBase<DisplayDevice>
 {
 public:
+    constexpr static float sDefaultMinLumiance = 0.0;
+    constexpr static float sDefaultMaxLumiance = 500.0;
+
     // region in layer-stack space
     mutable Region dirtyRegion;
     // region in screen space
@@ -86,6 +91,7 @@ public:
             bool hasWideColorGamut,
             const HdrCapabilities& hdrCapabilities,
             const int32_t supportedPerFrameMetadata,
+            const std::unordered_map<ui::ColorMode, std::vector<ui::RenderIntent>>& hdrAndRenderIntents,
             int initialPowerMode);
     // clang-format on
 
@@ -139,9 +145,25 @@ public:
     status_t beginFrame(bool mustRecompose) const;
     status_t prepareFrame(HWComposer& hwc);
     bool hasWideColorGamut() const { return mHasWideColorGamut; }
+    // Whether h/w composer has native support for specific HDR type.
     bool hasHDR10Support() const { return mHasHdr10; }
     bool hasHLGSupport() const { return mHasHLG; }
     bool hasDolbyVisionSupport() const { return mHasDolbyVision; }
+    // The returned HdrCapabilities is the combination of HDR capabilities from
+    // hardware composer and RenderEngine. When the DisplayDevice supports wide
+    // color gamut, RenderEngine is able to simulate HDR support in Display P3
+    // color space for both PQ and HLG HDR contents. The minimum and maximum
+    // luminance will be set to sDefaultMinLumiance and sDefaultMaxLumiance
+    // respectively if hardware composer doesn't return meaningful values.
+    const HdrCapabilities& getHdrCapabilities() const { return mHdrCapabilities; }
+
+    // Whether h/w composer has BT2100_PQ color mode.
+    bool hasBT2100PQColorimetricSupport() const { return mHasBT2100PQColorimetric; }
+    bool hasBT2100PQEnhanceSupport() const { return mHasBT2100PQEnhance; }
+
+    // Whether h/w composer has BT2100_HLG color mode.
+    bool hasBT2100HLGColorimetricSupport() const { return mHasBT2100HLGColorimetric; }
+    bool hasBT2100HLGEnhanceSupport() const { return mHasBT2100HLGEnhance; }
 
     void swapBuffers(HWComposer& hwc) const;
 
@@ -195,6 +217,9 @@ public:
     bool hasColorMatrix() const {return mDisplayHasColorMatrix;}
 
 private:
+    void hasToneMapping(const std::vector<ui::RenderIntent>& renderIntents,
+                        bool* outColorimetric, bool *outEnhance);
+
     /*
      *  Constants, set during initialization
      */
@@ -266,8 +291,15 @@ private:
     bool mHasHdr10;
     bool mHasHLG;
     bool mHasDolbyVision;
+    HdrCapabilities mHdrCapabilities;
     const int32_t mSupportedPerFrameMetadata;
     bool mDisplayHasColorMatrix;
+    // Whether h/w composer has BT2100_PQ and BT2100_HLG color mode with
+    // colorimetrical tone mapping or enhanced tone mapping.
+    bool mHasBT2100PQColorimetric;
+    bool mHasBT2100PQEnhance;
+    bool mHasBT2100HLGColorimetric;
+    bool mHasBT2100HLGEnhance;
 };
 
 struct DisplayDeviceState {
@@ -317,6 +349,9 @@ public:
     int32_t getDisplayType() { return mDevice->getDisplayType(); }
     uint32_t getPanelMountFlip() { return mDevice->getPanelMountFlip(); }
     std::string getType() const override { return "DisplayRenderArea"; }
+    float getDisplayMaxLuminance() const override {
+        return mDevice->getHdrCapabilities().getDesiredMaxLuminance();
+    }
 
 private:
     const sp<const DisplayDevice> mDevice;
