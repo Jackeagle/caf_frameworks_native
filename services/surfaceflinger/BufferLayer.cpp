@@ -198,7 +198,8 @@ void BufferLayer::onDraw(const RenderArea& renderArea, const Region& clip,
         // is probably going to have something visibly wrong.
     }
 
-    bool blackOutLayer = isProtected() || (isSecure() && !renderArea.isSecure()) || isHDRLayer();
+    bool blackOutLayer = isProtected() || (isSecure() && !renderArea.isSecure()) ||
+                         (isHDRLayer() && !isColorInversion());
 
     auto& engine(mFlinger->getRenderEngine());
 
@@ -316,6 +317,9 @@ bool BufferLayer::onPostComposition(const std::shared_ptr<FenceTime>& glDoneFenc
     nsecs_t desiredPresentTime = mConsumer->getTimestamp();
     mFrameTracker.setDesiredPresentTime(desiredPresentTime);
 
+    const std::string layerName(getName().c_str());
+    mTimeStats.setDesiredTime(layerName, mCurrentFrameNumber, desiredPresentTime);
+
     std::shared_ptr<FenceTime> frameReadyFence = mConsumer->getCurrentFenceTime();
     if (frameReadyFence->isValid()) {
         mFrameTracker.setFrameReadyFence(std::move(frameReadyFence));
@@ -326,12 +330,15 @@ bool BufferLayer::onPostComposition(const std::shared_ptr<FenceTime>& glDoneFenc
     }
 
     if (presentFence->isValid()) {
+        mTimeStats.setPresentFence(layerName, mCurrentFrameNumber, presentFence);
         mFrameTracker.setActualPresentFence(std::shared_ptr<FenceTime>(presentFence));
     } else {
         // The HWC doesn't support present fences, so use the refresh
         // timestamp instead.
-        mFrameTracker.setActualPresentTime(
-                mFlinger->getHwComposer().getRefreshTimestamp(HWC_DISPLAY_PRIMARY));
+        const nsecs_t actualPresentTime =
+                mFlinger->getHwComposer().getRefreshTimestamp(HWC_DISPLAY_PRIMARY);
+        mTimeStats.setPresentTime(layerName, mCurrentFrameNumber, actualPresentTime);
+        mFrameTracker.setActualPresentTime(actualPresentTime);
     }
 
     mFrameTracker.advanceFrame();
@@ -441,6 +448,7 @@ Region BufferLayer::latchBuffer(bool& recomputeVisibleRegions, nsecs_t latchTime
         // and return early
         if (queuedBuffer) {
             Mutex::Autolock lock(mQueueItemLock);
+            mTimeStats.removeTimeRecord(getName().c_str(), mQueueItems[0].mFrameNumber);
             mQueueItems.removeAt(0);
             android_atomic_dec(&mQueuedFrames);
         }
@@ -454,6 +462,7 @@ Region BufferLayer::latchBuffer(bool& recomputeVisibleRegions, nsecs_t latchTime
             Mutex::Autolock lock(mQueueItemLock);
             mQueueItems.clear();
             android_atomic_and(0, &mQueuedFrames);
+            mTimeStats.clearLayerRecord(getName().c_str());
         }
 
         // Once we have hit this state, the shadow queue may no longer
@@ -473,10 +482,20 @@ Region BufferLayer::latchBuffer(bool& recomputeVisibleRegions, nsecs_t latchTime
 
         // Remove any stale buffers that have been dropped during
         // updateTexImage
-        while (mQueueItems[0].mFrameNumber != currentFrameNumber) {
+        while (mQueuedFrames > 0 && mQueueItems[0].mFrameNumber != currentFrameNumber) {
+            mTimeStats.removeTimeRecord(getName().c_str(), mQueueItems[0].mFrameNumber);
             mQueueItems.removeAt(0);
             android_atomic_dec(&mQueuedFrames);
         }
+
+        if (mQueuedFrames == 0) {
+            ALOGE("[%s] mQueuedFrames is zero !!!", mName.string());
+            return outDirtyRegion;
+        }
+
+        const std::string layerName(getName().c_str());
+        mTimeStats.setAcquireFence(layerName, currentFrameNumber, mQueueItems[0].mFenceTime);
+        mTimeStats.setLatchTime(layerName, currentFrameNumber, latchTime);
 
         mQueueItems.removeAt(0);
     }
@@ -515,7 +534,32 @@ Region BufferLayer::latchBuffer(bool& recomputeVisibleRegions, nsecs_t latchTime
         recomputeVisibleRegions = true;
     }
 
-    setDataSpace(mConsumer->getCurrentDataSpace());
+    ui::Dataspace dataSpace = mConsumer->getCurrentDataSpace();
+    // treat modern dataspaces as legacy dataspaces whenever possible, until
+    // we can trust the buffer producers
+    switch (dataSpace) {
+        case ui::Dataspace::V0_SRGB:
+            dataSpace = ui::Dataspace::SRGB;
+            break;
+        case ui::Dataspace::V0_SRGB_LINEAR:
+            dataSpace = ui::Dataspace::SRGB_LINEAR;
+            break;
+        case ui::Dataspace::V0_JFIF:
+            dataSpace = ui::Dataspace::JFIF;
+            break;
+        case ui::Dataspace::V0_BT601_625:
+            dataSpace = ui::Dataspace::BT601_625;
+            break;
+        case ui::Dataspace::V0_BT601_525:
+            dataSpace = ui::Dataspace::BT601_525;
+            break;
+        case ui::Dataspace::V0_BT709:
+            dataSpace = ui::Dataspace::BT709;
+            break;
+        default:
+            break;
+    }
+    setDataSpace(dataSpace);
 
     Rect crop(mConsumer->getCurrentCrop());
     const uint32_t transform(mConsumer->getCurrentTransform());
@@ -630,7 +674,7 @@ void BufferLayer::setPerFrameData(const sp<const DisplayDevice>& displayDevice) 
     }
 
     const HdrMetadata& metadata = mConsumer->getCurrentHdrMetadata();
-    error = hwcLayer->setHdrMetadata(metadata);
+    error = hwcLayer->setPerFrameMetadata(displayDevice->getSupportedPerFrameMetadata(), metadata);
     if (error != HWC2::Error::None && error != HWC2::Error::Unsupported) {
         ALOGE("[%s] Failed to set hdrMetadata: %s (%d)", mName.string(),
               to_string(error).c_str(), static_cast<int32_t>(error));

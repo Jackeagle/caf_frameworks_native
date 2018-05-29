@@ -55,6 +55,7 @@ namespace android {
 using namespace android::hardware::configstore;
 using namespace android::hardware::configstore::V1_0;
 using android::ui::ColorMode;
+using android::ui::Hdr;
 using android::ui::RenderIntent;
 
 /*
@@ -77,7 +78,9 @@ DisplayDevice::DisplayDevice(
         int displayWidth,
         int displayHeight,
         bool hasWideColorGamut,
-        bool hasHdr10,
+        const HdrCapabilities& hdrCapabilities,
+        const int32_t supportedPerFrameMetadata,
+        const std::unordered_map<ui::ColorMode, std::vector<ui::RenderIntent>>& hdrAndRenderIntents,
         int initialPowerMode)
     : lastCompositionHadVisibleLayers(false),
       mFlinger(flinger),
@@ -100,15 +103,72 @@ DisplayDevice::DisplayDevice(
       mActiveColorMode(ColorMode::NATIVE),
       mColorTransform(HAL_COLOR_TRANSFORM_IDENTITY),
       mHasWideColorGamut(hasWideColorGamut),
-      mHasHdr10(hasHdr10)
+      mHasHdr10(false),
+      mHasHLG(false),
+      mHasDolbyVision(false),
+      mSupportedPerFrameMetadata(supportedPerFrameMetadata),
+      mDisplayHasColorMatrix(false),
+      mHasBT2100PQColorimetric(false),
+      mHasBT2100PQEnhance(false),
+      mHasBT2100HLGColorimetric(false),
+      mHasBT2100HLGEnhance(false)
 {
     // clang-format on
+    std::vector<Hdr> types = hdrCapabilities.getSupportedHdrTypes();
+    for (Hdr hdrType : types) {
+        switch (hdrType) {
+            case Hdr::HDR10:
+                mHasHdr10 = true;
+                break;
+            case Hdr::HLG:
+                mHasHLG = true;
+                break;
+            case Hdr::DOLBY_VISION:
+                mHasDolbyVision = true;
+                break;
+            default:
+                ALOGE("UNKNOWN HDR capability: %d", static_cast<int32_t>(hdrType));
+        }
+    }
+
     char property[PROPERTY_VALUE_MAX];
 
     mPanelMountFlip = 0;
     // 1: H-Flip, 2: V-Flip, 3: 180 (HV Flip)
     property_get("vendor.display.panel_mountflip", property, "0");
     mPanelMountFlip = atoi(property);
+
+    float minLuminance = hdrCapabilities.getDesiredMinLuminance();
+    float maxLuminance = hdrCapabilities.getDesiredMaxLuminance();
+    float maxAverageLuminance = hdrCapabilities.getDesiredMaxAverageLuminance();
+
+    minLuminance = minLuminance <= 0.0 ? sDefaultMinLumiance : minLuminance;
+    maxLuminance = maxLuminance <= 0.0 ? sDefaultMaxLumiance : maxLuminance;
+    maxAverageLuminance = maxAverageLuminance <= 0.0 ? sDefaultMaxLumiance : maxAverageLuminance;
+    if (this->hasWideColorGamut()) {
+        // insert HDR10/HLG as we will force client composition for HDR10/HLG
+        // layers
+        if (!hasHDR10Support()) {
+          types.push_back(Hdr::HDR10);
+        }
+
+        if (!hasHLGSupport()) {
+          types.push_back(Hdr::HLG);
+        }
+    }
+    mHdrCapabilities = HdrCapabilities(types, maxLuminance, maxAverageLuminance, minLuminance);
+
+    auto iter = hdrAndRenderIntents.find(ColorMode::BT2100_PQ);
+    if (iter != hdrAndRenderIntents.end()) {
+        hasToneMapping(iter->second,
+                       &mHasBT2100PQColorimetric, &mHasBT2100PQEnhance);
+    }
+
+    iter = hdrAndRenderIntents.find(ColorMode::BT2100_HLG);
+    if (iter != hdrAndRenderIntents.end()) {
+        hasToneMapping(iter->second,
+                       &mHasBT2100HLGColorimetric, &mHasBT2100HLGEnhance);
+    }
 
     // initialize the display orientation transform.
     setProjection(DisplayState::eOrientationDefault, mViewport, mFrame);
@@ -497,6 +557,22 @@ void DisplayDevice::dump(String8& result) const {
     String8 surfaceDump;
     mDisplaySurface->dumpAsString(surfaceDump);
     result.append(surfaceDump);
+}
+
+void DisplayDevice::hasToneMapping(const std::vector<RenderIntent>& renderIntents,
+                                   bool* outColorimetric, bool *outEnhance) {
+    for (auto intent : renderIntents) {
+        switch (intent) {
+            case RenderIntent::TONE_MAP_COLORIMETRIC:
+                *outColorimetric = true;
+                break;
+            case RenderIntent::TONE_MAP_ENHANCE:
+                *outEnhance = true;
+                break;
+            default:
+                break;
+        }
+    }
 }
 
 std::atomic<int32_t> DisplayDeviceState::nextDisplayId(1);

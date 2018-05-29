@@ -20,7 +20,11 @@
 
 #include <utils/Log.h>
 #include <binder/IPCThreadState.h>
+#ifndef __ANDROID_VNDK__
+#include <binder/IPermissionController.h>
+#endif
 #include <binder/Parcel.h>
+#include <cutils/properties.h>
 #include <utils/String8.h>
 #include <utils/SystemClock.h>
 #include <utils/CallStack.h>
@@ -47,6 +51,9 @@ sp<IServiceManager> defaultServiceManager()
 
     return gDefaultServiceManager;
 }
+
+#ifndef __ANDROID_VNDK__
+// IPermissionController is not accessible to vendors
 
 bool checkCallingPermission(const String16& permission)
 {
@@ -122,6 +129,8 @@ bool checkPermission(const String16& permission, pid_t pid, uid_t uid)
     }
 }
 
+#endif //__ANDROID_VNDK__
+
 // ----------------------------------------------------------------------
 
 class BpServiceManager : public BpInterface<IServiceManager>
@@ -134,20 +143,35 @@ public:
 
     virtual sp<IBinder> getService(const String16& name) const
     {
-        unsigned n;
-        for (n = 0; n < 5; n++){
-            if (n > 0) {
-                if (!strcmp(ProcessState::self()->getDriverName().c_str(), "/dev/vndbinder")) {
-                    ALOGI("Waiting for vendor service %s...", String8(name).string());
-                    CallStack stack(LOG_TAG);
-                } else {
-                    ALOGI("Waiting for service %s...", String8(name).string());
-                }
-                sleep(1);
+        sp<IBinder> svc = checkService(name);
+        if (svc != NULL) return svc;
+
+        const bool isVendorService =
+            strcmp(ProcessState::self()->getDriverName().c_str(), "/dev/vndbinder") == 0;
+        const long timeout = uptimeMillis() + 5000;
+        if (!gSystemBootCompleted) {
+            char bootCompleted[PROPERTY_VALUE_MAX];
+            property_get("sys.boot_completed", bootCompleted, "0");
+            gSystemBootCompleted = strcmp(bootCompleted, "1") == 0 ? true : false;
+        }
+        // retry interval in millisecond.
+        const long sleepTime = gSystemBootCompleted ? 1000 : 100;
+
+        int n = 0;
+        while (uptimeMillis() < timeout) {
+            n++;
+            if (isVendorService) {
+                ALOGI("Waiting for vendor service %s...", String8(name).string());
+                CallStack stack(LOG_TAG);
+            } else if (n%10 == 0) {
+                ALOGI("Waiting for service %s...", String8(name).string());
             }
+            usleep(1000*sleepTime);
+
             sp<IBinder> svc = checkService(name);
             if (svc != NULL) return svc;
         }
+        ALOGW("Service %s didn't start. Returning NULL", String8(name).string());
         return NULL;
     }
 

@@ -20,20 +20,21 @@
 #include "Transform.h"
 
 #include <stdlib.h>
+#include <unordered_map>
 
 #include <math/mat4.h>
 
-#include <ui/Region.h>
-
 #include <binder/IBinder.h>
+#include <gui/ISurfaceComposer.h>
+#include <hardware/hwcomposer_defs.h>
+#include <ui/GraphicTypes.h>
+#include <ui/HdrCapabilities.h>
+#include <ui/Region.h>
 #include <utils/RefBase.h>
 #include <utils/Mutex.h>
 #include <utils/String8.h>
 #include <utils/Timers.h>
 
-#include <gui/ISurfaceComposer.h>
-#include <hardware/hwcomposer_defs.h>
-#include <ui/GraphicTypes.h>
 #include "RenderArea.h"
 #include "RenderEngine/Surface.h"
 
@@ -54,6 +55,9 @@ class HWComposer;
 class DisplayDevice : public LightRefBase<DisplayDevice>
 {
 public:
+    constexpr static float sDefaultMinLumiance = 0.0;
+    constexpr static float sDefaultMaxLumiance = 500.0;
+
     // region in layer-stack space
     mutable Region dirtyRegion;
     // region in screen space
@@ -85,7 +89,9 @@ public:
             int displayWidth,
             int displayHeight,
             bool hasWideColorGamut,
-            bool hasHdr10,
+            const HdrCapabilities& hdrCapabilities,
+            const int32_t supportedPerFrameMetadata,
+            const std::unordered_map<ui::ColorMode, std::vector<ui::RenderIntent>>& hdrAndRenderIntents,
             int initialPowerMode);
     // clang-format on
 
@@ -131,12 +137,33 @@ public:
     int32_t                 getHwcDisplayId() const { return mHwcDisplayId; }
     const wp<IBinder>&      getDisplayToken() const { return mDisplayToken; }
     uint32_t                getPanelMountFlip() const { return mPanelMountFlip; }
+
+    int32_t getSupportedPerFrameMetadata() const { return mSupportedPerFrameMetadata; }
+
     // We pass in mustRecompose so we can keep VirtualDisplaySurface's state
     // machine happy without actually queueing a buffer if nothing has changed
     status_t beginFrame(bool mustRecompose) const;
     status_t prepareFrame(HWComposer& hwc);
     bool hasWideColorGamut() const { return mHasWideColorGamut; }
-    bool hasHdr10() const { return mHasHdr10; }
+    // Whether h/w composer has native support for specific HDR type.
+    bool hasHDR10Support() const { return mHasHdr10; }
+    bool hasHLGSupport() const { return mHasHLG; }
+    bool hasDolbyVisionSupport() const { return mHasDolbyVision; }
+    // The returned HdrCapabilities is the combination of HDR capabilities from
+    // hardware composer and RenderEngine. When the DisplayDevice supports wide
+    // color gamut, RenderEngine is able to simulate HDR support in Display P3
+    // color space for both PQ and HLG HDR contents. The minimum and maximum
+    // luminance will be set to sDefaultMinLumiance and sDefaultMaxLumiance
+    // respectively if hardware composer doesn't return meaningful values.
+    const HdrCapabilities& getHdrCapabilities() const { return mHdrCapabilities; }
+
+    // Whether h/w composer has BT2100_PQ color mode.
+    bool hasBT2100PQColorimetricSupport() const { return mHasBT2100PQColorimetric; }
+    bool hasBT2100PQEnhanceSupport() const { return mHasBT2100PQEnhance; }
+
+    // Whether h/w composer has BT2100_HLG color mode.
+    bool hasBT2100HLGColorimetricSupport() const { return mHasBT2100HLGColorimetric; }
+    bool hasBT2100HLGEnhanceSupport() const { return mHasBT2100HLGEnhance; }
 
     void swapBuffers(HWComposer& hwc) const;
 
@@ -186,8 +213,13 @@ public:
      */
     uint32_t getPageFlipCount() const;
     void dump(String8& result) const;
+    void setColorMatrix(const bool colorMatrix) {mDisplayHasColorMatrix = colorMatrix;}
+    bool hasColorMatrix() const {return mDisplayHasColorMatrix;}
 
 private:
+    void hasToneMapping(const std::vector<ui::RenderIntent>& renderIntents,
+                        bool* outColorimetric, bool *outEnhance);
+
     /*
      *  Constants, set during initialization
      */
@@ -257,6 +289,17 @@ private:
     // Fed to RenderEngine during composition.
     bool mHasWideColorGamut;
     bool mHasHdr10;
+    bool mHasHLG;
+    bool mHasDolbyVision;
+    HdrCapabilities mHdrCapabilities;
+    const int32_t mSupportedPerFrameMetadata;
+    bool mDisplayHasColorMatrix;
+    // Whether h/w composer has BT2100_PQ and BT2100_HLG color mode with
+    // colorimetrical tone mapping or enhanced tone mapping.
+    bool mHasBT2100PQColorimetric;
+    bool mHasBT2100PQEnhance;
+    bool mHasBT2100HLGColorimetric;
+    bool mHasBT2100HLGEnhance;
 };
 
 struct DisplayDeviceState {
@@ -289,7 +332,8 @@ public:
                               rotation) {}
     DisplayRenderArea(const sp<const DisplayDevice> device, Rect sourceCrop, uint32_t reqHeight,
                       uint32_t reqWidth, ISurfaceComposer::Rotation rotation)
-          : RenderArea(reqHeight, reqWidth, rotation), mDevice(device), mSourceCrop(sourceCrop) {}
+          : RenderArea(reqHeight, reqWidth, CaptureFill::OPAQUE, rotation), mDevice(device),
+                              mSourceCrop(sourceCrop) {}
 
     const Transform& getTransform() const override { return mDevice->getTransform(); }
     Rect getBounds() const override { return mDevice->getBounds(); }
@@ -298,10 +342,6 @@ public:
     bool isSecure() const override { return mDevice->isSecure(); }
     bool needsFiltering() const override { return mDevice->needsFiltering(); }
     Rect getSourceCrop() const override { return mSourceCrop; }
-    bool getWideColorSupport() const override { return mDevice->hasWideColorGamut(); }
-    ui::Dataspace getDataSpace() const override {
-        return mDevice->getCompositionDataSpace();
-    }
     int32_t getDisplayType() { return mDevice->getDisplayType(); }
     uint32_t getPanelMountFlip() { return mDevice->getPanelMountFlip(); }
     std::string getType() const override { return "DisplayRenderArea"; }
