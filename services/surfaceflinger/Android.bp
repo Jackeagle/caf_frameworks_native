@@ -27,6 +27,7 @@ cc_defaults {
         "android.hardware.graphics.composer@2.1",
         "android.hardware.graphics.composer@2.2",
         "android.hardware.power@1.0",
+        "vendor.display.config@1.2",
         "libbase",
         "libbinder",
         "libbufferhubqueue",
