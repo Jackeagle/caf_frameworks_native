@@ -81,6 +81,7 @@ protected:
     virtual void setupLayerBlackedOut();
     virtual void setupFillWithColor(float r, float g, float b, float a);
     virtual void setupColorTransform(const mat4& colorTransform);
+    virtual void setSaturationMatrix(const mat4& saturationMatrix);
     virtual void disableTexturing();
     virtual void disableBlending();
 
@@ -102,6 +103,7 @@ protected:
     mat3 mSrgbToXyz;
     mat3 mBt2020ToXyz;
     mat3 mDisplayP3ToXyz;
+    mat4 mXyzToSrgb;
     mat4 mXyzToDisplayP3;
     mat4 mXyzToBt2020;
 
