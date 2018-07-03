@@ -370,7 +370,7 @@ void ConsumerFrameEventHistory::addQueue(const NewFrameEventsEntry& newEntry) {
     newTimestamps.acquireFence = newEntry.acquireFence;
     newTimestamps.valid = true;
     if (mQueueOffset >= MAX_FRAME_HISTORY) {
-        ALOGE_IF(mProducerWantsEvents, "addQueue: QueueOffset is outofbounds");
+        ALOGE_IF(mProducerWantsEvents, "addQueue: QueueOffset is out of bound");
         return;
     }
     mFrames[mQueueOffset] = newTimestamps;
