@@ -31,10 +31,11 @@
 
 #include "SurfaceFlinger.h"
 
-#ifdef DISPLAY_CONFIG_1_1
+#ifdef DISPLAY_CONFIG_1_2
+#include <vendor/display/config/1.2/IDisplayConfig.h>
+#elif DISPLAY_CONFIG_1_1
 #include <vendor/display/config/1.1/IDisplayConfig.h>
 #endif
-
 
 namespace android {
 
@@ -77,10 +78,6 @@ protected:
     bool mDisableExtAnimation;
     bool mAnimating = false;
 
-#ifdef DISPLAY_CONFIG_1_1
-    android::sp<vendor::display::config::V1_1::IDisplayConfig> mDisplayConfig;
-#endif
-
     static bool sAllowHDRFallBack;
     static bool AllowHDRFallBack() { return sAllowHDRFallBack; }
 
@@ -96,6 +93,10 @@ protected:
       bool replaceAfterCommit = false;
       long int position = 0;
     } mFileDump;
+#endif
+
+#ifdef DISPLAY_CONFIG_1_1
+    android::sp<vendor::display::config::V1_1::IDisplayConfig> mDisplayConfig_1_1 = NULL;
 #endif
     Mutex mExtAnimationLock;
     Condition mExtAnimationCond;
