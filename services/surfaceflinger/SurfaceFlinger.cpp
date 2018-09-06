@@ -19,6 +19,7 @@
 
 #include <stdint.h>
 #include <sys/types.h>
+#include <sys/resource.h>
 #include <algorithm>
 #include <errno.h>
 #include <math.h>
@@ -658,6 +659,19 @@ void SurfaceFlinger::init() {
       mBuiltInBitmask.set(disp);
     }
     ALOGV("Done initializing");
+
+    struct rlimit fd_limit = {};
+    getrlimit(RLIMIT_NOFILE, &fd_limit);
+    ALOGI("Original fd limit -  %lu", fd_limit.rlim_cur);
+    fd_limit.rlim_cur = fd_limit.rlim_cur * 2;
+    if (fd_limit.rlim_cur < fd_limit.rlim_max) {
+        auto err = setrlimit(RLIMIT_NOFILE, &fd_limit);
+        if (err) {
+            ALOGW("Unable to increase fd limit -  err:%d, %s", errno, strerror(errno));
+        } else {
+            ALOGI("Updated fd limit -  %lu", fd_limit.rlim_cur);
+        }
+    }
 }
 
 void SurfaceFlinger::readPersistentProperties() {
