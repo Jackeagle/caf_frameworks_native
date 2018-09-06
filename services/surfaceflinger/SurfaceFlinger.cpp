@@ -113,6 +113,33 @@ using ui::Hdr;
 using ui::RenderIntent;
 
 namespace {
+
+#pragma clang diagnostic push
+#pragma clang diagnostic error "-Wswitch-enum"
+
+bool isWideColorMode(const ColorMode colorMode) {
+    switch (colorMode) {
+        case ColorMode::DISPLAY_P3:
+        case ColorMode::ADOBE_RGB:
+        case ColorMode::DCI_P3:
+        case ColorMode::BT2020:
+        case ColorMode::BT2100_PQ:
+        case ColorMode::BT2100_HLG:
+            return true;
+        case ColorMode::NATIVE:
+        case ColorMode::STANDARD_BT601_625:
+        case ColorMode::STANDARD_BT601_625_UNADJUSTED:
+        case ColorMode::STANDARD_BT601_525:
+        case ColorMode::STANDARD_BT601_525_UNADJUSTED:
+        case ColorMode::STANDARD_BT709:
+        case ColorMode::SRGB:
+            return false;
+    }
+    return false;
+}
+
+#pragma clang diagnostic pop
+
 class ConditionalLock {
 public:
     ConditionalLock(Mutex& mutex, bool lock) : mMutex(mutex), mLocked(lock) {
@@ -125,6 +152,7 @@ private:
     Mutex& mMutex;
     bool mLocked;
 };
+
 }  // namespace anonymous
 
 // ---------------------------------------------------------------------------
@@ -2023,7 +2051,7 @@ void SurfaceFlinger::setUpHWComposer() {
             if (hwcId >= 0) {
                 const Vector<sp<Layer>>& currentLayers(
                         displayDevice->getVisibleLayersSortedByZ());
-                setDisplayAnimating(displayDevice, dpy);
+                setDisplayAnimating(displayDevice);
                 for (size_t i = 0; i < currentLayers.size(); i++) {
                     const auto& layer = currentLayers[i];
                     if (!layer->hasHwcLayer(hwcId)) {
@@ -2303,17 +2331,8 @@ sp<DisplayDevice> SurfaceFlinger::setupNewDisplayDeviceInternal(
     if (hasWideColorDisplay) {
         std::vector<ColorMode> modes = getHwComposer().getColorModes(hwcId);
         for (ColorMode colorMode : modes) {
-            switch (colorMode) {
-                case ColorMode::DISPLAY_P3:
-                case ColorMode::ADOBE_RGB:
-                case ColorMode::DCI_P3:
-                case ColorMode::BT2020:
-                case ColorMode::BT2100_PQ:
-                case ColorMode::BT2100_HLG:
-                    hasWideColorGamut = true;
-                    break;
-                default:
-                    break;
+            if (isWideColorMode(colorMode)) {
+                hasWideColorGamut = true;
             }
 
             std::vector<RenderIntent> renderIntents = getHwComposer().getRenderIntents(hwcId,
@@ -3261,6 +3280,8 @@ void SurfaceFlinger::setTransactionState(
         uint32_t flags)
 {
     ATRACE_CALL();
+
+    handleDPTransactionIfNeeded(displays);
     Mutex::Autolock _l(mStateLock);
     uint32_t transactionFlags = 0;
 
