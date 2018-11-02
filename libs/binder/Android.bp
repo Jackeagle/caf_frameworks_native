@@ -132,9 +132,6 @@ cc_library_shared {
     ],
 
     clang: true,
-    sanitize: {
-        misc_undefined: ["integer"],
-    },
 }
 
 // AIDL interface between libbinder and framework.jar
