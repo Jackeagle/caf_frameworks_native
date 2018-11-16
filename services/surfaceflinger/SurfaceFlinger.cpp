@@ -1419,7 +1419,6 @@ void SurfaceFlinger::onHotplugReceived(int32_t sequenceId, hwc2_display_t displa
     setTransactionFlags(eDisplayTransactionNeeded);
 }
 
-static int pending_refresh_ = 0;
 void SurfaceFlinger::onRefreshReceived(int sequenceId,
                                        hwc2_display_t /*display*/) {
     Mutex::Autolock lock(mStateLock);
@@ -1427,8 +1426,6 @@ void SurfaceFlinger::onRefreshReceived(int sequenceId,
         return;
     }
     repaintEverything();
-    pending_refresh_ = 1;
-    ALOGE("onRefreshReceived");
 }
 
 void SurfaceFlinger::setVsyncEnabled(int disp, int enabled) {
@@ -1813,19 +1810,6 @@ void SurfaceFlinger::postComposition(nsecs_t refreshStartTime)
         } else {
             disableHardwareVsync(false);
         }
-    }
-
-    if (pending_refresh_ == 1) {
-        ALOGE("Resyncing to hw vsync on idle fallback expecting 53 fps");
-        resyncToHardwareVsync(true);
-        pending_refresh_ = 2;
-    } else if (pending_refresh_ == 2) {
-        pending_refresh_ = 3;
-        ALOGE("Preparing to Resync");
-    } else if (pending_refresh_ == 3) {
-        ALOGE("Preparing to Resync expecting 60 fps");
-        resyncToHardwareVsync(true);
-        pending_refresh_ = 0;
     }
 
     if (!hasSyncFramework) {
