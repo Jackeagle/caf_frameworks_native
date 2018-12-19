@@ -27,6 +27,8 @@
 
 #include "RenderEngine/RenderEngine.h"
 
+#include <dlfcn.h>
+
 #include <gui/BufferItem.h>
 #include <gui/BufferQueue.h>
 #include <gui/LayerDebugInfo.h>
@@ -63,7 +65,7 @@ BufferLayer::BufferLayer(SurfaceFlinger* flinger, const sp<Client>& client, cons
         mRefreshPending(false) {
     ALOGV("Creating Layer %s", name.string());
 
-    mFlinger->getRenderEngine().genTextures(1, &mTextureName);
+    mTextureName = mFlinger->getNewTexture();
     mTexture.init(Texture::TEXTURE_EXTERNAL, mTextureName);
 
     if (flags & ISurfaceComposerClient::eNonPremultiplied) mPremultipliedAlpha = false;
@@ -72,6 +74,20 @@ BufferLayer::BufferLayer(SurfaceFlinger* flinger, const sp<Client>& client, cons
 
     // drawing state & current state are identical
     mDrawingState = mCurrentState;
+    if (mFlinger->mDolphinFuncsEnabled) {
+        mDolphinHandle = dlopen("libdolphin.so", RTLD_NOW);
+        if (!mDolphinHandle) {
+            ALOGW("Unable to open libdolphin.so: %s.", dlerror());
+        } else {
+            mDolphinOnFrameAvailable =
+                (void (*) (bool, int, int32_t, int32_t, String8))dlsym(mDolphinHandle,
+                                                                       "dolphinOnFrameAvailable");
+            if (!mDolphinOnFrameAvailable) {
+                dlclose(mDolphinHandle);
+                ALOGW("Unable to get dolphinOnFrameAvailable.");
+            }
+        }
+    }
 }
 
 BufferLayer::~BufferLayer() {
@@ -82,6 +98,9 @@ BufferLayer::~BufferLayer() {
               "surface flinger layer %s",
               mName.string());
         destroyAllHwcLayers();
+    }
+    if (mDolphinOnFrameAvailable) {
+        dlclose(mDolphinHandle);
     }
 }
 
@@ -389,6 +408,7 @@ Region BufferLayer::latchBuffer(bool& recomputeVisibleRegions, nsecs_t latchTime
         // replicated in LayerBE until FE/BE is ready to be synchronized
         getBE().compositionInfo.hwc.sidebandStream = mSidebandStream;
         if (getBE().compositionInfo.hwc.sidebandStream != nullptr) {
+            mCurrentState.modified = true;
             setTransactionFlags(eTransactionNeeded);
             mFlinger->setTransactionFlags(eTraversalNeeded);
         }
@@ -715,8 +735,12 @@ void BufferLayer::onFirstRef() {
     sp<IGraphicBufferConsumer> consumer;
     BufferQueue::createBufferQueue(&producer, &consumer, true);
     mProducer = new MonitoredProducer(producer, mFlinger, this);
-    mConsumer = new BufferLayerConsumer(consumer,
-            mFlinger->getRenderEngine(), mTextureName, this);
+    {
+        // Grab the SF state lock during this since it's the only safe way to access RenderEngine
+        Mutex::Autolock lock(mFlinger->mStateLock);
+        mConsumer = new BufferLayerConsumer(consumer, mFlinger->getRenderEngine(), mTextureName,
+                                            this);
+    }
     mConsumer->setConsumerUsageBits(getEffectiveUsage(0));
     mConsumer->setContentsChangedListener(this);
     mConsumer->setName(mName);
@@ -761,6 +785,18 @@ void BufferLayer::onFrameAvailable(const BufferItem& item) {
         // Wake up any pending callbacks
         mLastFrameNumberReceived = item.mFrameNumber;
         mQueueItemCondition.broadcast();
+    }
+
+    if (mDolphinOnFrameAvailable) {
+        const Vector< sp<Layer> >& visibleLayersSortedByZ =
+            mFlinger->getLayerSortedByZForHwcDisplay(0);
+        bool isTransparentRegion = this->visibleNonTransparentRegion.isEmpty();
+        int visibleLayerNum = visibleLayersSortedByZ.size();
+        Rect crop = this->getContentCrop();
+        int32_t width = crop.getWidth();
+        int32_t height = crop.getHeight();
+        String8 mName = this->getName();
+        mDolphinOnFrameAvailable(isTransparentRegion, visibleLayerNum, width, height, mName);
     }
 
     mFlinger->signalLayerUpdate();
