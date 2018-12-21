@@ -206,6 +206,20 @@ EventHub::EventHub(void) :
         mPendingEventCount(0), mPendingEventIndex(0), mPendingINotify(false) {
     acquire_wake_lock(PARTIAL_WAKE_LOCK, WAKE_LOCK_ID);
 
+#ifdef TERTIARY_TOUCH
+    char p[PROPERTY_VALUE_MAX];
+    property_get("persist.mtmd.display0_touch", p, "usb-xhci-hcd.0.auto-1.4/input0");
+    mBuiltinTouchScreenPhy.setTo(p);
+    memset(p, 0, PROPERTY_VALUE_MAX);
+
+    property_get("persist.mtmd.display1_touch", p, "usb-xhci-hcd.0.auto-1.2/input0");
+    mExternalTouchScreenPhy.setTo(p);
+    memset(p, 0, PROPERTY_VALUE_MAX);
+
+    property_get("persist.mtmd.display2_touch", p, "usb-xhci-hcd.0.auto-1.3/input0");
+    mTertiaryTouchScreenPhy.setTo(p);
+#endif
+
     mEpollFd = epoll_create(EPOLL_SIZE_HINT);
     LOG_ALWAYS_FATAL_IF(mEpollFd < 0, "Could not create epoll instance.  errno=%d", errno);
 
@@ -1354,9 +1368,15 @@ status_t EventHub::openDeviceLocked(const char *devicePath) {
     }
 
     // Determine whether the device is external or internal.
-    if (isExternalDeviceLocked(device)) {
+    if (device->classes & (device->classes & INPUT_DEVICE_CLASS_TOUCH)
+                || (device->classes & INPUT_DEVICE_CLASS_TOUCH_MT)) {
+        int devType = getTouchInputDeviceType(device);
+        if ( devType == 1)
+            device->classes |= INPUT_DEVICE_CLASS_EXTERNAL;
+        else if ( devType == 2)
+            device->classes |= INPUT_DEVICE_CLASS_TERTIARY;
+    } else if (isExternalDeviceLocked(device))
         device->classes |= INPUT_DEVICE_CLASS_EXTERNAL;
-    }
 
     if (device->classes & (INPUT_DEVICE_CLASS_JOYSTICK | INPUT_DEVICE_CLASS_DPAD)
             && device->classes & INPUT_DEVICE_CLASS_GAMEPAD) {
@@ -1527,7 +1547,55 @@ bool EventHub::isExternalDeviceLocked(Device* device) {
             return !value;
         }
     }
-    return device->identifier.bus == BUS_USB || device->identifier.bus == BUS_BLUETOOTH;
+    bool value;
+    value = device->identifier.bus == BUS_USB || device->identifier.bus == BUS_BLUETOOTH;
+
+#ifdef TERTIARY_TOUCH
+    if ((device->classes & INPUT_DEVICE_CLASS_TOUCH)
+            || (device->classes & INPUT_DEVICE_CLASS_TOUCH_MT)) {
+        if (mBuiltinTouchScreenPhy.isEmpty()) {
+            mBuiltinTouchScreenPhy.setTo((const String8)device->identifier.location.string());
+            value = false;
+        } else if (mBuiltinTouchScreenPhy == device->identifier.location.string()) {
+            value = false;
+        } else {
+            ALOGI("isExternalDeviceLocked - device id %d is not primary touch device",
+                device->id);
+        }
+    }
+#endif
+    return value;
+}
+
+uint32_t EventHub::getTouchInputDeviceType(Device* device) {
+    uint32_t value = 0;
+    value = device->identifier.bus == BUS_USB || device->identifier.bus == BUS_BLUETOOTH;
+
+#ifdef TERTIARY_TOUCH
+    if ((device->classes & INPUT_DEVICE_CLASS_TOUCH)
+            || (device->classes & INPUT_DEVICE_CLASS_TOUCH_MT)) {
+        if (mBuiltinTouchScreenPhy.isEmpty()) {
+            mBuiltinTouchScreenPhy.setTo((const String8)device->identifier.location.string());
+            value = 0;
+        } else if (mBuiltinTouchScreenPhy == device->identifier.location.string()) {
+            value = 0;
+        } else if (mExternalTouchScreenPhy.isEmpty()) {
+            mExternalTouchScreenPhy.setTo((const String8)device->identifier.location.string());
+            value = 1;
+        } else if (mExternalTouchScreenPhy == device->identifier.location.string()) {
+            value = 1;
+        } else if (mTertiaryTouchScreenPhy.isEmpty()) {
+            mTertiaryTouchScreenPhy.setTo((const String8)device->identifier.location.string());
+            value = 2;
+        } else if (mTertiaryTouchScreenPhy == device->identifier.location.string()) {
+            value = 2;
+        } else {
+            ALOGV("getTouchInputDeviceClass - device id %d is not with known touch device class",
+                device->id);
+        }
+    }
+#endif
+    return value;
 }
 
 bool EventHub::deviceHasMicLocked(Device* device) {

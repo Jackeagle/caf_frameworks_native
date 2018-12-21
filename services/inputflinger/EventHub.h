@@ -54,6 +54,7 @@
  */
 #define MSC_ANDROID_TIME_SEC 0x6
 #define MSC_ANDROID_TIME_USEC 0x7
+#define TERTIARY_TOUCH
 
 namespace android {
 
@@ -143,6 +144,9 @@ enum {
 
     /* The input device is external (not built-in). */
     INPUT_DEVICE_CLASS_EXTERNAL      = 0x80000000,
+
+    /* The input device is tertiary. */
+    INPUT_DEVICE_CLASS_TERTIARY      = 0x20000000,
 };
 
 /*
@@ -424,6 +428,7 @@ private:
     status_t loadKeyMapLocked(Device* device);
 
     bool isExternalDeviceLocked(Device* device);
+    uint32_t getTouchInputDeviceType(Device* device);
     bool deviceHasMicLocked(Device* device);
 
     int32_t getNextControllerNumberLocked(Device* device);
@@ -481,6 +486,12 @@ private:
     bool mPendingINotify;
 
     bool mUsingEpollWakeup;
+
+#ifdef TERTIARY_TOUCH
+    String8 mBuiltinTouchScreenPhy;
+    String8 mExternalTouchScreenPhy;
+    String8 mTertiaryTouchScreenPhy;
+#endif
 };
 
 }; // namespace android
