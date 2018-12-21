@@ -270,6 +270,8 @@ bool InputReaderConfiguration::getDisplayViewport(ViewportType viewportType,
         viewport = &mExternalDisplay;
     } else if (viewportType == ViewportType::VIEWPORT_INTERNAL) {
         viewport = &mInternalDisplay;
+    } else if (viewportType == ViewportType::VIEWPORT_TERTIARY) {
+        viewport = &mTertiaryDisplay;
     }
 
     if (viewport != NULL && viewport->displayId >= 0) {
@@ -285,6 +287,8 @@ void InputReaderConfiguration::setPhysicalDisplayViewport(ViewportType viewportT
         mExternalDisplay = viewport;
     } else if (viewportType == ViewportType::VIEWPORT_INTERNAL) {
         mInternalDisplay = viewport;
+    } else if (viewportType == ViewportType::VIEWPORT_TERTIARY) {
+        mTertiaryDisplay = viewport;
     }
 }
 
@@ -298,6 +302,8 @@ void InputReaderConfiguration::dump(std::string& dump) const {
     dumpViewport(dump, mInternalDisplay);
     dump += INDENT4 "ViewportExternal:\n";
     dumpViewport(dump, mExternalDisplay);
+    dump.append(INDENT4 "ViewportTertiary:\n");
+    dumpViewport(dump, mTertiaryDisplay);
     dump += INDENT4 "ViewportVirtual:\n";
     for (const DisplayViewport& viewport : mVirtualDisplays) {
         dumpViewport(dump, viewport);
@@ -523,6 +529,11 @@ InputDevice* InputReader::createDeviceLocked(int32_t deviceId, int32_t controlle
     // External devices.
     if (classes & INPUT_DEVICE_CLASS_EXTERNAL) {
         device->setExternal(true);
+    }
+
+    // Tertiary display
+    if (classes & INPUT_DEVICE_CLASS_TERTIARY) {
+        device->setTertiary(true);
     }
 
     // Devices with mics.
@@ -1041,7 +1052,7 @@ InputDevice::InputDevice(InputReaderContext* context, int32_t id, int32_t genera
         int32_t controllerNumber, const InputDeviceIdentifier& identifier, uint32_t classes) :
         mContext(context), mId(id), mGeneration(generation), mControllerNumber(controllerNumber),
         mIdentifier(identifier), mClasses(classes),
-        mSources(0), mIsExternal(false), mHasMic(false), mDropUntilNextSync(false) {
+        mSources(0), mIsExternal(false), mIsTertiary(false), mHasMic(false), mDropUntilNextSync(false) {
 }
 
 InputDevice::~InputDevice() {
@@ -3387,12 +3398,14 @@ void TouchInputMapper::configureParameters() {
 
     mParameters.hasAssociatedDisplay = false;
     mParameters.associatedDisplayIsExternal = false;
+    mParameters.associatedDisplayIsTertiary = false;
     if (mParameters.orientationAware
             || mParameters.deviceType == Parameters::DEVICE_TYPE_TOUCH_SCREEN
             || mParameters.deviceType == Parameters::DEVICE_TYPE_POINTER) {
         mParameters.hasAssociatedDisplay = true;
         if (mParameters.deviceType == Parameters::DEVICE_TYPE_TOUCH_SCREEN) {
             mParameters.associatedDisplayIsExternal = getDevice()->isExternal();
+            mParameters.associatedDisplayIsTertiary = getDevice()->isTertiary();
             getDevice()->getConfiguration().tryGetProperty(String8("touch.displayId"),
                     mParameters.uniqueDisplayId);
         }
@@ -3438,9 +3451,11 @@ void TouchInputMapper::dumpParameters(std::string& dump) {
     }
 
     dump += StringPrintf(
-            INDENT4 "AssociatedDisplay: hasAssociatedDisplay=%s, isExternal=%s, displayId='%s'\n",
+            INDENT4 "AssociatedDisplay: hasAssociatedDisplay=%s, isExternal=%s, isTertiary = %s,"
+            "displayId='%s'\n",
             toString(mParameters.hasAssociatedDisplay),
             toString(mParameters.associatedDisplayIsExternal),
+            toString(mParameters.associatedDisplayIsTertiary),
             mParameters.uniqueDisplayId.c_str());
     dump += StringPrintf(INDENT4 "OrientationAware: %s\n",
             toString(mParameters.orientationAware));
@@ -3522,6 +3537,8 @@ void TouchInputMapper::configureSurface(nsecs_t when, bool* outResetNeeded) {
 
         if (mParameters.associatedDisplayIsExternal) {
             viewportTypeToUse = ViewportType::VIEWPORT_EXTERNAL;
+        } else if (mParameters.associatedDisplayIsTertiary) {
+            viewportTypeToUse = ViewportType::VIEWPORT_TERTIARY;
         } else if (!mParameters.uniqueDisplayId.isEmpty()) {
             // If the IDC file specified a unique display Id, then it expects to be linked to a
             // virtual display with the same unique ID.
