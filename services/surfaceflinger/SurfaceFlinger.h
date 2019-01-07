@@ -846,6 +846,7 @@ private:
     // don't use a lock for these, we don't care
     std::bitset<DisplayDevice::NUM_BUILTIN_DISPLAY_TYPES> mActiveDisplays;
     std::bitset<DisplayDevice::NUM_BUILTIN_DISPLAY_TYPES> mBuiltInBitmask;
+    std::mutex mVsyncPeriodMutex;
     std::vector<nsecs_t> vsyncPeriod;
     int mDebugRegion;
     int mDebugDDMS;
@@ -926,6 +927,15 @@ private:
     CreateNativeWindowSurfaceFunction mCreateNativeWindowSurface;
 
     SurfaceFlingerBE mBE;
+
+    bool mIsDolphinEnabled = false;
+    bool mDolphinFuncsEnabled = false;
+    void *mDolphinHandle = nullptr;
+    void (*mDolphinOnFrameAvailable)(bool isTransparent, int num, int32_t width, int32_t height,
+                                     String8 name) = nullptr;
+    bool (*mDolphinInit)() = nullptr;
+    bool (*mDolphinMonitor)(int number) = nullptr;
+    void (*mDolphinRefresh)() = nullptr;
 };
 }; // namespace android
 
