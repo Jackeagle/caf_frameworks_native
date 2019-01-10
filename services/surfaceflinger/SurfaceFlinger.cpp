@@ -389,10 +389,13 @@ SurfaceFlinger::SurfaceFlinger() : SurfaceFlinger(SkipInitialization) {
             ALOGW("Unable to open libdolphin.so: %s.", dlerror());
         } else {
             mDolphinInit = (bool (*) ())dlsym(mDolphinHandle, "dolphinInit");
+            mDolphinOnFrameAvailable =
+                (void (*) (bool, int, int32_t, int32_t, String8))dlsym(mDolphinHandle,
+                                                                       "dolphinOnFrameAvailable");
             mDolphinMonitor = (bool (*) (int))dlsym(mDolphinHandle, "dolphinMonitor");
             mDolphinRefresh = (void (*) ())dlsym(mDolphinHandle, "dolphinRefresh");
-            if (mDolphinInit != nullptr && mDolphinMonitor != nullptr &&
-                    mDolphinRefresh != nullptr) {
+            if (mDolphinInit != nullptr && mDolphinOnFrameAvailable != nullptr &&
+                mDolphinMonitor != nullptr && mDolphinRefresh != nullptr) {
                 if (mDolphinInit()) mDolphinFuncsEnabled = true;
             }
             if (!mDolphinFuncsEnabled) dlclose(mDolphinHandle);
@@ -1474,8 +1477,11 @@ void SurfaceFlinger::onRefreshReceived(int sequenceId,
     // Track Vsync Period before and after refresh.
     const auto& activeConfig = getBE().mHwc->getActiveConfig(HWC_DISPLAY_PRIMARY);
     const nsecs_t period = activeConfig->getVsyncPeriod();
-    vsyncPeriod = {};
-    vsyncPeriod.push_back(period);
+    {
+      std::lock_guard lock(mVsyncPeriodMutex);
+      vsyncPeriod = {};
+      vsyncPeriod.push_back(period);
+    }
 }
 
 void SurfaceFlinger::setVsyncEnabled(int disp, int enabled) {
@@ -1946,6 +1952,7 @@ void SurfaceFlinger::postComposition(nsecs_t refreshStartTime)
 }
 
 void SurfaceFlinger::forceResyncModel() {
+    std::lock_guard lock(mVsyncPeriodMutex);
     if (!vsyncPeriod.size()) {
         return;
     }

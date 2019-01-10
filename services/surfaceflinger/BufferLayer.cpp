@@ -74,20 +74,6 @@ BufferLayer::BufferLayer(SurfaceFlinger* flinger, const sp<Client>& client, cons
 
     // drawing state & current state are identical
     mDrawingState = mCurrentState;
-    if (mFlinger->mDolphinFuncsEnabled) {
-        mDolphinHandle = dlopen("libdolphin.so", RTLD_NOW);
-        if (!mDolphinHandle) {
-            ALOGW("Unable to open libdolphin.so: %s.", dlerror());
-        } else {
-            mDolphinOnFrameAvailable =
-                (void (*) (bool, int, int32_t, int32_t, String8))dlsym(mDolphinHandle,
-                                                                       "dolphinOnFrameAvailable");
-            if (!mDolphinOnFrameAvailable) {
-                dlclose(mDolphinHandle);
-                ALOGW("Unable to get dolphinOnFrameAvailable.");
-            }
-        }
-    }
 }
 
 BufferLayer::~BufferLayer() {
@@ -98,9 +84,6 @@ BufferLayer::~BufferLayer() {
               "surface flinger layer %s",
               mName.string());
         destroyAllHwcLayers();
-    }
-    if (mDolphinOnFrameAvailable) {
-        dlclose(mDolphinHandle);
     }
 }
 
@@ -730,6 +713,8 @@ bool BufferLayer::isOpaque(const Layer::State& s) const {
 }
 
 void BufferLayer::onFirstRef() {
+    Layer::onFirstRef();
+
     // Creates a custom BufferQueue for SurfaceFlingerConsumer to use
     sp<IGraphicBufferProducer> producer;
     sp<IGraphicBufferConsumer> consumer;
@@ -787,7 +772,7 @@ void BufferLayer::onFrameAvailable(const BufferItem& item) {
         mQueueItemCondition.broadcast();
     }
 
-    if (mDolphinOnFrameAvailable) {
+    if (mFlinger->mDolphinFuncsEnabled) {
         const Vector< sp<Layer> >& visibleLayersSortedByZ =
             mFlinger->getLayerSortedByZForHwcDisplay(0);
         bool isTransparentRegion = this->visibleNonTransparentRegion.isEmpty();
@@ -796,7 +781,8 @@ void BufferLayer::onFrameAvailable(const BufferItem& item) {
         int32_t width = crop.getWidth();
         int32_t height = crop.getHeight();
         String8 mName = this->getName();
-        mDolphinOnFrameAvailable(isTransparentRegion, visibleLayerNum, width, height, mName);
+        mFlinger->mDolphinOnFrameAvailable(isTransparentRegion, visibleLayerNum,
+                                           width, height, mName);
     }
 
     mFlinger->signalLayerUpdate();
