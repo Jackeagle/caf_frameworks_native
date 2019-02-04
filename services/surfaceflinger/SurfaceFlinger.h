@@ -851,6 +851,7 @@ private:
     std::bitset<DisplayDevice::NUM_BUILTIN_DISPLAY_TYPES> mPluggableBitmask;
     std::mutex mVsyncPeriodMutex;
     std::vector<nsecs_t> vsyncPeriod;
+    bool mUpdateVSyncSourceOnDoze = false;
     int mDebugRegion;
     int mDebugDDMS;
     int mDebugDisableHWC;
@@ -930,7 +931,6 @@ private:
 
     SurfaceFlingerBE mBE;
 
-    bool mIsDolphinEnabled = false;
     bool mDolphinFuncsEnabled = false;
     void *mDolphinHandle = nullptr;
     void (*mDolphinOnFrameAvailable)(bool isTransparent, int num, int32_t width, int32_t height,
