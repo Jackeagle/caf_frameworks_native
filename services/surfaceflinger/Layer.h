@@ -19,9 +19,11 @@
 
 #include <sys/types.h>
 
+#include <compositionengine/LayerFE.h>
 #include <gui/BufferQueue.h>
 #include <gui/ISurfaceComposerClient.h>
 #include <gui/LayerState.h>
+#include <input/InputWindow.h>
 #include <layerproto/LayerProtoHeader.h>
 #include <math/vec4.h>
 #include <renderengine/Mesh.h>
@@ -47,11 +49,9 @@
 #include "LayerVector.h"
 #include "MonitoredProducer.h"
 #include "SurfaceFlinger.h"
-#include "TimeStats/TimeStats.h"
 #include "TransactionCompletedThread.h"
 
 #include "DisplayHardware/HWComposer.h"
-#include "DisplayHardware/HWComposerBufferCache.h"
 #include "RenderArea.h"
 
 using namespace android::surfaceflinger;
@@ -67,6 +67,10 @@ class GraphicBuffer;
 class SurfaceFlinger;
 class LayerDebugInfo;
 class LayerBE;
+
+namespace compositionengine {
+class Layer;
+}
 
 namespace impl {
 class SurfaceInterceptor;
@@ -87,7 +91,7 @@ struct LayerCreationArgs {
     uint32_t flags;
 };
 
-class Layer : public virtual RefBase {
+class Layer : public virtual compositionengine::LayerFE {
     static std::atomic<int32_t> sSequence;
 
 public:
@@ -109,6 +113,7 @@ public:
     enum { // flags for doTransaction()
         eDontUpdateGeometryState = 0x00000001,
         eVisibleRegion = 0x00000002,
+        eInputInfoChanged = 0x00000004
     };
 
     struct Geometry {
@@ -121,6 +126,17 @@ public:
                     (transform.ty() == rhs.transform.ty());
         }
         inline bool operator!=(const Geometry& rhs) const { return !operator==(rhs); }
+    };
+
+    struct RoundedCornerState {
+        RoundedCornerState() = default;
+        RoundedCornerState(FloatRect cropRect, float radius)
+              : cropRect(cropRect), radius(radius) {}
+
+        // Rounded rectangle in local layer coordinate space.
+        FloatRect cropRect = FloatRect();
+        // Radius of the rounded rectangle.
+        float radius = 0.0f;
     };
 
     struct State {
@@ -155,8 +171,7 @@ public:
         Region activeTransparentRegion_legacy;
         Region requestedTransparentRegion_legacy;
 
-        int32_t appId;
-        int32_t type;
+        LayerMetadata metadata;
 
         // If non-null, a Surface this Surface's Z-order is interpreted relative to.
         wp<Layer> zOrderRelativeOf;
@@ -165,6 +180,10 @@ public:
         SortedVector<wp<Layer>> zOrderRelatives;
 
         half4 color;
+        float cornerRadius;
+
+        bool inputInfoChanged;
+        InputWindowInfo inputInfo;
 
         // The fields below this point are only used by BufferStateLayer
         Geometry active;
@@ -186,6 +205,11 @@ public:
         mat4 colorTransform;
         bool hasColorTransform;
 
+        // pointer to background color layer that, if set, appears below the buffer state layer
+        // and the buffer state layer's children.  Z order will be set to
+        // INT_MIN
+        sp<Layer> bgColorLayer;
+
         // The deque of callback handles for this frame. The back of the deque contains the most
         // recent callback handle.
         std::deque<sp<CallbackHandle>> callbackHandles;
@@ -195,6 +219,7 @@ public:
     virtual ~Layer();
 
     void setPrimaryDisplayOnly() { mPrimaryDisplayOnly = true; }
+    bool getPrimaryDisplayOnly() const { return mPrimaryDisplayOnly; }
 
     // ------------------------------------------------------------------------
     // Geometry setting functions.
@@ -249,7 +274,14 @@ public:
     virtual bool setRelativeLayer(const sp<IBinder>& relativeToHandle, int32_t relativeZ);
 
     virtual bool setAlpha(float alpha);
-    virtual bool setColor(const half3& color);
+    virtual bool setColor(const half3& /*color*/) { return false; };
+
+    // Set rounded corner radius for this layer and its children.
+    //
+    // We only support 1 radius per layer in the hierarchy, where parent layers have precedence.
+    // The shape of the rounded corner rectangle is specified by the crop rectangle of the layer
+    // from which we inferred the rounded corner radius.
+    virtual bool setCornerRadius(float cornerRadius);
     virtual bool setTransparentRegionHint(const Region& transparent);
     virtual bool setFlags(uint8_t flags, uint8_t mask);
     virtual bool setLayerStack(uint32_t layerStack);
@@ -258,19 +290,22 @@ public:
                                               uint64_t frameNumber);
     virtual void deferTransactionUntil_legacy(const sp<Layer>& barrierLayer, uint64_t frameNumber);
     virtual bool setOverrideScalingMode(int32_t overrideScalingMode);
-    virtual void setInfo(int32_t type, int32_t appId);
+    virtual bool setMetadata(LayerMetadata data);
     virtual bool reparentChildren(const sp<IBinder>& layer);
     virtual void setChildrenDrawingParent(const sp<Layer>& layer);
     virtual bool reparent(const sp<IBinder>& newParentHandle);
     virtual bool detachChildren();
+    bool attachChildren();
+    bool isLayerDetached() const { return mLayerDetached; }
     virtual bool setColorTransform(const mat4& matrix);
-    virtual const mat4& getColorTransform() const;
+    virtual mat4 getColorTransform() const;
     virtual bool hasColorTransform() const;
 
     // Used only to set BufferStateLayer state
     virtual bool setTransform(uint32_t /*transform*/) { return false; };
     virtual bool setTransformToDisplayInverse(bool /*transformToDisplayInverse*/) { return false; };
     virtual bool setCrop(const Rect& /*crop*/) { return false; };
+    virtual bool setFrame(const Rect& /*frame*/) { return false; };
     virtual bool setBuffer(const sp<GraphicBuffer>& /*buffer*/) { return false; };
     virtual bool setAcquireFence(const sp<Fence>& /*fence*/) { return false; };
     virtual bool setDataspace(ui::Dataspace /*dataspace*/) { return false; };
@@ -282,6 +317,7 @@ public:
             const std::vector<sp<CallbackHandle>>& /*handles*/) {
         return false;
     };
+    virtual bool setBackgroundColor(const half3& color, float alpha, ui::Dataspace dataspace);
 
     ui::Dataspace getDataSpace() const { return mCurrentDataSpace; }
 
@@ -291,6 +327,8 @@ public:
     // needed to be saturated so that they match what they are designed for
     // visually.
     bool isLegacyDataSpace() const;
+
+    virtual std::shared_ptr<compositionengine::Layer> getCompositionLayer() const;
 
     // If we have received a new buffer this frame, we will pass its surface
     // damage down to hardware composer. Otherwise, we must send a region with
@@ -302,6 +340,9 @@ public:
     uint32_t getTransactionFlags(uint32_t flags);
     uint32_t setTransactionFlags(uint32_t flags);
 
+    // Deprecated, please use compositionengine::Output::belongsInOutput()
+    // instead.
+    // TODO(lpique): Move the remaining callers (screencap) to the new function.
     bool belongsToDisplay(uint32_t layerStack, bool isPrimaryDisplay) const {
         return getLayerStack() == layerStack && (!mPrimaryDisplayOnly || isPrimaryDisplay);
     }
@@ -332,8 +373,6 @@ public:
      */
     bool isSecure() const;
 
-    bool isSecureDisplay() const;
-
     /*
      * isVisible - true if this layer is visible, false otherwise
      */
@@ -348,6 +387,12 @@ public:
     bool isHiddenByPolicy() const;
 
     /*
+     * isProtected - true if the layer may contain protected content in the
+     * GRALLOC_USAGE_PROTECTED sense.
+     */
+    virtual bool isProtected() const { return false; }
+
+    /*
      * isFixedSize - true if content has a fixed size
      */
     virtual bool isFixedSize() const { return true; }
@@ -357,12 +402,10 @@ public:
     // to avoid grabbing the lock again to avoid deadlock
     virtual bool isCreatedFromMainThread() const { return false; }
 
-
     bool isRemovedFromCurrentState() const;
 
     void writeToProto(LayerProto* layerInfo,
-                      LayerVector::StateSet stateSet = LayerVector::StateSet::Drawing,
-                      bool enableRegionDump = true);
+                      LayerVector::StateSet stateSet = LayerVector::StateSet::Drawing);
 
     void writeToProto(LayerProto* layerInfo, DisplayId displayId);
 
@@ -431,9 +474,6 @@ public:
     // If a buffer was replaced this frame, release the former buffer
     virtual void releasePendingBuffer(nsecs_t /*dequeueReadyTime*/) { }
 
-
-    virtual bool isScreenshot() const { return false; }
-
     /*
      * draw - performs some global clipping optimizations
      * and calls onDraw().
@@ -490,6 +530,11 @@ public:
      */
     void onRemovedFromCurrentState();
 
+    /*
+     * Called when the layer is added back to the current state list.
+     */
+    void addToCurrentState();
+
     // Updates the transform hint in our SurfaceFlingerConsumer to match
     // the current orientation of the display device.
     void updateTransformHint(const sp<const DisplayDevice>& display) const;
@@ -511,7 +556,8 @@ public:
 
     bool createHwcLayer(HWComposer* hwc, DisplayId displayId);
     bool destroyHwcLayer(DisplayId displayId);
-    void destroyAllHwcLayers();
+    void destroyHwcLayersForAllDisplays();
+    void destroyAllHwcLayersPlusChildren();
 
     bool hasHwcLayer(DisplayId displayId) const { return getBE().mHwcLayers.count(displayId) > 0; }
 
@@ -540,10 +586,10 @@ public:
     LayerDebugInfo getLayerDebugInfo() const;
 
     /* always call base class first */
-    static void miniDumpHeader(String8& result);
-    void miniDump(String8& result, DisplayId displayId) const;
-    void dumpFrameStats(String8& result) const;
-    void dumpFrameEvents(String8& result);
+    static void miniDumpHeader(std::string& result);
+    void miniDump(std::string& result, DisplayId displayId) const;
+    void dumpFrameStats(std::string& result) const;
+    void dumpFrameEvents(std::string& result);
     void clearFrameStats();
     void logFrameStats();
     void getFrameStats(FrameStats* outStats) const;
@@ -566,6 +612,13 @@ public:
     half getAlpha() const;
     half4 getColor() const;
 
+    // Returns how rounded corners should be drawn for this layer.
+    // This will traverse the hierarchy until it reaches its root, finding topmost rounded
+    // corner definition and converting it into current layer's coordinates.
+    // As of now, only 1 corner radius per display list is supported. Subsequent ones will be
+    // ignored.
+    RoundedCornerState getRoundedCornerState() const;
+
     void traverseInReverseZOrder(LayerVector::StateSet stateSet,
                                  const LayerVector::Visitor& visitor);
     void traverseInZOrder(LayerVector::StateSet stateSet, const LayerVector::Visitor& visitor);
@@ -584,7 +637,7 @@ public:
     ssize_t removeChild(const sp<Layer>& layer);
     sp<Layer> getParent() const { return mCurrentParent.promote(); }
     bool hasParent() const { return getParent() != nullptr; }
-    Rect computeScreenBounds() const;
+    Rect computeScreenBounds(bool reduceTransparentRegion = true) const;
     bool setChildLayer(const sp<Layer>& childLayer, int32_t z);
     bool setChildRelativeLayer(const sp<Layer>& childLayer,
             const sp<IBinder>& relativeToHandle, int32_t relativeZ);
@@ -594,6 +647,12 @@ public:
     void commitChildList();
     int32_t getZ() const;
     virtual void pushPendingState();
+
+    /**
+     * Returns active buffer size in the correct orientation. Buffer size is determined by undoing
+     * any buffer transformations. If the layer has no buffer then return INVALID_RECT.
+     */
+    virtual Rect getBufferSize(const Layer::State&) const { return Rect::INVALID_RECT; }
 
 protected:
     // constant
@@ -632,11 +691,15 @@ protected:
     // IGraphicBufferProducer client, as that should not affect child clipping.
     // Returns in screen space.
     Rect computeInitialCrop(const sp<const DisplayDevice>& display) const;
+    /**
+     * Setup rounded corners coordinates of this layer, taking into account the layer bounds and
+     * crop coordinates, transforming them into layer space.
+     */
+    void setupRoundedCornersCropCoordinates(Rect win, const FloatRect& roundedCornersCrop) const;
 
     // drawing
     void clearWithOpenGL(const RenderArea& renderArea, float r, float g, float b,
                          float alpha) const;
-
     void setParent(const sp<Layer>& layer);
 
     LayerVector makeTraversalList(LayerVector::StateSet stateSet, bool* outSkipRelativeZUsers);
@@ -712,6 +775,10 @@ public:
     bool getPremultipledAlpha() const;
 
     bool mPendingHWCDestroy{false};
+    void setInputInfo(const InputWindowInfo& info);
+
+    InputWindowInfo fillInputInfo();
+    bool hasInput() const;
 
 protected:
     // -----------------------------------------------------------------------
@@ -741,8 +808,6 @@ protected:
     ConsumerFrameEventHistory mFrameEventHistory;
     FenceTimeline mAcquireTimeline;
     FenceTimeline mReleaseTimeline;
-
-    TimeStats& mTimeStats = TimeStats::getInstance();
 
     // main thread
     sp<GraphicBuffer> mActiveBuffer;
@@ -781,6 +846,11 @@ protected:
 
     mutable LayerBE mBE;
 
+    // Can only be accessed with the SF state lock held.
+    bool mLayerDetached{false};
+    // Can only be accessed with the SF state lock held.
+    bool mChildrenChanged{false};
+
 private:
     /**
      * Returns an unsorted vector of all layers that are part of this tree.
@@ -811,12 +881,6 @@ private:
      * bounds are constrained by its parent bounds.
      */
     Rect getCroppedBufferSize(const Layer::State& s) const;
-
-    /**
-     * Returns active buffer size in the correct orientation. Buffer size is determined by undoing
-     * any buffer transformations. If the layer has no buffer then return INVALID_RECT.
-     */
-    virtual Rect getBufferSize(const Layer::State&) const { return Rect::INVALID_RECT; }
 };
 
 } // namespace android

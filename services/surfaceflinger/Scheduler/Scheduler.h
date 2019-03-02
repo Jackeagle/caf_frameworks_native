@@ -25,7 +25,10 @@
 #include "DispSync.h"
 #include "EventControlThread.h"
 #include "EventThread.h"
+#include "IdleTimer.h"
 #include "InjectVSyncSource.h"
+#include "LayerHistory.h"
+#include "SchedulerUtils.h"
 
 namespace android {
 
@@ -33,6 +36,9 @@ class EventControlThread;
 
 class Scheduler {
 public:
+    using ExpiredIdleTimerCallback = std::function<void()>;
+    using ResetIdleTimerCallback = std::function<void()>;
+
     // Enum to indicate whether to start the transaction early, or at vsync time.
     enum class TransactionStart { EARLY, NORMAL };
 
@@ -50,14 +56,14 @@ public:
 
     class Connection {
     public:
-        Connection(sp<ConnectionHandle> handle, sp<BnDisplayEventConnection> eventConnection,
+        Connection(sp<ConnectionHandle> handle, sp<EventThreadConnection> eventConnection,
                    std::unique_ptr<EventThread> eventThread)
               : handle(handle), eventConnection(eventConnection), thread(std::move(eventThread)) {}
 
         ~Connection() = default;
 
         sp<ConnectionHandle> handle;
-        sp<BnDisplayEventConnection> eventConnection;
+        sp<EventThreadConnection> eventConnection;
         const std::unique_ptr<EventThread> thread;
     };
 
@@ -67,16 +73,16 @@ public:
 
     /** Creates an EventThread connection. */
     sp<ConnectionHandle> createConnection(
-            const std::string& connectionName, int64_t phaseOffsetNs,
-            impl::EventThread::ResyncWithRateLimitCallback resyncCallback,
+            const char* connectionName, int64_t phaseOffsetNs, ResyncCallback resyncCallback,
             impl::EventThread::InterceptVSyncsCallback interceptCallback);
 
-    sp<IDisplayEventConnection> createDisplayEventConnection(const sp<ConnectionHandle>& handle);
+    sp<IDisplayEventConnection> createDisplayEventConnection(const sp<ConnectionHandle>& handle,
+                                                             ResyncCallback resyncCallback);
 
     // Getter methods.
     EventThread* getEventThread(const sp<ConnectionHandle>& handle);
 
-    sp<BnDisplayEventConnection> getEventConnection(const sp<ConnectionHandle>& handle);
+    sp<EventThreadConnection> getEventConnection(const sp<ConnectionHandle>& handle);
 
     // Should be called when receiving a hotplug event.
     void hotplugReceived(const sp<ConnectionHandle>& handle, EventThread::DisplayType displayType,
@@ -89,7 +95,7 @@ public:
     void onScreenReleased(const sp<ConnectionHandle>& handle);
 
     // Should be called when dumpsys command is received.
-    void dump(const sp<ConnectionHandle>& handle, String8& result) const;
+    void dump(const sp<ConnectionHandle>& handle, std::string& result) const;
 
     // Offers ability to modify phase offset in the event thread.
     void setPhaseOffset(const sp<ConnectionHandle>& handle, nsecs_t phaseOffset);
@@ -103,17 +109,36 @@ public:
     void addPresentFence(const std::shared_ptr<FenceTime>& fenceTime);
     void setIgnorePresentFences(bool ignore);
     void makeHWSyncAvailable(bool makeAvailable);
-    void addNewFrameTimestamp(const nsecs_t newFrameTimestamp, bool isAutoTimestamp);
+    // Adds the present time for given layer to the history of present times.
+    void addFramePresentTimeForLayer(const nsecs_t framePresentTime, bool isAutoTimestamp,
+                                     const std::string layerName);
+    // Increments counter in the layer history to indicate that SF has started a new frame.
+    void incrementFrameCounter();
+    // Callback that gets invoked once the idle timer expires.
+    void setExpiredIdleTimerCallback(const ExpiredIdleTimerCallback& expiredTimerCallback);
+    // Callback that gets invoked once the idle timer is reset.
+    void setResetIdleTimerCallback(const ResetIdleTimerCallback& resetTimerCallback);
+    // Returns relevant information about Scheduler for dumpsys purposes.
+    std::string doDump();
 
 protected:
     virtual std::unique_ptr<EventThread> makeEventThread(
-            const std::string& connectionName, DispSync* dispSync, int64_t phaseOffsetNs,
-            impl::EventThread::ResyncWithRateLimitCallback resyncCallback,
+            const char* connectionName, DispSync* dispSync, int64_t phaseOffsetNs,
             impl::EventThread::InterceptVSyncsCallback interceptCallback);
 
 private:
     nsecs_t calculateAverage() const;
     void updateFrameSkipping(const int64_t skipCount);
+    // Collects the statistical mean (average) and median between timestamp
+    // intervals for each frame for each layer.
+    void determineLayerTimestampStats(const std::string layerName, const nsecs_t framePresentTime);
+    // Collects the average difference between timestamps for each frame regardless
+    // of which layer the timestamp came from.
+    void determineTimestampAverage(bool isAutoTimestamp, const nsecs_t framePresentTime);
+    // Function that resets the idle timer.
+    void resetIdleTimer();
+    // Function that is called when the timer expires.
+    void expiredTimerCallback();
 
     // TODO(b/113612090): Instead of letting BufferQueueLayer to access mDispSync directly, it
     // should make request to Scheduler to compute next refresh.
@@ -124,7 +149,7 @@ private:
 
     // The offset in nanoseconds to use, when DispSync timestamps present fence
     // signaling time.
-    const nsecs_t mDispSyncPresentTimeOffset;
+    nsecs_t mDispSyncPresentTimeOffset;
 
     // Each connection has it's own ID. This variable keeps track of the count.
     static std::atomic<int64_t> sNextId;
@@ -147,9 +172,19 @@ private:
     // simulate 30Hz rendering, we skip every other frame, and this variable is set
     // to 1.
     int64_t mSkipCount = 0;
-    static constexpr size_t ARRAY_SIZE = 30;
-    std::array<int64_t, ARRAY_SIZE> mTimeDifferences;
+    std::array<int64_t, scheduler::ARRAY_SIZE> mTimeDifferences{};
     size_t mCounter = 0;
+
+    LayerHistory mLayerHistory;
+
+    // Timer that records time between requests for next vsync. If the time is higher than a given
+    // interval, a callback is fired. Set this variable to >0 to use this feature.
+    int64_t mSetIdleTimerMs = 0;
+    std::unique_ptr<scheduler::IdleTimer> mIdleTimer;
+
+    std::mutex mCallbackLock;
+    ExpiredIdleTimerCallback mExpiredTimerCallback GUARDED_BY(mCallbackLock);
+    ResetIdleTimerCallback mResetTimerCallback GUARDED_BY(mCallbackLock);
 };
 
 } // namespace android

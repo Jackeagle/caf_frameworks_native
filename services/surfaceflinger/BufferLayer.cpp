@@ -19,38 +19,42 @@
 #define LOG_TAG "BufferLayer"
 #define ATRACE_TAG ATRACE_TAG_GRAPHICS
 
-#include "BufferLayer.h"
-#include "Colorizer.h"
-#include "DisplayDevice.h"
-#include "LayerRejecter.h"
+#include <cmath>
+#include <cstdlib>
+#include <mutex>
 
-#include <renderengine/RenderEngine.h>
-
+#include <compositionengine/CompositionEngine.h>
+#include <compositionengine/Layer.h>
+#include <compositionengine/LayerCreationArgs.h>
+#include <cutils/compiler.h>
+#include <cutils/native_handle.h>
+#include <cutils/properties.h>
 #include <gui/BufferItem.h>
 #include <gui/BufferQueue.h>
 #include <gui/LayerDebugInfo.h>
 #include <gui/Surface.h>
-
+#include <renderengine/RenderEngine.h>
 #include <ui/DebugUtils.h>
-
 #include <utils/Errors.h>
 #include <utils/Log.h>
 #include <utils/NativeHandle.h>
 #include <utils/StopWatch.h>
 #include <utils/Trace.h>
 
-#include <cutils/compiler.h>
-#include <cutils/native_handle.h>
-#include <cutils/properties.h>
+#include "BufferLayer.h"
+#include "Colorizer.h"
+#include "DisplayDevice.h"
+#include "LayerRejecter.h"
 
-#include <math.h>
-#include <stdlib.h>
-#include <mutex>
+#include "TimeStats/TimeStats.h"
 
 namespace android {
 
 BufferLayer::BufferLayer(const LayerCreationArgs& args)
-      : Layer(args), mTextureName(args.flinger->getNewTexture()) {
+      : Layer(args),
+        mTextureName(args.flinger->getNewTexture()),
+        mCompositionLayer{mFlinger->getCompositionEngine().createLayer(
+                compositionengine::LayerCreationArgs{this})} {
     ALOGV("Creating Layer %s", args.name.string());
 
     mTexture.init(renderengine::Texture::TEXTURE_EXTERNAL, mTextureName);
@@ -68,10 +72,10 @@ BufferLayer::~BufferLayer() {
         ALOGE("Found stale hardware composer layers when destroying "
               "surface flinger layer %s",
               mName.string());
-        destroyAllHwcLayers();
+        destroyAllHwcLayersPlusChildren();
     }
 
-    mTimeStats.onDestroy(getSequence());
+    mFlinger->mTimeStats->onDestroy(getSequence());
 }
 
 void BufferLayer::useSurfaceDamage() {
@@ -168,13 +172,13 @@ void BufferLayer::onDraw(const RenderArea& renderArea, const Region& clip,
         // is probably going to have something visibly wrong.
     }
 
-    bool blackOutLayer = isProtected() || (isSecure() && !renderArea.isSecure()) || isHDRLayer();
+    bool blackOutLayer = isProtected() || (isSecure() && !renderArea.isSecure());
 
     auto& engine(mFlinger->getRenderEngine());
 
     if (!blackOutLayer) {
         // TODO: we could be more subtle with isFixedSize()
-        const bool useFiltering = needsFiltering(renderArea) || isFixedSize();
+        const bool useFiltering = needsFiltering() || renderArea.needsFiltering() || isFixedSize();
 
         // Query the texture matrix given our current filtering mode.
         float textureMatrix[16];
@@ -334,7 +338,7 @@ bool BufferLayer::onPostComposition(const std::optional<DisplayId>& displayId,
     mFrameTracker.setDesiredPresentTime(desiredPresentTime);
 
     const int32_t layerID = getSequence();
-    mTimeStats.setDesiredTime(layerID, mCurrentFrameNumber, desiredPresentTime);
+    mFlinger->mTimeStats->setDesiredTime(layerID, mCurrentFrameNumber, desiredPresentTime);
 
     std::shared_ptr<FenceTime> frameReadyFence = getCurrentFenceTime();
     if (frameReadyFence->isValid()) {
@@ -346,13 +350,13 @@ bool BufferLayer::onPostComposition(const std::optional<DisplayId>& displayId,
     }
 
     if (presentFence->isValid()) {
-        mTimeStats.setPresentFence(layerID, mCurrentFrameNumber, presentFence);
+        mFlinger->mTimeStats->setPresentFence(layerID, mCurrentFrameNumber, presentFence);
         mFrameTracker.setActualPresentFence(std::shared_ptr<FenceTime>(presentFence));
     } else if (displayId && mFlinger->getHwComposer().isConnected(*displayId)) {
         // The HWC doesn't support present fences, so use the refresh
         // timestamp instead.
         const nsecs_t actualPresentTime = mFlinger->getHwComposer().getRefreshTimestamp(*displayId);
-        mTimeStats.setPresentTime(layerID, mCurrentFrameNumber, actualPresentTime);
+        mFlinger->mTimeStats->setPresentTime(layerID, mCurrentFrameNumber, actualPresentTime);
         mFrameTracker.setActualPresentTime(actualPresentTime);
     }
 
@@ -429,26 +433,25 @@ Region BufferLayer::latchBuffer(bool& recomputeVisibleRegions, nsecs_t latchTime
     }
 
     ui::Dataspace dataSpace = getDrawingDataSpace();
-    // treat modern dataspaces as legacy dataspaces whenever possible, until
-    // we can trust the buffer producers
+    // translate legacy dataspaces to modern dataspaces
     switch (dataSpace) {
-        case ui::Dataspace::V0_SRGB:
-            dataSpace = ui::Dataspace::SRGB;
+        case ui::Dataspace::SRGB:
+            dataSpace = ui::Dataspace::V0_SRGB;
             break;
-        case ui::Dataspace::V0_SRGB_LINEAR:
-            dataSpace = ui::Dataspace::SRGB_LINEAR;
+        case ui::Dataspace::SRGB_LINEAR:
+            dataSpace = ui::Dataspace::V0_SRGB_LINEAR;
             break;
-        case ui::Dataspace::V0_JFIF:
-            dataSpace = ui::Dataspace::JFIF;
+        case ui::Dataspace::JFIF:
+            dataSpace = ui::Dataspace::V0_JFIF;
             break;
-        case ui::Dataspace::V0_BT601_625:
-            dataSpace = ui::Dataspace::BT601_625;
+        case ui::Dataspace::BT601_625:
+            dataSpace = ui::Dataspace::V0_BT601_625;
             break;
-        case ui::Dataspace::V0_BT601_525:
-            dataSpace = ui::Dataspace::BT601_525;
+        case ui::Dataspace::BT601_525:
+            dataSpace = ui::Dataspace::V0_BT601_525;
             break;
-        case ui::Dataspace::V0_BT709:
-            dataSpace = ui::Dataspace::BT709;
+        case ui::Dataspace::BT709:
+            dataSpace = ui::Dataspace::V0_BT709;
             break;
         default:
             break;
@@ -501,7 +504,7 @@ Region BufferLayer::latchBuffer(bool& recomputeVisibleRegions, nsecs_t latchTime
 
     // FIXME: postedRegion should be dirty & bounds
     // transform the dirty region to window-manager space
-    return getTransform().transform(Region(Rect(getActiveWidth(s), getActiveHeight(s))));
+    return getTransform().transform(Region(getBufferSize(s)));
 }
 
 // transaction
@@ -596,8 +599,11 @@ bool BufferLayer::getOpacityForFormat(uint32_t format) {
     return true;
 }
 
-bool BufferLayer::needsFiltering(const RenderArea& renderArea) const {
-    return mNeedsFiltering || renderArea.needsFiltering();
+bool BufferLayer::needsFiltering() const {
+    const auto displayFrame = getBE().compositionInfo.hwc.displayFrame;
+    const auto sourceCrop = getBE().compositionInfo.hwc.sourceCrop;
+    return mNeedsFiltering || sourceCrop.getHeight() != displayFrame.getHeight() ||
+            sourceCrop.getWidth() != displayFrame.getWidth();
 }
 
 void BufferLayer::drawWithOpenGL(const RenderArea& renderArea, bool useIdentityTransform) const {
@@ -622,13 +628,14 @@ void BufferLayer::drawWithOpenGL(const RenderArea& renderArea, bool useIdentityT
      */
     const Rect bounds{computeBounds()}; // Rounds from FloatRect
 
-    ui::Transform t = getTransform();
     Rect win = bounds;
+    const int bufferWidth = getBufferSize(s).getWidth();
+    const int bufferHeight = getBufferSize(s).getHeight();
 
-    float left = float(win.left) / float(getActiveWidth(s));
-    float top = float(win.top) / float(getActiveHeight(s));
-    float right = float(win.right) / float(getActiveWidth(s));
-    float bottom = float(win.bottom) / float(getActiveHeight(s));
+    const float left = float(win.left) / float(bufferWidth);
+    const float top = float(win.top) / float(bufferHeight);
+    const float right = float(win.right) / float(bufferWidth);
+    const float bottom = float(win.bottom) / float(bufferHeight);
 
     // TODO: we probably want to generate the texture coords with the mesh
     // here we assume that we only have 4 vertices
@@ -639,14 +646,20 @@ void BufferLayer::drawWithOpenGL(const RenderArea& renderArea, bool useIdentityT
     texCoords[2] = vec2(right, 1.0f - bottom);
     texCoords[3] = vec2(right, 1.0f - top);
 
+    const auto roundedCornerState = getRoundedCornerState();
+    const auto cropRect = roundedCornerState.cropRect;
+    setupRoundedCornersCropCoordinates(win, cropRect);
+
     auto& engine(mFlinger->getRenderEngine());
     engine.setupLayerBlending(mPremultipliedAlpha, isOpaque(s), false /* disableTexture */,
-                              getColor());
+                              getColor(), roundedCornerState.radius);
     engine.setSourceDataSpace(mCurrentDataSpace);
 
     if (isHdrY410()) {
         engine.setSourceY410BT2020(true);
     }
+
+    engine.setupCornerRadiusCropSize(cropRect.getWidth(), cropRect.getHeight());
 
     engine.drawMesh(getBE().mMesh);
     engine.disableBlending();
@@ -690,6 +703,10 @@ Rect BufferLayer::getBufferSize(const State& s) const {
     }
 
     return Rect(bufWidth, bufHeight);
+}
+
+std::shared_ptr<compositionengine::Layer> BufferLayer::getCompositionLayer() const {
+    return mCompositionLayer;
 }
 
 } // namespace android

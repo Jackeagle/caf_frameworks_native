@@ -43,6 +43,7 @@
 #include <log/log.h>               // TODO: Move everything to base/logging.
 #include <openssl/sha.h>
 #include <private/android_filesystem_config.h>
+#include <processgroup/sched_policy.h>
 #include <selinux/android.h>
 #include <system/thread_defs.h>
 
@@ -313,9 +314,20 @@ class RunDex2Oat : public ExecVHelper {
         bool skip_compilation = vold_decrypt == "trigger_restart_min_framework" ||
                                 vold_decrypt == "1";
 
-        const std::string resolve_startup_string_arg  =
+        std::string resolve_startup_string_arg =
+                MapPropertyToArg("persist.device_config.runtime.dex2oat_resolve_startup_strings",
+                                 "--resolve-startup-const-strings=%s");
+        if (resolve_startup_string_arg.empty()) {
+          // If empty, fall back to system property.
+          resolve_startup_string_arg =
                 MapPropertyToArg("dalvik.vm.dex2oat-resolve-startup-strings",
                                  "--resolve-startup-const-strings=%s");
+        }
+
+        const std::string image_block_size_arg =
+                MapPropertyToArg("dalvik.vm.dex2oat-max-image-block-size",
+                                 "--max-image-block-size=%s");
+
         const bool generate_debug_info = GetBoolProperty("debug.generate-debug-info", false);
 
         std::string image_format_arg;
@@ -327,8 +339,7 @@ class RunDex2Oat : public ExecVHelper {
             MapPropertyToArg("dalvik.vm.dex2oat-very-large", "--very-large-app-threshold=%s");
 
         // If the runtime was requested to use libartd.so, we'll run dex2oatd, otherwise dex2oat.
-        const char* dex2oat_bin = "/system/bin/dex2oat";
-        constexpr const char* kDex2oatDebugPath = "/system/bin/dex2oatd";
+        const char* dex2oat_bin = kDex2oatPath;
         // Do not use dex2oatd for release candidates (give dex2oat more soak time).
         bool is_release = android::base::GetProperty("ro.build.version.codename", "") == "REL";
         if (is_debug_runtime() ||
@@ -430,6 +441,7 @@ class RunDex2Oat : public ExecVHelper {
         AddRuntimeArg(dex2oat_Xmx_arg);
 
         AddArg(resolve_startup_string_arg);
+        AddArg(image_block_size_arg);
         AddArg(dex2oat_compiler_filter_arg);
         AddArg(dex2oat_threads_arg);
         AddArg(dex2oat_swap_fd);
@@ -621,27 +633,6 @@ static void open_profile_files(uid_t uid, const std::string& package_name,
     }
 }
 
-static void drop_capabilities(uid_t uid) {
-    if (setgid(uid) != 0) {
-        PLOG(ERROR) << "setgid(" << uid << ") failed in installd during dexopt";
-        exit(DexoptReturnCodes::kSetGid);
-    }
-    if (setuid(uid) != 0) {
-        PLOG(ERROR) << "setuid(" << uid << ") failed in installd during dexopt";
-        exit(DexoptReturnCodes::kSetUid);
-    }
-    // drop capabilities
-    struct __user_cap_header_struct capheader;
-    struct __user_cap_data_struct capdata[2];
-    memset(&capheader, 0, sizeof(capheader));
-    memset(&capdata, 0, sizeof(capdata));
-    capheader.version = _LINUX_CAPABILITY_VERSION_3;
-    if (capset(&capheader, &capdata[0]) < 0) {
-        PLOG(ERROR) << "capset failed";
-        exit(DexoptReturnCodes::kCapSet);
-    }
-}
-
 static constexpr int PROFMAN_BIN_RETURN_CODE_COMPILE = 0;
 static constexpr int PROFMAN_BIN_RETURN_CODE_SKIP_COMPILATION = 1;
 static constexpr int PROFMAN_BIN_RETURN_CODE_BAD_PROFILES = 2;
@@ -654,9 +645,9 @@ class RunProfman : public ExecVHelper {
                   const unique_fd& reference_profile_fd,
                   const std::vector<unique_fd>& apk_fds,
                   const std::vector<std::string>& dex_locations,
-                  bool copy_and_update) {
-        const char* profman_bin =
-                is_debug_runtime() ? "/system/bin/profmand" : "/system/bin/profman";
+                  bool copy_and_update,
+                  bool store_aggregation_counters) {
+        const char* profman_bin = is_debug_runtime() ? kProfmanDebugPath: kProfmanPath;
 
         if (copy_and_update) {
             CHECK_EQ(1u, profile_fds.size());
@@ -682,6 +673,10 @@ class RunProfman : public ExecVHelper {
             AddArg("--copy-and-update-profile-key");
         }
 
+        if (store_aggregation_counters) {
+            AddArg("--store-aggregation-counters");
+        }
+
         // Do not add after dex2oat_flags, they should override others for debugging.
         PrepareArgs(profman_bin);
     }
@@ -689,12 +684,14 @@ class RunProfman : public ExecVHelper {
     void SetupMerge(const std::vector<unique_fd>& profiles_fd,
                     const unique_fd& reference_profile_fd,
                     const std::vector<unique_fd>& apk_fds = std::vector<unique_fd>(),
-                    const std::vector<std::string>& dex_locations = std::vector<std::string>()) {
+                    const std::vector<std::string>& dex_locations = std::vector<std::string>(),
+                    bool store_aggregation_counters = false) {
         SetupArgs(profiles_fd,
-                    reference_profile_fd,
-                    apk_fds,
-                    dex_locations,
-                    /*copy_and_update=*/false);
+                  reference_profile_fd,
+                  apk_fds,
+                  dex_locations,
+                  /*copy_and_update=*/false,
+                  store_aggregation_counters);
     }
 
     void SetupCopyAndUpdate(unique_fd&& profile_fd,
@@ -707,8 +704,12 @@ class RunProfman : public ExecVHelper {
         apk_fds_.push_back(std::move(apk_fd));
         reference_profile_fd_ = std::move(reference_profile_fd);
         std::vector<std::string> dex_locations = {dex_location};
-        SetupArgs(profiles_fd_, reference_profile_fd_, apk_fds_, dex_locations,
-                  /*copy_and_update=*/true);
+        SetupArgs(profiles_fd_,
+                  reference_profile_fd_,
+                  apk_fds_,
+                  dex_locations,
+                  /*copy_and_update=*/true,
+                  /*store_aggregation_counters=*/false);
     }
 
     void SetupDump(const std::vector<unique_fd>& profiles_fd,
@@ -718,8 +719,12 @@ class RunProfman : public ExecVHelper {
                    const unique_fd& output_fd) {
         AddArg("--dump-only");
         AddArg(StringPrintf("--dump-output-to-fd=%d", output_fd.get()));
-        SetupArgs(profiles_fd, reference_profile_fd, apk_fds, dex_locations,
-                  /*copy_and_update=*/false);
+        SetupArgs(profiles_fd,
+                  reference_profile_fd,
+                  apk_fds,
+                  dex_locations,
+                  /*copy_and_update=*/false,
+                  /*store_aggregation_counters=*/false);
     }
 
     void Exec() {
@@ -1458,9 +1463,7 @@ class RunDexoptAnalyzer : public ExecVHelper {
                     const char* class_loader_context) {
         CHECK_GE(zip_fd, 0);
         const char* dexoptanalyzer_bin =
-                is_debug_runtime()
-                        ? "/system/bin/dexoptanalyzerd"
-                        : "/system/bin/dexoptanalyzer";
+            is_debug_runtime() ? kDexoptanalyzerDebugPath : kDexoptanalyzerPath;
 
         std::string dex_file_arg = "--dex-file=" + dex_file;
         std::string oat_fd_arg = "--oat-fd=" + std::to_string(oat_fd);
@@ -2612,7 +2615,11 @@ static bool create_boot_image_profile_snapshot(const std::string& package_name,
             }
         }
         RunProfman args;
-        args.SetupMerge(profiles_fd, snapshot_fd, apk_fds, dex_locations);
+        args.SetupMerge(profiles_fd,
+                        snapshot_fd,
+                        apk_fds,
+                        dex_locations,
+                        /*store_aggregation_counters=*/true);
         pid_t pid = fork();
         if (pid == 0) {
             /* child -- drop privileges before continuing */

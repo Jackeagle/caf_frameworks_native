@@ -18,11 +18,11 @@
 
 #include <sys/types.h>
 
-#include <array>
 #include <condition_variable>
 #include <cstdint>
+#include <deque>
 #include <mutex>
-#include <queue>
+#include <optional>
 #include <thread>
 #include <vector>
 
@@ -38,11 +38,20 @@
 namespace android {
 // ---------------------------------------------------------------------------
 
+class EventThread;
 class EventThreadTest;
 class SurfaceFlinger;
-class String8;
 
 // ---------------------------------------------------------------------------
+
+using ResyncCallback = std::function<void()>;
+
+enum class VSyncRequest {
+    None = -1,
+    Single = 0,
+    Periodic = 1,
+    // Subsequent values are periods.
+};
 
 class VSyncSource {
 public:
@@ -58,6 +67,31 @@ public:
     virtual void setPhaseOffset(nsecs_t phaseOffset) = 0;
 };
 
+class EventThreadConnection : public BnDisplayEventConnection {
+public:
+    EventThreadConnection(EventThread* eventThread, ResyncCallback resyncCallback);
+    virtual ~EventThreadConnection();
+
+    virtual status_t postEvent(const DisplayEventReceiver::Event& event);
+
+    status_t stealReceiveChannel(gui::BitTube* outChannel) override;
+    status_t setVsyncRate(uint32_t rate) override;
+    void requestNextVsync() override; // asynchronous
+    // Requesting Vsync for HWC does not reset the idle timer, since HWC requires a refresh
+    // in order to update the configs.
+    void requestNextVsyncForHWC();
+
+    // Called in response to requestNextVsync.
+    const ResyncCallback resyncCallback;
+
+    VSyncRequest vsyncRequest = VSyncRequest::None;
+
+private:
+    virtual void onFirstRef();
+    EventThread* const mEventThread;
+    gui::BitTube mChannel;
+};
+
 class EventThread {
 public:
     // TODO: Remove once stable display IDs are plumbed through SF/WM interface.
@@ -65,7 +99,8 @@ public:
 
     virtual ~EventThread();
 
-    virtual sp<BnDisplayEventConnection> createEventConnection() const = 0;
+    virtual sp<EventThreadConnection> createEventConnection(
+            ResyncCallback resyncCallback) const = 0;
 
     // called before the screen is turned off from main thread
     virtual void onScreenReleased() = 0;
@@ -76,51 +111,39 @@ public:
     // called when receiving a hotplug event
     virtual void onHotplugReceived(DisplayType displayType, bool connected) = 0;
 
-    virtual void dump(String8& result) const = 0;
+    virtual void dump(std::string& result) const = 0;
 
     virtual void setPhaseOffset(nsecs_t phaseOffset) = 0;
+
+    virtual status_t registerDisplayEventConnection(
+            const sp<EventThreadConnection>& connection) = 0;
+    virtual void setVsyncRate(uint32_t rate, const sp<EventThreadConnection>& connection) = 0;
+    // Requests the next vsync. If resetIdleTimer is set to true, it resets the idle timer.
+    virtual void requestNextVsync(const sp<EventThreadConnection>& connection,
+                                  bool resetIdleTimer) = 0;
 };
 
 namespace impl {
 
 class EventThread : public android::EventThread, private VSyncSource::Callback {
-    class Connection : public BnDisplayEventConnection {
-    public:
-        explicit Connection(EventThread* eventThread);
-        virtual ~Connection();
-
-        virtual status_t postEvent(const DisplayEventReceiver::Event& event);
-
-        // count >= 1 : continuous event. count is the vsync rate
-        // count == 0 : one-shot event that has not fired
-        // count ==-1 : one-shot event that fired this round / disabled
-        int32_t count;
-
-    private:
-        virtual void onFirstRef();
-        status_t stealReceiveChannel(gui::BitTube* outChannel) override;
-        status_t setVsyncRate(uint32_t count) override;
-        void requestNextVsync() override; // asynchronous
-        EventThread* const mEventThread;
-        gui::BitTube mChannel;
-    };
-
 public:
-    using ResyncWithRateLimitCallback = std::function<void()>;
     using InterceptVSyncsCallback = std::function<void(nsecs_t)>;
+    using ResetIdleTimerCallback = std::function<void()>;
 
     // TODO(b/113612090): Once the Scheduler is complete this constructor will become obsolete.
-    EventThread(VSyncSource* src, ResyncWithRateLimitCallback resyncWithRateLimitCallback,
-                InterceptVSyncsCallback interceptVSyncsCallback, const char* threadName);
+    EventThread(VSyncSource* src, InterceptVSyncsCallback interceptVSyncsCallback,
+                const char* threadName);
     EventThread(std::unique_ptr<VSyncSource> src,
-                ResyncWithRateLimitCallback resyncWithRateLimitCallback,
-                InterceptVSyncsCallback interceptVSyncsCallback, const char* threadName);
+                const InterceptVSyncsCallback& interceptVSyncsCallback,
+                const ResetIdleTimerCallback& resetIdleTimerCallback, const char* threadName);
     ~EventThread();
 
-    sp<BnDisplayEventConnection> createEventConnection() const override;
+    sp<EventThreadConnection> createEventConnection(ResyncCallback resyncCallback) const override;
 
-    void setVsyncRate(uint32_t count, const sp<Connection>& connection);
-    void requestNextVsync(const sp<Connection>& connection);
+    status_t registerDisplayEventConnection(const sp<EventThreadConnection>& connection) override;
+    void setVsyncRate(uint32_t rate, const sp<EventThreadConnection>& connection) override;
+    void requestNextVsync(const sp<EventThreadConnection>& connection,
+                          bool resetIdleTimer) override;
 
     // called before the screen is turned off from main thread
     void onScreenReleased() override;
@@ -131,53 +154,80 @@ public:
     // called when receiving a hotplug event
     void onHotplugReceived(DisplayType displayType, bool connected) override;
 
-    void dump(String8& result) const override;
+    void dump(std::string& result) const override;
 
     void setPhaseOffset(nsecs_t phaseOffset) override;
 
 private:
     friend EventThreadTest;
 
+    using DisplayEventConsumers = std::vector<sp<EventThreadConnection>>;
+
     // TODO(b/113612090): Once the Scheduler is complete this constructor will become obsolete.
     EventThread(VSyncSource* src, std::unique_ptr<VSyncSource> uniqueSrc,
-                ResyncWithRateLimitCallback resyncWithRateLimitCallback,
                 InterceptVSyncsCallback interceptVSyncsCallback, const char* threadName);
 
-    status_t registerDisplayEventConnection(const sp<Connection>& connection);
+    void threadMain(std::unique_lock<std::mutex>& lock) REQUIRES(mMutex);
 
-    void threadMain();
-    std::vector<sp<EventThread::Connection>> waitForEventLocked(std::unique_lock<std::mutex>* lock,
-                                                                DisplayEventReceiver::Event* event)
+    bool shouldConsumeEvent(const DisplayEventReceiver::Event& event,
+                            const sp<EventThreadConnection>& connection) const REQUIRES(mMutex);
+    void dispatchEvent(const DisplayEventReceiver::Event& event,
+                       const DisplayEventConsumers& consumers) REQUIRES(mMutex);
+
+    void removeDisplayEventConnectionLocked(const wp<EventThreadConnection>& connection)
             REQUIRES(mMutex);
-
-    void removeDisplayEventConnectionLocked(const wp<Connection>& connection) REQUIRES(mMutex);
-    void enableVSyncLocked() REQUIRES(mMutex);
-    void disableVSyncLocked() REQUIRES(mMutex);
 
     // Implements VSyncSource::Callback
     void onVSyncEvent(nsecs_t timestamp) override;
 
+    // Acquires mutex and requests next vsync.
+    void requestNextVsyncInternal(const sp<EventThreadConnection>& connection) EXCLUDES(mMutex);
+
     // TODO(b/113612090): Once the Scheduler is complete this pointer will become obsolete.
     VSyncSource* mVSyncSource GUARDED_BY(mMutex) = nullptr;
     std::unique_ptr<VSyncSource> mVSyncSourceUnique GUARDED_BY(mMutex) = nullptr;
-    // constants
-    const ResyncWithRateLimitCallback mResyncWithRateLimitCallback;
+
     const InterceptVSyncsCallback mInterceptVSyncsCallback;
+    const char* const mThreadName;
 
     std::thread mThread;
     mutable std::mutex mMutex;
     mutable std::condition_variable mCondition;
 
-    // protected by mLock
-    std::vector<wp<Connection>> mDisplayEventConnections GUARDED_BY(mMutex);
-    std::queue<DisplayEventReceiver::Event> mPendingEvents GUARDED_BY(mMutex);
-    std::array<DisplayEventReceiver::Event, 2> mVSyncEvent GUARDED_BY(mMutex);
-    bool mUseSoftwareVSync GUARDED_BY(mMutex) = false;
-    bool mVsyncEnabled GUARDED_BY(mMutex) = false;
-    bool mKeepRunning GUARDED_BY(mMutex) = true;
+    std::vector<wp<EventThreadConnection>> mDisplayEventConnections GUARDED_BY(mMutex);
+    std::deque<DisplayEventReceiver::Event> mPendingEvents GUARDED_BY(mMutex);
 
-    // for debugging
-    bool mDebugVsyncEnabled GUARDED_BY(mMutex) = false;
+    // VSYNC state of connected display.
+    struct VSyncState {
+        explicit VSyncState(uint32_t displayId) : displayId(displayId) {}
+
+        const uint32_t displayId;
+
+        // Number of VSYNC events since display was connected.
+        uint32_t count = 0;
+
+        // True if VSYNC should be faked, e.g. when display is off.
+        bool synthetic = false;
+    };
+
+    // TODO(b/74619554): Create per-display threads waiting on respective VSYNC signals,
+    // and support headless mode by injecting a fake display with synthetic VSYNC.
+    std::optional<VSyncState> mVSyncState GUARDED_BY(mMutex);
+
+    // State machine for event loop.
+    enum class State {
+        Idle,
+        Quit,
+        SyntheticVSync,
+        VSync,
+    };
+
+    State mState GUARDED_BY(mMutex) = State::Idle;
+
+    static const char* toCString(State);
+
+    // Callback that resets the idle timer when the next vsync is received.
+    ResetIdleTimerCallback mResetIdleTimer;
 };
 
 // ---------------------------------------------------------------------------

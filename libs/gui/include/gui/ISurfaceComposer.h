@@ -27,10 +27,12 @@
 
 #include <binder/IInterface.h>
 
+#include <ui/ConfigStoreTypes.h>
+#include <ui/DisplayedFrameStats.h>
 #include <ui/FrameStats.h>
-#include <ui/PixelFormat.h>
 #include <ui/GraphicBuffer.h>
 #include <ui/GraphicTypes.h>
+#include <ui/PixelFormat.h>
 
 #include <vector>
 
@@ -41,6 +43,7 @@ struct ComposerState;
 struct DisplayState;
 struct DisplayInfo;
 struct DisplayStatInfo;
+struct InputWindowCommands;
 class LayerDebugInfo;
 class HdrCapabilities;
 class IDisplayEventConnection;
@@ -85,21 +88,10 @@ public:
         eVsyncSourceSurfaceFlinger = 1
     };
 
-    /* create connection with surface flinger, requires
-     * ACCESS_SURFACE_FLINGER permission
+    /* 
+     * Create a connection with SurfaceFlinger.
      */
     virtual sp<ISurfaceComposerClient> createConnection() = 0;
-
-    /** create a scoped connection with surface flinger.
-     * Surfaces produced with this connection will act
-     * as children of the passed in GBP. That is to say
-     * SurfaceFlinger will draw them relative and confined to
-     * drawing of buffers from the layer associated with parent.
-     * As this is graphically equivalent in reach to just drawing
-     * pixels into the parent buffers, it requires no special permission.
-     */
-    virtual sp<ISurfaceComposerClient> createScopedConnection(
-            const sp<IGraphicBufferProducer>& parent) = 0;
 
     /* return an IDisplayEventConnection */
     virtual sp<IDisplayEventConnection> createDisplayEventConnection(
@@ -123,7 +115,10 @@ public:
 
     /* open/close transactions. requires ACCESS_SURFACE_FLINGER permission */
     virtual void setTransactionState(const Vector<ComposerState>& state,
-            const Vector<DisplayState>& displays, uint32_t flags) = 0;
+                                     const Vector<DisplayState>& displays, uint32_t flags,
+                                     const sp<IBinder>& applyToken,
+                                     const InputWindowCommands& inputWindowCommands,
+                                     int64_t desiredPresentTime) = 0;
 
     /* signal that we're done booting.
      * Requires ACCESS_SURFACE_FLINGER permission
@@ -167,6 +162,8 @@ public:
 
     virtual status_t getDisplayColorModes(const sp<IBinder>& display,
             Vector<ui::ColorMode>* outColorModes) = 0;
+    virtual status_t getDisplayNativePrimaries(const sp<IBinder>& display,
+            ui::DisplayPrimaries& primaries) = 0;
     virtual ui::ColorMode getActiveColorMode(const sp<IBinder>& display) = 0;
     virtual status_t setActiveColorMode(const sp<IBinder>& display,
             ui::ColorMode colorMode) = 0;
@@ -293,6 +290,47 @@ public:
                                               ui::PixelFormat* defaultPixelFormat,
                                               ui::Dataspace* wideColorGamutDataspace,
                                               ui::PixelFormat* wideColorGamutPixelFormat) const = 0;
+    /*
+     * Requires the ACCESS_SURFACE_FLINGER permission.
+     */
+    virtual status_t getDisplayedContentSamplingAttributes(const sp<IBinder>& display,
+                                                           ui::PixelFormat* outFormat,
+                                                           ui::Dataspace* outDataspace,
+                                                           uint8_t* outComponentMask) const = 0;
+
+    /* Turns on the color sampling engine on the display.
+     *
+     * Requires the ACCESS_SURFACE_FLINGER permission.
+     */
+    virtual status_t setDisplayContentSamplingEnabled(const sp<IBinder>& display, bool enable,
+                                                      uint8_t componentMask,
+                                                      uint64_t maxFrames) const = 0;
+
+    /* Returns statistics on the color profile of the last frame displayed for a given display
+     *
+     * Requires the ACCESS_SURFACE_FLINGER permission.
+     */
+    virtual status_t getDisplayedContentSample(const sp<IBinder>& display, uint64_t maxFrames,
+                                               uint64_t timestamp,
+                                               DisplayedFrameStats* outStats) const = 0;
+
+    /*
+     * Gets whether SurfaceFlinger can support protected content in GPU composition.
+     * Requires the ACCESS_SURFACE_FLINGER permission.
+     */
+    virtual status_t getProtectedContentSupport(bool* outSupported) const = 0;
+
+    virtual status_t cacheBuffer(const sp<IBinder>& token, const sp<GraphicBuffer>& buffer,
+                                 int32_t* outBufferId) = 0;
+
+    virtual status_t uncacheBuffer(const sp<IBinder>& token, int32_t bufferId) = 0;
+
+    /*
+     * Queries whether the given display is a wide color display.
+     * Requires the ACCESS_SURFACE_FLINGER permission.
+     */
+    virtual status_t isWideColorDisplay(const sp<IBinder>& token,
+                                        bool* outIsWideColorDisplay) const = 0;
 };
 
 // ----------------------------------------------------------------------------
@@ -329,9 +367,17 @@ public:
         ENABLE_VSYNC_INJECTIONS,
         INJECT_VSYNC,
         GET_LAYER_DEBUG_INFO,
-        CREATE_SCOPED_CONNECTION,
         GET_COMPOSITION_PREFERENCE,
         GET_COLOR_MANAGEMENT,
+        GET_DISPLAYED_CONTENT_SAMPLING_ATTRIBUTES,
+        SET_DISPLAY_CONTENT_SAMPLING_ENABLED,
+        GET_DISPLAYED_CONTENT_SAMPLE,
+        GET_PROTECTED_CONTENT_SUPPORT,
+        CACHE_BUFFER,
+        UNCACHE_BUFFER,
+        IS_WIDE_COLOR_DISPLAY,
+        GET_DISPLAY_NATIVE_PRIMARIES,
+        // Always append new enum to the end.
     };
 
     virtual status_t onTransact(uint32_t code, const Parcel& data,

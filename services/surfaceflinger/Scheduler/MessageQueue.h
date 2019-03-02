@@ -29,12 +29,12 @@
 #include <private/gui/BitTube.h>
 
 #include "Barrier.h"
+#include "EventThread.h"
 
 #include <functional>
 
 namespace android {
 
-class EventThread;
 class SurfaceFlinger;
 
 // ---------------------------------------------------------------------------
@@ -86,11 +86,12 @@ public:
 
     virtual void init(const sp<SurfaceFlinger>& flinger) = 0;
     // TODO(akrulec): Remove this function once everything is migrated to Scheduler.
-    virtual void setEventThread(EventThread* events) = 0;
-    virtual void setEventConnection(const sp<BnDisplayEventConnection>& connection) = 0;
+    virtual void setEventThread(EventThread* events, ResyncCallback resyncCallback) = 0;
+    virtual void setEventConnection(const sp<EventThreadConnection>& connection) = 0;
     virtual void waitMessage() = 0;
     virtual status_t postMessage(const sp<MessageBase>& message, nsecs_t reltime = 0) = 0;
     virtual void invalidate() = 0;
+    virtual void invalidateForHWC() = 0;
     virtual void refresh() = 0;
 };
 
@@ -116,7 +117,7 @@ class MessageQueue final : public android::MessageQueue {
     sp<SurfaceFlinger> mFlinger;
     sp<Looper> mLooper;
     android::EventThread* mEventThread;
-    sp<IDisplayEventConnection> mEvents;
+    sp<EventThreadConnection> mEvents;
     gui::BitTube mEventTube;
     sp<Handler> mHandler;
 
@@ -126,14 +127,17 @@ class MessageQueue final : public android::MessageQueue {
 public:
     ~MessageQueue() override = default;
     void init(const sp<SurfaceFlinger>& flinger) override;
-    void setEventThread(android::EventThread* events) override;
-    void setEventConnection(const sp<BnDisplayEventConnection>& connection) override;
+    void setEventThread(android::EventThread* events, ResyncCallback resyncCallback) override;
+    void setEventConnection(const sp<EventThreadConnection>& connection) override;
 
     void waitMessage() override;
     status_t postMessage(const sp<MessageBase>& message, nsecs_t reltime = 0) override;
 
     // sends INVALIDATE message at next VSYNC
     void invalidate() override;
+
+    // sends INVALIDATE message at next VSYNC, without resetting the idle timer in the Scheduler
+    void invalidateForHWC();
     // sends REFRESH message at next VSYNC
     void refresh() override;
 };

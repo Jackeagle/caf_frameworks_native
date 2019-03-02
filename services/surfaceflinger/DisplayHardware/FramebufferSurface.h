@@ -17,14 +17,14 @@
 #ifndef ANDROID_SF_FRAMEBUFFER_SURFACE_H
 #define ANDROID_SF_FRAMEBUFFER_SURFACE_H
 
-#include "DisplayIdentification.h"
-#include "DisplaySurface.h"
-#include "HWComposerBufferCache.h"
-
 #include <stdint.h>
 #include <sys/types.h>
 
+#include <compositionengine/DisplaySurface.h>
+#include <compositionengine/impl/HwcBufferCache.h>
 #include <gui/ConsumerBase.h>
+
+#include "DisplayIdentification.h"
 
 // ---------------------------------------------------------------------------
 namespace android {
@@ -36,8 +36,7 @@ class HWComposer;
 
 // ---------------------------------------------------------------------------
 
-class FramebufferSurface : public ConsumerBase,
-                           public DisplaySurface {
+class FramebufferSurface : public ConsumerBase, public compositionengine::DisplaySurface {
 public:
     FramebufferSurface(HWComposer& hwc, DisplayId displayId,
                        const sp<IGraphicBufferConsumer>& consumer);
@@ -89,7 +88,7 @@ private:
     // Hardware composer, owned by SurfaceFlinger.
     HWComposer& mHwc;
 
-    HWComposerBufferCache mHwcBufferCache;
+    compositionengine::impl::HwcBufferCache mHwcBufferCache;
 
     // Previous buffer to release after getting an updated retire fence
     bool mHasPendingRelease;

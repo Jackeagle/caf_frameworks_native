@@ -19,6 +19,7 @@
 
 #include <stdint.h>
 #include <sys/types.h>
+#include <string>
 
 #include <hardware/hardware.h>
 #include <math/vec2.h>
@@ -65,6 +66,8 @@ public:
     const vec3& operator [] (size_t i) const;  // returns column i
     float   tx() const;
     float   ty() const;
+    float   sx() const;
+    float   sy() const;
 
     // modify the transform
     void        reset();
@@ -88,6 +91,7 @@ public:
     Transform inverse() const;
 
     // for debugging
+    void dump(std::string& result, const char* name) const;
     void dump(const char* name) const;
 
 private:

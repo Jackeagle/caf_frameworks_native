@@ -30,6 +30,8 @@
 #include <utils/SortedVector.h>
 #include <utils/threads.h>
 
+#include <ui/ConfigStoreTypes.h>
+#include <ui/DisplayedFrameStats.h>
 #include <ui/FrameStats.h>
 #include <ui/GraphicTypes.h>
 #include <ui/PixelFormat.h>
@@ -52,34 +54,23 @@ class Region;
 
 // ---------------------------------------------------------------------------
 
-using TransactionCompletedCallbackTakesContext =
-        std::function<void(void* /*context*/, const TransactionStats&)>;
-using TransactionCompletedCallback = std::function<void(const TransactionStats&)>;
+struct SurfaceControlStats {
+    SurfaceControlStats(const sp<SurfaceControl>& sc, nsecs_t time,
+                        const sp<Fence>& prevReleaseFence)
+          : surfaceControl(sc), acquireTime(time), previousReleaseFence(prevReleaseFence) {}
 
-class TransactionCompletedListener : public BnTransactionCompletedListener {
-    TransactionCompletedListener();
-
-    CallbackId getNextIdLocked() REQUIRES(mMutex);
-
-    std::mutex mMutex;
-
-    bool mListening GUARDED_BY(mMutex) = false;
-
-    CallbackId mCallbackIdCounter GUARDED_BY(mMutex) = 1;
-
-    std::map<CallbackId, TransactionCompletedCallback> mCallbacks GUARDED_BY(mMutex);
-
-public:
-    static sp<TransactionCompletedListener> getInstance();
-    static sp<ITransactionCompletedListener> getIInstance();
-
-    void startListeningLocked() REQUIRES(mMutex);
-
-    CallbackId addCallback(const TransactionCompletedCallback& callback);
-
-    // Overrides BnTransactionCompletedListener's onTransactionCompleted
-    void onTransactionCompleted(ListenerStats stats) override;
+    sp<SurfaceControl> surfaceControl;
+    nsecs_t acquireTime = -1;
+    sp<Fence> previousReleaseFence;
 };
+
+using TransactionCompletedCallbackTakesContext =
+        std::function<void(void* /*context*/, nsecs_t /*latchTime*/,
+                           const sp<Fence>& /*presentFence*/,
+                           const std::vector<SurfaceControlStats>& /*stats*/)>;
+using TransactionCompletedCallback =
+        std::function<void(nsecs_t /*latchTime*/, const sp<Fence>& /*presentFence*/,
+                           const std::vector<SurfaceControlStats>& /*stats*/)>;
 
 // ---------------------------------------------------------------------------
 
@@ -89,7 +80,6 @@ class SurfaceComposerClient : public RefBase
 public:
                 SurfaceComposerClient();
                 SurfaceComposerClient(const sp<ISurfaceComposerClient>& client);
-                SurfaceComposerClient(const sp<IGraphicBufferProducer>& parent);
     virtual     ~SurfaceComposerClient();
 
     // Always make sure we could initialize
@@ -125,6 +115,10 @@ public:
     static status_t getDisplayColorModes(const sp<IBinder>& display,
             Vector<ui::ColorMode>* outColorModes);
 
+    // Get the coordinates of the display's native color primaries
+    static status_t getDisplayNativePrimaries(const sp<IBinder>& display,
+            ui::DisplayPrimaries& outPrimaries);
+
     // Gets the active color mode for the given display
     static ui::ColorMode getActiveColorMode(const sp<IBinder>& display);
 
@@ -145,31 +139,61 @@ public:
                                              ui::Dataspace* wideColorGamutDataspace,
                                              ui::PixelFormat* wideColorGamutPixelFormat);
 
+    /*
+     * Gets whether SurfaceFlinger can support protected content in GPU composition.
+     * Requires the ACCESS_SURFACE_FLINGER permission.
+     */
+    static bool getProtectedContentSupport();
+
+    /**
+     * Called from SurfaceControl d'tor to 'destroy' the surface (or rather, reparent it
+     * to null), but without needing an sp<SurfaceControl> to avoid infinite ressurection.
+     */
+    static void doDropReferenceTransaction(const sp<IBinder>& handle,
+            const sp<ISurfaceComposerClient>& client);
+
+    // Caches a buffer with the ISurfaceComposer so the buffer does not need to be resent across
+    // processes
+    static status_t cacheBuffer(const sp<GraphicBuffer>& buffer, int32_t* outBufferId);
+    // Uncaches a buffer set by cacheBuffer
+    static status_t uncacheBuffer(int32_t bufferId);
+
+    // Queries whether a given display is wide color display.
+    static status_t isWideColorDisplay(const sp<IBinder>& display, bool* outIsWideColorDisplay);
+
     // ------------------------------------------------------------------------
     // surface creation / destruction
 
+    static sp<SurfaceComposerClient> getDefault();
+
     //! Create a surface
-    sp<SurfaceControl> createSurface(
-            const String8& name,// name of the surface
-            uint32_t w,         // width in pixel
-            uint32_t h,         // height in pixel
-            PixelFormat format, // pixel-format desired
-            uint32_t flags = 0, // usage flags
-            SurfaceControl* parent = nullptr, // parent
-            int32_t windowType = -1, // from WindowManager.java (STATUS_BAR, INPUT_METHOD, etc.)
-            int32_t ownerUid = -1 // UID of the task
+    sp<SurfaceControl> createSurface(const String8& name,              // name of the surface
+                                     uint32_t w,                       // width in pixel
+                                     uint32_t h,                       // height in pixel
+                                     PixelFormat format,               // pixel-format desired
+                                     uint32_t flags = 0,               // usage flags
+                                     SurfaceControl* parent = nullptr, // parent
+                                     LayerMetadata metadata = LayerMetadata() // metadata
     );
 
-    status_t createSurfaceChecked(
-            const String8& name,// name of the surface
-            uint32_t w,         // width in pixel
-            uint32_t h,         // height in pixel
-            PixelFormat format, // pixel-format desired
-            sp<SurfaceControl>* outSurface,
-            uint32_t flags = 0, // usage flags
-            SurfaceControl* parent = nullptr, // parent
-            int32_t windowType = -1, // from WindowManager.java (STATUS_BAR, INPUT_METHOD, etc.)
-            int32_t ownerUid = -1 // UID of the task
+    status_t createSurfaceChecked(const String8& name, // name of the surface
+                                  uint32_t w,          // width in pixel
+                                  uint32_t h,          // height in pixel
+                                  PixelFormat format,  // pixel-format desired
+                                  sp<SurfaceControl>* outSurface,
+                                  uint32_t flags = 0,                      // usage flags
+                                  SurfaceControl* parent = nullptr,        // parent
+                                  LayerMetadata metadata = LayerMetadata() // metadata
+    );
+
+    //! Create a surface
+    sp<SurfaceControl> createWithSurfaceParent(const String8& name,       // name of the surface
+                                               uint32_t w,                // width in pixel
+                                               uint32_t h,                // height in pixel
+                                               PixelFormat format,        // pixel-format desired
+                                               uint32_t flags = 0,        // usage flags
+                                               Surface* parent = nullptr, // parent
+                                               LayerMetadata metadata = LayerMetadata() // metadata
     );
 
     //! Create a virtual display
@@ -218,6 +242,19 @@ public:
         bool                        mAnimation = false;
         bool                        mEarlyWakeup = false;
 
+        // mDesiredPresentTime is the time in nanoseconds that the client would like the transaction
+        // to be presented. When it is not possible to present at exactly that time, it will be
+        // presented after the time has passed.
+        //
+        // Desired present times that are more than 1 second in the future may be ignored.
+        // When a desired present time has already passed, the transaction will be presented as soon
+        // as possible.
+        //
+        // Transactions from the same process are presented in the same order that they are applied.
+        // The desired present time does not affect this ordering.
+        int64_t mDesiredPresentTime = -1;
+
+        InputWindowCommands mInputWindowCommands;
         int mStatus = NO_ERROR;
 
         layer_state_t* getLayerState(const sp<SurfaceControl>& sc);
@@ -265,7 +302,10 @@ public:
         Transaction& setMatrix(const sp<SurfaceControl>& sc,
                 float dsdx, float dtdx, float dtdy, float dsdy);
         Transaction& setCrop_legacy(const sp<SurfaceControl>& sc, const Rect& crop);
+        Transaction& setCornerRadius(const sp<SurfaceControl>& sc, float cornerRadius);
         Transaction& setLayerStack(const sp<SurfaceControl>& sc, uint32_t layerStack);
+        Transaction& setMetadata(const sp<SurfaceControl>& sc, uint32_t key,
+                                 std::vector<uint8_t> data);
         // Defers applying any changes made in this transaction until the Layer
         // identified by handle reaches the given frameNumber. If the Layer identified
         // by handle is removed, then we will apply this transaction regardless of
@@ -290,11 +330,17 @@ public:
 
         Transaction& setColor(const sp<SurfaceControl>& sc, const half3& color);
 
+        // Sets the background color of a layer with the specified color, alpha, and dataspace
+        Transaction& setBackgroundColor(const sp<SurfaceControl>& sc, const half3& color,
+                                        float alpha, ui::Dataspace dataspace);
+
         Transaction& setTransform(const sp<SurfaceControl>& sc, uint32_t transform);
         Transaction& setTransformToDisplayInverse(const sp<SurfaceControl>& sc,
                                                   bool transformToDisplayInverse);
         Transaction& setCrop(const sp<SurfaceControl>& sc, const Rect& crop);
+        Transaction& setFrame(const sp<SurfaceControl>& sc, const Rect& frame);
         Transaction& setBuffer(const sp<SurfaceControl>& sc, const sp<GraphicBuffer>& buffer);
+        Transaction& setCachedBuffer(const sp<SurfaceControl>& sc, int32_t bufferId);
         Transaction& setAcquireFence(const sp<SurfaceControl>& sc, const sp<Fence>& fence);
         Transaction& setDataspace(const sp<SurfaceControl>& sc, ui::Dataspace dataspace);
         Transaction& setHdrMetadata(const sp<SurfaceControl>& sc, const HdrMetadata& hdrMetadata);
@@ -303,6 +349,7 @@ public:
         Transaction& setApi(const sp<SurfaceControl>& sc, int32_t api);
         Transaction& setSidebandStream(const sp<SurfaceControl>& sc,
                                        const sp<NativeHandle>& sidebandStream);
+        Transaction& setDesiredPresentTime(nsecs_t desiredPresentTime);
 
         Transaction& addTransactionCompletedCallback(
                 TransactionCompletedCallbackTakesContext callback, void* callbackContext);
@@ -332,13 +379,15 @@ public:
 
 #ifndef NO_INPUT
         Transaction& setInputWindowInfo(const sp<SurfaceControl>& sc, const InputWindowInfo& info);
+        Transaction& transferTouchFocus(const sp<IBinder>& fromToken, const sp<IBinder>& toToken);
 #endif
-
-        Transaction& destroySurface(const sp<SurfaceControl>& sc);
 
         // Set a color transform matrix on the given layer on the built-in display.
         Transaction& setColorTransform(const sp<SurfaceControl>& sc, const mat3& matrix,
                                        const vec3& translation);
+
+        Transaction& setGeometry(const sp<SurfaceControl>& sc,
+                const Rect& source, const Rect& dst, int transform);
 
         status_t setDisplaySurface(const sp<IBinder>& token,
                 const sp<IGraphicBufferProducer>& bufferProducer);
@@ -364,8 +413,6 @@ public:
         void setEarlyWakeup();
     };
 
-    status_t    destroySurface(const sp<IBinder>& id);
-
     status_t clearLayerFrameStats(const sp<IBinder>& token) const;
     status_t getLayerFrameStats(const sp<IBinder>& token, FrameStats* outStats) const;
     static status_t clearAnimationFrameStats();
@@ -381,13 +428,22 @@ public:
 
     inline sp<ISurfaceComposerClient> getClient() { return mClient; }
 
+    static status_t getDisplayedContentSamplingAttributes(const sp<IBinder>& display,
+                                                          ui::PixelFormat* outFormat,
+                                                          ui::Dataspace* outDataspace,
+                                                          uint8_t* outComponentMask);
+    static status_t setDisplayContentSamplingEnabled(const sp<IBinder>& display, bool enable,
+                                                     uint8_t componentMask, uint64_t maxFrames);
+
+    static status_t getDisplayedContentSample(const sp<IBinder>& display, uint64_t maxFrames,
+                                              uint64_t timestamp, DisplayedFrameStats* outStats);
+
 private:
     virtual void onFirstRef();
 
     mutable     Mutex                       mLock;
                 status_t                    mStatus;
                 sp<ISurfaceComposerClient>  mClient;
-                wp<IGraphicBufferProducer>  mParent;
 };
 
 // ---------------------------------------------------------------------------
@@ -407,6 +463,50 @@ public:
                                        const ui::Dataspace reqDataSpace,
                                        const ui::PixelFormat reqPixelFormat, Rect sourceCrop,
                                        float frameScale, sp<GraphicBuffer>* outBuffer);
+};
+
+// ---------------------------------------------------------------------------
+
+class TransactionCompletedListener : public BnTransactionCompletedListener {
+    TransactionCompletedListener();
+
+    CallbackId getNextIdLocked() REQUIRES(mMutex);
+
+    std::mutex mMutex;
+
+    bool mListening GUARDED_BY(mMutex) = false;
+
+    CallbackId mCallbackIdCounter GUARDED_BY(mMutex) = 1;
+
+    struct IBinderHash {
+        std::size_t operator()(const sp<IBinder>& iBinder) const {
+            return std::hash<IBinder*>{}(iBinder.get());
+        }
+    };
+
+    struct CallbackTranslation {
+        TransactionCompletedCallback callbackFunction;
+        std::unordered_map<sp<IBinder>, sp<SurfaceControl>, IBinderHash> surfaceControls;
+    };
+
+    std::unordered_map<CallbackId, CallbackTranslation> mCallbacks GUARDED_BY(mMutex);
+
+public:
+    static sp<TransactionCompletedListener> getInstance();
+    static sp<ITransactionCompletedListener> getIInstance();
+
+    void startListeningLocked() REQUIRES(mMutex);
+
+    CallbackId addCallbackFunction(
+            const TransactionCompletedCallback& callbackFunction,
+            const std::unordered_set<sp<SurfaceControl>, SurfaceComposerClient::SCHash>&
+                    surfaceControls);
+
+    void addSurfaceControlToCallbacks(const sp<SurfaceControl>& surfaceControl,
+                                      const std::unordered_set<CallbackId>& callbackIds);
+
+    // Overrides BnTransactionCompletedListener's onTransactionCompleted
+    void onTransactionCompleted(ListenerStats stats) override;
 };
 
 // ---------------------------------------------------------------------------

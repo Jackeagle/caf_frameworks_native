@@ -22,8 +22,10 @@
  */
 
 #include "EventHub.h"
-#include "InputReader.h"
+#include "InputReaderBase.h"
+#include "InputClassifier.h"
 #include "InputDispatcher.h"
+#include "InputReader.h"
 
 #include <input/Input.h>
 #include <input/InputTransport.h>
@@ -35,6 +37,7 @@
 #include <utils/RefBase.h>
 
 namespace android {
+class InputChannel;
 
 /*
  * The input manager is the core of the system event processing.
@@ -80,14 +83,8 @@ protected:
 
 public:
     InputManager(
-            const sp<EventHubInterface>& eventHub,
             const sp<InputReaderPolicyInterface>& readerPolicy,
             const sp<InputDispatcherPolicyInterface>& dispatcherPolicy);
-
-    // (used for testing purposes)
-    InputManager(
-            const sp<InputReaderInterface>& reader,
-            const sp<InputDispatcherInterface>& dispatcher);
 
     virtual status_t start();
     virtual status_t stop();
@@ -96,10 +93,16 @@ public:
     virtual sp<InputDispatcherInterface> getDispatcher();
 
     virtual void setInputWindows(const Vector<InputWindowInfo>& handles);
+    virtual void transferTouchFocus(const sp<IBinder>& fromToken, const sp<IBinder>& toToken);
+
+    virtual void registerInputChannel(const sp<InputChannel>& channel);
+    virtual void unregisterInputChannel(const sp<InputChannel>& channel);
 
 private:
     sp<InputReaderInterface> mReader;
     sp<InputReaderThread> mReaderThread;
+
+    sp<InputClassifierInterface> mClassifier;
 
     sp<InputDispatcherInterface> mDispatcher;
     sp<InputDispatcherThread> mDispatcherThread;

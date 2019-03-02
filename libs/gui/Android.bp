@@ -26,7 +26,6 @@ cc_defaults {
         "-Werror",
     ],
     cppflags: [
-        "-std=c++1z",
         "-Weverything",
 
         // The static constructors and destructors in this library have not been noted to
@@ -104,6 +103,7 @@ cc_defaults {
         "ISurfaceComposerClient.cpp",
         "ITransactionCompletedListener.cpp",
         "LayerDebugInfo.cpp",
+        "LayerMetadata.cpp",
         "LayerState.cpp",
         "OccupancyTracker.cpp",
         "StreamSplitter.cpp",
@@ -117,7 +117,9 @@ cc_defaults {
     ],
 
     shared_libs: [
+        "android.frameworks.bufferhub@1.0",
         "android.hardware.graphics.common@1.1",
+        "libbase",
         "libsync",
         "libbinder",
         "libbufferhub",
@@ -135,8 +137,6 @@ cc_defaults {
         "libhidltransport",
         "android.hidl.token@1.0-utils",
         "android.hardware.graphics.bufferqueue@1.0",
-        "android.hardware.configstore@1.0",
-        "android.hardware.configstore-utils",
     ],
 
     // bufferhub is not used when building libgui for vendors
@@ -148,6 +148,7 @@ cc_defaults {
                 "BufferHubProducer.cpp",
             ],
             exclude_shared_libs: [
+                "android.frameworks.bufferhub@1.0",
                 "libbufferhub",
                 "libbufferhubqueue",
                 "libpdx_default_transport",

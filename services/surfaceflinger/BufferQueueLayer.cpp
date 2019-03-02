@@ -17,6 +17,8 @@
 #include "BufferQueueLayer.h"
 #include "LayerRejecter.h"
 
+#include "TimeStats/TimeStats.h"
+
 #include <system/window.h>
 
 namespace android {
@@ -246,7 +248,7 @@ status_t BufferQueueLayer::updateTexImage(bool& recomputeVisibleRegions, nsecs_t
         // and return early
         if (queuedBuffer) {
             Mutex::Autolock lock(mQueueItemLock);
-            mTimeStats.removeTimeRecord(layerID, mQueueItems[0].mFrameNumber);
+            mFlinger->mTimeStats->removeTimeRecord(layerID, mQueueItems[0].mFrameNumber);
             mQueueItems.removeAt(0);
             mQueuedFrames--;
         }
@@ -260,7 +262,7 @@ status_t BufferQueueLayer::updateTexImage(bool& recomputeVisibleRegions, nsecs_t
             Mutex::Autolock lock(mQueueItemLock);
             mQueueItems.clear();
             mQueuedFrames = 0;
-            mTimeStats.clearLayerRecord(layerID);
+            mFlinger->mTimeStats->onDestroy(layerID);
         }
 
         // Once we have hit this state, the shadow queue may no longer
@@ -281,13 +283,14 @@ status_t BufferQueueLayer::updateTexImage(bool& recomputeVisibleRegions, nsecs_t
         // Remove any stale buffers that have been dropped during
         // updateTexImage
         while (mQueueItems[0].mFrameNumber != currentFrameNumber) {
-            mTimeStats.removeTimeRecord(layerID, mQueueItems[0].mFrameNumber);
+            mFlinger->mTimeStats->removeTimeRecord(layerID, mQueueItems[0].mFrameNumber);
             mQueueItems.removeAt(0);
             mQueuedFrames--;
         }
 
-        mTimeStats.setAcquireFence(layerID, currentFrameNumber, mQueueItems[0].mFenceTime);
-        mTimeStats.setLatchTime(layerID, currentFrameNumber, latchTime);
+        mFlinger->mTimeStats->setAcquireFence(layerID, currentFrameNumber,
+                                              mQueueItems[0].mFenceTime);
+        mFlinger->mTimeStats->setLatchTime(layerID, currentFrameNumber, latchTime);
 
         mQueueItems.removeAt(0);
     }
@@ -349,12 +352,21 @@ void BufferQueueLayer::setHwcLayerBuffer(DisplayId displayId) {
 // Interface implementation for BufferLayerConsumer::ContentsChangedListener
 // -----------------------------------------------------------------------
 
+void BufferQueueLayer::fakeVsync() {
+    mRefreshPending = false;
+    bool ignored = false;
+    latchBuffer(ignored, systemTime(), Fence::NO_FENCE);
+    usleep(16000);
+    releasePendingBuffer(systemTime());
+}
+
 void BufferQueueLayer::onFrameAvailable(const BufferItem& item) {
     // Add this buffer from our internal queue tracker
     { // Autolock scope
-        // Report the timestamp to the Scheduler.
+        // Report the requested present time to the Scheduler.
         if (mFlinger->mUseScheduler) {
-            mFlinger->mScheduler->addNewFrameTimestamp(item.mTimestamp, item.mIsAutoTimestamp);
+            mFlinger->mScheduler->addFramePresentTimeForLayer(item.mTimestamp,
+                                                              item.mIsAutoTimestamp, mName.c_str());
         }
 
         Mutex::Autolock lock(mQueueItemLock);
@@ -382,14 +394,11 @@ void BufferQueueLayer::onFrameAvailable(const BufferItem& item) {
 
     mFlinger->mInterceptor->saveBufferUpdate(this, item.mGraphicBuffer->getWidth(),
                                              item.mGraphicBuffer->getHeight(), item.mFrameNumber);
-    
+
     // If this layer is orphaned, then we run a fake vsync pulse so that
     // dequeueBuffer doesn't block indefinitely.
     if (isRemovedFromCurrentState()) {
-        bool ignored = false;
-        latchBuffer(ignored, systemTime(), Fence::NO_FENCE);
-        usleep(16000);
-        releasePendingBuffer(systemTime());
+        fakeVsync();
     } else {
         mFlinger->signalLayerUpdate();
     }
@@ -447,7 +456,8 @@ void BufferQueueLayer::onFirstRef() {
     mConsumer->setContentsChangedListener(this);
     mConsumer->setName(mName);
 
-    if (mFlinger->isLayerTripleBufferingDisabled()) {
+    // BufferQueueCore::mMaxDequeuedBufferCount is default to 1
+    if (!mFlinger->isLayerTripleBufferingDisabled()) {
         mProducer->setMaxDequeuedBufferCount(2);
     }
 

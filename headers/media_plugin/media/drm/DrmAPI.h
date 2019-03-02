@@ -84,6 +84,7 @@ namespace android {
             kDrmPluginEventSessionReclaimed,
             kDrmPluginEventExpirationUpdate,
             kDrmPluginEventKeysChange,
+            kDrmPluginEventSessionLostState,
         };
 
         // Drm keys can be for offline content or for online streaming.
@@ -139,6 +140,8 @@ namespace android {
             kHdcpV2_1,
             // HDCP version 2.2 Type 1.
             kHdcpV2_2,
+            // HDCP version 2.3 Type 1.
+            kHdcpV2_3,
             // No digital output, implicitly secure
             kHdcpNoOutput = 0x7fff
         };
@@ -180,10 +183,10 @@ namespace android {
             kOfflineLicenseStateUnknown,
             // Offline license state is usable, the keys may be used for decryption.
             kOfflineLicenseStateUsable,
-            // Offline license state is inactive, the keys have been marked for
+            // Offline license state is released, the keys have been marked for
             // release using getKeyRequest() with kKeyType_Release but the
             // key response has not been received.
-            kOfflineLicenseStateInactive
+            kOfflineLicenseStateReleased
         };
 
         DrmPlugin() {}

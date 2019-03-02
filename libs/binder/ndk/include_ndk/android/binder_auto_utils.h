@@ -51,7 +51,7 @@ class SpAIBinder {
      * Convenience operator for implicitly constructing an SpAIBinder from nullptr. This is not
      * explicit because it is not taking ownership of anything.
      */
-    SpAIBinder(std::nullptr_t) : SpAIBinder() {}
+    SpAIBinder(std::nullptr_t) : SpAIBinder() {}  // NOLINT(google-explicit-constructor)
 
     /**
      * This will delete the underlying object if it exists. See operator=.
@@ -109,6 +109,8 @@ class SpAIBinder {
     AIBinder* mBinder = nullptr;
 };
 
+namespace impl {
+
 /**
  * This baseclass owns a single object, used to make various classes RAII.
  */
@@ -163,16 +165,18 @@ class ScopedAResource {
     ScopedAResource& operator=(ScopedAResource&&) = delete;
 
     // move-constructing is okay
-    ScopedAResource(ScopedAResource&&) = default;
+    ScopedAResource(ScopedAResource&& other) : mT(std::move(other.mT)) { other.mT = DEFAULT; }
 
    private:
     T mT;
 };
 
+}  // namespace impl
+
 /**
  * Convenience wrapper. See AParcel.
  */
-class ScopedAParcel : public ScopedAResource<AParcel*, void, AParcel_delete, nullptr> {
+class ScopedAParcel : public impl::ScopedAResource<AParcel*, void, AParcel_delete, nullptr> {
    public:
     /**
      * Takes ownership of a.
@@ -185,7 +189,7 @@ class ScopedAParcel : public ScopedAResource<AParcel*, void, AParcel_delete, nul
 /**
  * Convenience wrapper. See AStatus.
  */
-class ScopedAStatus : public ScopedAResource<AStatus*, void, AStatus_delete, nullptr> {
+class ScopedAStatus : public impl::ScopedAResource<AStatus*, void, AStatus_delete, nullptr> {
    public:
     /**
      * Takes ownership of a.
@@ -209,8 +213,8 @@ class ScopedAStatus : public ScopedAResource<AStatus*, void, AStatus_delete, nul
  * Convenience wrapper. See AIBinder_DeathRecipient.
  */
 class ScopedAIBinder_DeathRecipient
-    : public ScopedAResource<AIBinder_DeathRecipient*, void, AIBinder_DeathRecipient_delete,
-                             nullptr> {
+    : public impl::ScopedAResource<AIBinder_DeathRecipient*, void, AIBinder_DeathRecipient_delete,
+                                   nullptr> {
    public:
     /**
      * Takes ownership of a.
@@ -225,7 +229,7 @@ class ScopedAIBinder_DeathRecipient
  * Convenience wrapper. See AIBinder_Weak.
  */
 class ScopedAIBinder_Weak
-    : public ScopedAResource<AIBinder_Weak*, void, AIBinder_Weak_delete, nullptr> {
+    : public impl::ScopedAResource<AIBinder_Weak*, void, AIBinder_Weak_delete, nullptr> {
    public:
     /**
      * Takes ownership of a.
@@ -243,7 +247,7 @@ class ScopedAIBinder_Weak
 /**
  * Convenience wrapper for a file descriptor.
  */
-class ScopedFileDescriptor : public ScopedAResource<int, int, close, -1> {
+class ScopedFileDescriptor : public impl::ScopedAResource<int, int, close, -1> {
    public:
     /**
      * Takes ownership of a.

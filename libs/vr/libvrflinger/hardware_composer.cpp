@@ -104,7 +104,7 @@ bool SetThreadPolicy(const std::string& scheduler_class,
 class TraceArgs {
  public:
   template <typename... Args>
-  TraceArgs(const char* format, Args&&... args) {
+  explicit TraceArgs(const char* format, Args&&... args) {
     std::array<char, 1024> buffer;
     snprintf(buffer.data(), buffer.size(), format, std::forward<Args>(args)...);
     atrace_begin(ATRACE_TAG, buffer.data());
@@ -1098,7 +1098,7 @@ status_t HardwareComposer::VsyncService::registerCallback(
   if (FindCallback(callback) == callbacks_.cend()) {
     callbacks_.push_back(callback);
   }
-  return NO_ERROR;
+  return OK;
 }
 
 status_t HardwareComposer::VsyncService::unregisterCallback(
@@ -1108,7 +1108,7 @@ status_t HardwareComposer::VsyncService::unregisterCallback(
   if (iter != callbacks_.cend()) {
     callbacks_.erase(iter);
   }
-  return NO_ERROR;
+  return OK;
 }
 
 void HardwareComposer::VsyncService::OnVsync(int64_t vsync_timestamp) {

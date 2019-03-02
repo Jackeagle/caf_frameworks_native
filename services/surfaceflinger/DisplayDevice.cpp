@@ -18,44 +18,28 @@
 #undef LOG_TAG
 #define LOG_TAG "DisplayDevice"
 
-#include "DisplayDevice.h"
-
-#include <array>
-#include <unordered_set>
-
-#include <stdlib.h>
-#include <stdio.h>
-#include <string.h>
-#include <math.h>
-
 #include <android-base/stringprintf.h>
-#include <android/hardware/configstore/1.0/ISurfaceFlingerConfigs.h>
+#include <compositionengine/CompositionEngine.h>
+#include <compositionengine/Display.h>
+#include <compositionengine/DisplayColorProfile.h>
+#include <compositionengine/DisplayColorProfileCreationArgs.h>
+#include <compositionengine/DisplayCreationArgs.h>
+#include <compositionengine/DisplaySurface.h>
+#include <compositionengine/RenderSurface.h>
+#include <compositionengine/RenderSurfaceCreationArgs.h>
+#include <compositionengine/impl/OutputCompositionState.h>
 #include <configstore/Utils.h>
-#include <cutils/properties.h>
-#include <gui/Surface.h>
-#include <hardware/gralloc.h>
-#include <renderengine/RenderEngine.h>
-#include <ui/DebugUtils.h>
-#include <ui/DisplayInfo.h>
-#include <ui/PixelFormat.h>
-#include <utils/Log.h>
-#include <utils/RefBase.h>
+#include <log/log.h>
+#include <system/window.h>
+#include <ui/GraphicTypes.h>
 
-#include "DisplayHardware/DisplaySurface.h"
-#include "DisplayHardware/HWComposer.h"
-#include "DisplayHardware/HWC2.h"
-#include "SurfaceFlinger.h"
+#include "DisplayDevice.h"
 #include "Layer.h"
+#include "SurfaceFlinger.h"
 
 namespace android {
 
-// retrieve triple buffer setting from configstore
-using namespace android::hardware::configstore;
-using namespace android::hardware::configstore::V1_0;
-using android::ui::ColorMode;
-using android::ui::Dataspace;
-using android::ui::Hdr;
-using android::ui::RenderIntent;
+using android::base::StringAppendF;
 
 /*
  * Initialize the display to the specified values.
@@ -64,335 +48,72 @@ using android::ui::RenderIntent;
 
 uint32_t DisplayDevice::sPrimaryDisplayOrientation = 0;
 
-namespace {
-
-// ordered list of known SDR color modes
-const std::array<ColorMode, 3> sSdrColorModes = {
-        ColorMode::DISPLAY_BT2020,
-        ColorMode::DISPLAY_P3,
-        ColorMode::SRGB,
-};
-
-// ordered list of known HDR color modes
-const std::array<ColorMode, 2> sHdrColorModes = {
-        ColorMode::BT2100_PQ,
-        ColorMode::BT2100_HLG,
-};
-
-// ordered list of known SDR render intents
-const std::array<RenderIntent, 2> sSdrRenderIntents = {
-        RenderIntent::ENHANCE,
-        RenderIntent::COLORIMETRIC,
-};
-
-// ordered list of known HDR render intents
-const std::array<RenderIntent, 2> sHdrRenderIntents = {
-        RenderIntent::TONE_MAP_ENHANCE,
-        RenderIntent::TONE_MAP_COLORIMETRIC,
-};
-
-// map known color mode to dataspace
-Dataspace colorModeToDataspace(ColorMode mode) {
-    switch (mode) {
-        case ColorMode::SRGB:
-            return Dataspace::SRGB;
-        case ColorMode::DISPLAY_P3:
-            return Dataspace::DISPLAY_P3;
-        case ColorMode::DISPLAY_BT2020:
-            return Dataspace::DISPLAY_BT2020;
-        case ColorMode::BT2100_HLG:
-            return Dataspace::BT2020_HLG;
-        case ColorMode::BT2100_PQ:
-            return Dataspace::BT2020_PQ;
-        default:
-            return Dataspace::UNKNOWN;
-    }
-}
-
-// Return a list of candidate color modes.
-std::vector<ColorMode> getColorModeCandidates(ColorMode mode) {
-    std::vector<ColorMode> candidates;
-
-    // add mode itself
-    candidates.push_back(mode);
-
-    // check if mode is HDR
-    bool isHdr = false;
-    for (auto hdrMode : sHdrColorModes) {
-        if (hdrMode == mode) {
-            isHdr = true;
-            break;
-        }
-    }
-
-    // add other HDR candidates when mode is HDR
-    if (isHdr) {
-        for (auto hdrMode : sHdrColorModes) {
-            if (hdrMode != mode) {
-                candidates.push_back(hdrMode);
-            }
-        }
-    }
-
-    // add other SDR candidates
-    for (auto sdrMode : sSdrColorModes) {
-        if (sdrMode != mode) {
-            candidates.push_back(sdrMode);
-        }
-    }
-
-    return candidates;
-}
-
-// Return a list of candidate render intents.
-std::vector<RenderIntent> getRenderIntentCandidates(RenderIntent intent) {
-    std::vector<RenderIntent> candidates;
-
-    // add intent itself
-    candidates.push_back(intent);
-
-    // check if intent is HDR
-    bool isHdr = false;
-    for (auto hdrIntent : sHdrRenderIntents) {
-        if (hdrIntent == intent) {
-            isHdr = true;
-            break;
-        }
-    }
-
-    if (isHdr) {
-        // add other HDR candidates when intent is HDR
-        for (auto hdrIntent : sHdrRenderIntents) {
-            if (hdrIntent != intent) {
-                candidates.push_back(hdrIntent);
-            }
-        }
-    } else {
-        // add other SDR candidates when intent is SDR
-        for (auto sdrIntent : sSdrRenderIntents) {
-            if (sdrIntent != intent) {
-                candidates.push_back(sdrIntent);
-            }
-        }
-    }
-
-    return candidates;
-}
-
-// Return the best color mode supported by HWC.
-ColorMode getHwcColorMode(
-        const std::unordered_map<ColorMode, std::vector<RenderIntent>>& hwcColorModes,
-        ColorMode mode) {
-    std::vector<ColorMode> candidates = getColorModeCandidates(mode);
-    for (auto candidate : candidates) {
-        auto iter = hwcColorModes.find(candidate);
-        if (iter != hwcColorModes.end()) {
-            return candidate;
-        }
-    }
-
-    return ColorMode::NATIVE;
-}
-
-// Return the best render intent supported by HWC.
-RenderIntent getHwcRenderIntent(const std::vector<RenderIntent>& hwcIntents, RenderIntent intent) {
-    std::vector<RenderIntent> candidates = getRenderIntentCandidates(intent);
-    for (auto candidate : candidates) {
-        for (auto hwcIntent : hwcIntents) {
-            if (candidate == hwcIntent) {
-                return candidate;
-            }
-        }
-    }
-
-    return RenderIntent::COLORIMETRIC;
-}
-
-} // anonymous namespace
-
 DisplayDeviceCreationArgs::DisplayDeviceCreationArgs(const sp<SurfaceFlinger>& flinger,
                                                      const wp<IBinder>& displayToken,
                                                      const std::optional<DisplayId>& displayId)
       : flinger(flinger), displayToken(displayToken), displayId(displayId) {}
 
 DisplayDevice::DisplayDevice(DisplayDeviceCreationArgs&& args)
-      : lastCompositionHadVisibleLayers(false),
-        mFlinger(args.flinger),
+      : mFlinger(args.flinger),
         mDisplayToken(args.displayToken),
-        mId(args.displayId),
-        mNativeWindow(args.nativeWindow),
-        mDisplaySurface(args.displaySurface),
-        mSurface{std::move(args.renderSurface)},
+        mSequenceId(args.sequenceId),
         mDisplayInstallOrientation(args.displayInstallOrientation),
-        mPageFlipCount(0),
+        mCompositionDisplay{mFlinger->getCompositionEngine().createDisplay(
+                compositionengine::DisplayCreationArgs{args.isSecure, args.isVirtual,
+                                                       args.displayId})},
         mIsVirtual(args.isVirtual),
-        mIsSecure(args.isSecure),
-        mLayerStack(NO_LAYER_STACK),
         mOrientation(),
-        mViewport(Rect::INVALID_RECT),
-        mFrame(Rect::INVALID_RECT),
-        mPowerMode(args.initialPowerMode),
         mActiveConfig(0),
-        mColorTransform(HAL_COLOR_TRANSFORM_IDENTITY),
-        mHasWideColorGamut(args.hasWideColorGamut),
-        mHasHdr10(false),
-        mHasHLG(false),
-        mHasDolbyVision(false),
-        mSupportedPerFrameMetadata(args.supportedPerFrameMetadata),
         mIsPrimary(args.isPrimary) {
-    populateColorModes(args.hwcColorModes);
+    mCompositionDisplay->createRenderSurface(
+            compositionengine::RenderSurfaceCreationArgs{ANativeWindow_getWidth(
+                                                                 args.nativeWindow.get()),
+                                                         ANativeWindow_getHeight(
+                                                                 args.nativeWindow.get()),
+                                                         args.nativeWindow, args.displaySurface});
 
-    ALOGE_IF(!mNativeWindow, "No native window was set for display");
-    ALOGE_IF(!mDisplaySurface, "No display surface was set for display");
-    ALOGE_IF(!mSurface, "No render surface was set for display");
+    mCompositionDisplay->createDisplayColorProfile(
+            compositionengine::DisplayColorProfileCreationArgs{args.hasWideColorGamut,
+                                                               std::move(args.hdrCapabilities),
+                                                               args.supportedPerFrameMetadata,
+                                                               args.hwcColorModes});
 
-    std::vector<Hdr> types = args.hdrCapabilities.getSupportedHdrTypes();
-    for (Hdr hdrType : types) {
-        switch (hdrType) {
-            case Hdr::HDR10:
-                mHasHdr10 = true;
-                break;
-            case Hdr::HLG:
-                mHasHLG = true;
-                break;
-            case Hdr::DOLBY_VISION:
-                mHasDolbyVision = true;
-                break;
-            default:
-                ALOGE("UNKNOWN HDR capability: %d", static_cast<int32_t>(hdrType));
-        }
+    if (!mCompositionDisplay->isValid()) {
+        ALOGE("Composition Display did not validate!");
     }
 
-    char property[PROPERTY_VALUE_MAX];
+    mCompositionDisplay->getRenderSurface()->initialize();
 
-    mPanelMountFlip = 0;
-    // 1: H-Flip, 2: V-Flip, 3: 180 (HV Flip)
-    property_get("vendor.display.panel_mountflip", property, "0");
-    mPanelMountFlip = atoi(property);
-
-    float minLuminance = args.hdrCapabilities.getDesiredMinLuminance();
-    float maxLuminance = args.hdrCapabilities.getDesiredMaxLuminance();
-    float maxAverageLuminance = args.hdrCapabilities.getDesiredMaxAverageLuminance();
-
-    minLuminance = minLuminance <= 0.0 ? sDefaultMinLumiance : minLuminance;
-    maxLuminance = maxLuminance <= 0.0 ? sDefaultMaxLumiance : maxLuminance;
-    maxAverageLuminance = maxAverageLuminance <= 0.0 ? sDefaultMaxLumiance : maxAverageLuminance;
-    if (this->hasWideColorGamut()) {
-        // insert HDR10/HLG as we will force client composition for HDR10/HLG
-        // layers
-        if (!hasHDR10Support()) {
-          types.push_back(Hdr::HDR10);
-        }
-
-        if (!hasHLGSupport()) {
-          types.push_back(Hdr::HLG);
-        }
-    }
-    mHdrCapabilities = HdrCapabilities(types, maxLuminance, maxAverageLuminance, minLuminance);
-
-    ANativeWindow* const window = mNativeWindow.get();
-    mDisplayWidth = ANativeWindow_getWidth(window);
-    mDisplayHeight = ANativeWindow_getHeight(window);
+    setPowerMode(args.initialPowerMode);
 
     // initialize the display orientation transform.
-    setProjection(DisplayState::eOrientationDefault, mViewport, mFrame);
+    setProjection(DisplayState::eOrientationDefault, Rect::INVALID_RECT, Rect::INVALID_RECT);
 }
 
 DisplayDevice::~DisplayDevice() = default;
 
-void DisplayDevice::disconnect(HWComposer& hwc) {
-    if (mId) {
-        hwc.disconnectDisplay(*mId);
-        mId.reset();
-    }
+void DisplayDevice::disconnect() {
+    mCompositionDisplay->disconnect();
 }
 
 int DisplayDevice::getWidth() const {
-    return mDisplayWidth;
+    return mCompositionDisplay->getState().bounds.getWidth();
 }
 
 int DisplayDevice::getHeight() const {
-    return mDisplayHeight;
+    return mCompositionDisplay->getState().bounds.getHeight();
 }
 
 void DisplayDevice::setDisplayName(const std::string& displayName) {
     if (!displayName.empty()) {
         // never override the name with an empty name
         mDisplayName = displayName;
+        mCompositionDisplay->setName(displayName);
     }
 }
 
 uint32_t DisplayDevice::getPageFlipCount() const {
-    return mPageFlipCount;
-}
-
-void DisplayDevice::flip() const
-{
-    mFlinger->getRenderEngine().checkErrors();
-    mPageFlipCount++;
-}
-
-status_t DisplayDevice::beginFrame(bool mustRecompose) const {
-    return mDisplaySurface->beginFrame(mustRecompose);
-}
-
-status_t DisplayDevice::prepareFrame(HWComposer& hwc,
-        std::vector<CompositionInfo>& compositionData) {
-    if (mId) {
-        status_t error = hwc.prepare(*mId, compositionData);
-        if (error != NO_ERROR) {
-            return error;
-        }
-    }
-
-    DisplaySurface::CompositionType compositionType;
-    bool hasClient = hwc.hasClientComposition(mId);
-    bool hasDevice = hwc.hasDeviceComposition(mId);
-    if (hasClient && hasDevice) {
-        compositionType = DisplaySurface::COMPOSITION_MIXED;
-    } else if (hasClient) {
-        compositionType = DisplaySurface::COMPOSITION_GLES;
-    } else if (hasDevice) {
-        compositionType = DisplaySurface::COMPOSITION_HWC;
-    } else {
-        // Nothing to do -- when turning the screen off we get a frame like
-        // this. Call it a HWC frame since we won't be doing any GLES work but
-        // will do a prepare/set cycle.
-        compositionType = DisplaySurface::COMPOSITION_HWC;
-    }
-    return mDisplaySurface->prepareFrame(compositionType);
-}
-
-void DisplayDevice::swapBuffers(HWComposer& hwc) const {
-    if (hwc.hasClientComposition(mId) || hwc.hasFlipClientTargetRequest(mId)) {
-        mSurface->swapBuffers();
-    }
-
-    status_t result = mDisplaySurface->advanceFrame();
-    if (result != NO_ERROR) {
-        ALOGE("[%s] failed pushing new frame to HWC: %d", mDisplayName.c_str(), result);
-    }
-}
-
-void DisplayDevice::onSwapBuffersCompleted() const {
-    mDisplaySurface->onFrameCommitted();
-}
-
-bool DisplayDevice::makeCurrent() const {
-    bool success = mFlinger->getRenderEngine().setCurrentSurface(*mSurface);
-    setViewportAndProjection();
-    return success;
-}
-
-void DisplayDevice::setViewportAndProjection() const {
-    size_t w = mDisplayWidth;
-    size_t h = mDisplayHeight;
-    Rect sourceCrop(0, 0, w, h);
-    mFlinger->getRenderEngine().setViewportAndProjection(w, h, sourceCrop, ui::Transform::ROT_0);
-}
-
-const sp<Fence>& DisplayDevice::getClientTargetAcquireFence() const {
-    return mDisplaySurface->getClientTargetAcquireFence();
+    return mCompositionDisplay->getRenderSurface()->getPageFlipCount();
 }
 
 // ----------------------------------------------------------------------------
@@ -413,21 +134,10 @@ const Vector< sp<Layer> >& DisplayDevice::getLayersNeedingFences() const {
     return mLayersNeedingFences;
 }
 
-Region DisplayDevice::getDirtyRegion(bool repaintEverything) const {
-    Region dirty;
-    if (repaintEverything) {
-        dirty.set(getBounds());
-    } else {
-        const ui::Transform& planeTransform(mGlobalTransform);
-        dirty = planeTransform.transform(this->dirtyRegion);
-        dirty.andSelf(getBounds());
-    }
-    return dirty;
-}
-
 // ----------------------------------------------------------------------------
 void DisplayDevice::setPowerMode(int mode) {
     mPowerMode = mode;
+    getCompositionDisplay()->setCompositionEnabled(mPowerMode != HWC_POWER_MODE_OFF);
 }
 
 int DisplayDevice::getPowerMode()  const {
@@ -448,110 +158,45 @@ int DisplayDevice::getActiveConfig()  const {
 }
 
 // ----------------------------------------------------------------------------
-void DisplayDevice::setActiveColorMode(ColorMode mode) {
-    mActiveColorMode = mode;
-}
-
-ColorMode DisplayDevice::getActiveColorMode() const {
-    return mActiveColorMode;
-}
-
-RenderIntent DisplayDevice::getActiveRenderIntent() const {
-    return mActiveRenderIntent;
-}
-
-void DisplayDevice::setActiveRenderIntent(RenderIntent renderIntent) {
-    mActiveRenderIntent = renderIntent;
-}
-
-void DisplayDevice::setColorTransform(const mat4& transform) {
-    const bool isIdentity = (transform == mat4());
-    mColorTransform =
-            isIdentity ? HAL_COLOR_TRANSFORM_IDENTITY : HAL_COLOR_TRANSFORM_ARBITRARY_MATRIX;
-}
-
-android_color_transform_t DisplayDevice::getColorTransform() const {
-    return mColorTransform;
-}
-
-void DisplayDevice::setCompositionDataSpace(ui::Dataspace dataspace) {
-    mCompositionDataSpace = dataspace;
-    ANativeWindow* const window = mNativeWindow.get();
-    native_window_set_buffers_data_space(window, static_cast<android_dataspace>(dataspace));
-}
 
 ui::Dataspace DisplayDevice::getCompositionDataSpace() const {
-    return mCompositionDataSpace;
+    return mCompositionDisplay->getState().dataspace;
 }
 
 // ----------------------------------------------------------------------------
 
 void DisplayDevice::setLayerStack(uint32_t stack) {
-    mLayerStack = stack;
-    dirtyRegion.set(bounds());
+    mCompositionDisplay->setLayerStackFilter(stack, isPrimary());
 }
 
 // ----------------------------------------------------------------------------
 
-uint32_t DisplayDevice::getOrientationTransform() const {
-    uint32_t transform = 0;
-    switch (mOrientation) {
-        case DisplayState::eOrientationDefault:
-            transform = ui::Transform::ROT_0;
-            break;
-        case DisplayState::eOrientation90:
-            transform = ui::Transform::ROT_90;
-            break;
-        case DisplayState::eOrientation180:
-            transform = ui::Transform::ROT_180;
-            break;
-        case DisplayState::eOrientation270:
-            transform = ui::Transform::ROT_270;
-            break;
-    }
-    return transform;
-}
-
-status_t DisplayDevice::orientationToTransfrom(
-        int orientation, int w, int h, ui::Transform* tr)
-{
-    uint32_t flags = 0;
+uint32_t DisplayDevice::displayStateOrientationToTransformOrientation(int orientation) {
     switch (orientation) {
     case DisplayState::eOrientationDefault:
-        flags = ui::Transform::ROT_0;
-        break;
+        return ui::Transform::ROT_0;
     case DisplayState::eOrientation90:
-        flags = ui::Transform::ROT_90;
-        break;
+        return ui::Transform::ROT_90;
     case DisplayState::eOrientation180:
-        flags = ui::Transform::ROT_180;
-        break;
+        return ui::Transform::ROT_180;
     case DisplayState::eOrientation270:
-        flags = ui::Transform::ROT_270;
-        break;
+        return ui::Transform::ROT_270;
     default:
+        return ui::Transform::ROT_INVALID;
+    }
+}
+
+status_t DisplayDevice::orientationToTransfrom(int orientation, int w, int h, ui::Transform* tr) {
+    uint32_t flags = displayStateOrientationToTransformOrientation(orientation);
+    if (flags == ui::Transform::ROT_INVALID) {
         return BAD_VALUE;
     }
-
-    if (isPrimary()) {
-        flags = flags ^ getPanelMountFlip();
-    }
-
     tr->set(flags, w, h);
     return NO_ERROR;
 }
 
 void DisplayDevice::setDisplaySize(const int newWidth, const int newHeight) {
-    dirtyRegion.set(getBounds());
-
-    mSurface->setNativeWindow(nullptr);
-
-    mDisplaySurface->resizeBuffers(newWidth, newHeight);
-
-    ANativeWindow* const window = mNativeWindow.get();
-    mSurface->setNativeWindow(window);
-    mDisplayWidth = newWidth;
-    mDisplayHeight = newHeight;
+    mCompositionDisplay->setBounds(ui::Size(newWidth, newHeight));
 }
 
 void DisplayDevice::setProjection(int orientation,
@@ -559,8 +204,11 @@ void DisplayDevice::setProjection(int orientation,
     Rect viewport(newViewport);
     Rect frame(newFrame);
 
-    const int w = mDisplayWidth;
-    const int h = mDisplayHeight;
+    mOrientation = orientation;
+
+    const Rect& displayBounds = getCompositionDisplay()->getState().bounds;
+    const int w = displayBounds.width();
+    const int h = displayBounds.height();
 
     ui::Transform R;
     DisplayDevice::orientationToTransfrom(orientation, w, h, &R);
@@ -584,8 +232,6 @@ void DisplayDevice::setProjection(int orientation,
         }
     }
 
-    dirtyRegion.set(getBounds());
-
     ui::Transform TL, TP, S;
     float src_width  = viewport.width();
     float src_height = viewport.height();
@@ -604,7 +250,7 @@ void DisplayDevice::setProjection(int orientation,
     TL.set(-src_x, -src_y);
     TP.set(dst_x, dst_y);
 
-    // need to take care of primary display rotation for mGlobalTransform
+    // need to take care of primary display rotation for globalTransform
     // for case if the panel is not installed aligned with device orientation
     if (isPrimary()) {
         DisplayDevice::orientationToTransfrom(
@@ -615,38 +261,25 @@ void DisplayDevice::setProjection(int orientation,
     // The viewport and frame are both in the logical orientation.
     // Apply the logical translation, scale to physical size, apply the
     // physical translation and finally rotate to the physical orientation.
-    mGlobalTransform = R * TP * S * TL;
+    ui::Transform globalTransform = R * TP * S * TL;
 
-    const uint8_t type = mGlobalTransform.getType();
-    mNeedsFiltering = (!mGlobalTransform.preserveRects() ||
-            (type >= ui::Transform::SCALE));
+    const uint8_t type = globalTransform.getType();
+    const bool needsFiltering =
+            (!globalTransform.preserveRects() || (type >= ui::Transform::SCALE));
 
-    mScissor = mGlobalTransform.transform(viewport);
-    if (mScissor.isEmpty()) {
-        mScissor = getBounds();
+    Rect scissor = globalTransform.transform(viewport);
+    if (scissor.isEmpty()) {
+        scissor = displayBounds;
     }
 
-    mOrientation = orientation;
     if (isPrimary()) {
-        uint32_t transform = 0;
-        switch (mOrientation) {
-            case DisplayState::eOrientationDefault:
-                transform = ui::Transform::ROT_0;
-                break;
-            case DisplayState::eOrientation90:
-                transform = ui::Transform::ROT_90;
-                break;
-            case DisplayState::eOrientation180:
-                transform = ui::Transform::ROT_180;
-                break;
-            case DisplayState::eOrientation270:
-                transform = ui::Transform::ROT_270;
-                break;
-        }
-        sPrimaryDisplayOrientation = transform;
+        sPrimaryDisplayOrientation = displayStateOrientationToTransformOrientation(orientation);
     }
-    mViewport = viewport;
-    mFrame = frame;
+
+    getCompositionDisplay()->setProjection(globalTransform,
+                                           displayStateOrientationToTransformOrientation(
+                                                   orientation),
+                                           frame, viewport, scissor, needsFiltering);
 }
 
 uint32_t DisplayDevice::getPrimaryDisplayOrientationTransform() {
@@ -654,147 +287,94 @@ uint32_t DisplayDevice::getPrimaryDisplayOrientationTransform() {
 }
 
 std::string DisplayDevice::getDebugName() const {
-    const auto id = mId ? to_string(*mId) + ", " : std::string();
+    const auto id = getId() ? to_string(*getId()) + ", " : std::string();
     return base::StringPrintf("DisplayDevice{%s%s%s\"%s\"}", id.c_str(),
                               isPrimary() ? "primary, " : "", isVirtual() ? "virtual, " : "",
                               mDisplayName.c_str());
 }
 
-void DisplayDevice::dump(String8& result) const {
-    const ui::Transform& tr(mGlobalTransform);
-    ANativeWindow* const window = mNativeWindow.get();
-    result.appendFormat("+ %s\n", getDebugName().c_str());
-    result.appendFormat("  layerStack=%u, (%4dx%4d), ANativeWindow=%p "
-                        "(%d:%d:%d:%d), orient=%2d (type=%08x), "
-                        "flips=%u, isSecure=%d, powerMode=%d, activeConfig=%d, numLayers=%zu\n",
-                        mLayerStack, mDisplayWidth, mDisplayHeight, window,
-                        mSurface->queryRedSize(), mSurface->queryGreenSize(),
-                        mSurface->queryBlueSize(), mSurface->queryAlphaSize(), mOrientation,
-                        tr.getType(), getPageFlipCount(), mIsSecure, mPowerMode, mActiveConfig,
-                        mVisibleLayersSortedByZ.size());
-    result.appendFormat("   v:[%d,%d,%d,%d], f:[%d,%d,%d,%d], s:[%d,%d,%d,%d],"
-                        "transform:[[%0.3f,%0.3f,%0.3f][%0.3f,%0.3f,%0.3f][%0.3f,%0.3f,%0.3f]]\n",
-                        mViewport.left, mViewport.top, mViewport.right, mViewport.bottom,
-                        mFrame.left, mFrame.top, mFrame.right, mFrame.bottom, mScissor.left,
-                        mScissor.top, mScissor.right, mScissor.bottom, tr[0][0], tr[1][0], tr[2][0],
-                        tr[0][1], tr[1][1], tr[2][1], tr[0][2], tr[1][2], tr[2][2]);
-    auto const surface = static_cast<Surface*>(window);
-    ui::Dataspace dataspace = surface->getBuffersDataSpace();
-    result.appendFormat("   wideColorGamut=%d, hdr10=%d, colorMode=%s, dataspace: %s (%d)\n",
-                        mHasWideColorGamut, mHasHdr10,
-                        decodeColorMode(mActiveColorMode).c_str(),
-                        dataspaceDetails(static_cast<android_dataspace>(dataspace)).c_str(), dataspace);
+void DisplayDevice::dump(std::string& result) const {
+    StringAppendF(&result, "+ %s\n", getDebugName().c_str());
 
-    String8 surfaceDump;
-    mDisplaySurface->dumpAsString(surfaceDump);
-    result.append(surfaceDump);
+    result.append("   ");
+    StringAppendF(&result, "powerMode=%d, ", mPowerMode);
+    StringAppendF(&result, "activeConfig=%d, ", mActiveConfig);
+    StringAppendF(&result, "numLayers=%zu\n", mVisibleLayersSortedByZ.size());
+    getCompositionDisplay()->dump(result);
 }
 
-// Map dataspace/intent to the best matched dataspace/colorMode/renderIntent
-// supported by HWC.
-void DisplayDevice::addColorMode(
-        const std::unordered_map<ColorMode, std::vector<RenderIntent>>& hwcColorModes,
-        const ColorMode mode, const RenderIntent intent) {
-    // find the best color mode
-    const ColorMode hwcColorMode = getHwcColorMode(hwcColorModes, mode);
-
-    // find the best render intent
-    auto iter = hwcColorModes.find(hwcColorMode);
-    const auto& hwcIntents =
-            iter != hwcColorModes.end() ? iter->second : std::vector<RenderIntent>();
-    const RenderIntent hwcIntent = getHwcRenderIntent(hwcIntents, intent);
-
-    const Dataspace dataspace = colorModeToDataspace(mode);
-    const Dataspace hwcDataspace = colorModeToDataspace(hwcColorMode);
-
-    ALOGV("%s: map (%s, %s) to (%s, %s, %s)", getDebugName().c_str(),
-          dataspaceDetails(static_cast<android_dataspace_t>(dataspace)).c_str(),
-          decodeRenderIntent(intent).c_str(),
-          dataspaceDetails(static_cast<android_dataspace_t>(hwcDataspace)).c_str(),
-          decodeColorMode(hwcColorMode).c_str(), decodeRenderIntent(hwcIntent).c_str());
-
-    mColorModes[getColorModeKey(dataspace, intent)] = {hwcDataspace, hwcColorMode, hwcIntent};
+bool DisplayDevice::hasRenderIntent(ui::RenderIntent intent) const {
+    return mCompositionDisplay->getDisplayColorProfile()->hasRenderIntent(intent);
 }
 
-void DisplayDevice::populateColorModes(
-        const std::unordered_map<ColorMode, std::vector<RenderIntent>>& hwcColorModes) {
-    if (!hasWideColorGamut()) {
-        return;
-    }
+// ----------------------------------------------------------------------------
 
-    // collect all known SDR render intents
-    std::unordered_set<RenderIntent> sdrRenderIntents(sSdrRenderIntents.begin(),
-                                                      sSdrRenderIntents.end());
-    auto iter = hwcColorModes.find(ColorMode::SRGB);
-    if (iter != hwcColorModes.end()) {
-        for (auto intent : iter->second) {
-            sdrRenderIntents.insert(intent);
-        }
-    }
-
-    // add all known SDR combinations
-    for (auto intent : sdrRenderIntents) {
-        for (auto mode : sSdrColorModes) {
-            addColorMode(hwcColorModes, mode, intent);
-        }
-    }
-
-    // collect all known HDR render intents
-    std::unordered_set<RenderIntent> hdrRenderIntents(sHdrRenderIntents.begin(),
-                                                      sHdrRenderIntents.end());
-    iter = hwcColorModes.find(ColorMode::BT2100_PQ);
-    if (iter != hwcColorModes.end()) {
-        for (auto intent : iter->second) {
-            hdrRenderIntents.insert(intent);
-        }
-    }
-
-    // add all known HDR combinations
-    for (auto intent : sHdrRenderIntents) {
-        for (auto mode : sHdrColorModes) {
-            addColorMode(hwcColorModes, mode, intent);
-        }
-    }
+const std::optional<DisplayId>& DisplayDevice::getId() const {
+    return mCompositionDisplay->getId();
 }
 
-bool DisplayDevice::hasRenderIntent(RenderIntent intent) const {
-    // assume a render intent is supported when SRGB supports it; we should
-    // get rid of that assumption.
-    auto iter = mColorModes.find(getColorModeKey(Dataspace::SRGB, intent));
-    return iter != mColorModes.end() && iter->second.renderIntent == intent;
+bool DisplayDevice::isSecure() const {
+    return mCompositionDisplay->isSecure();
 }
 
-bool DisplayDevice::hasLegacyHdrSupport(Dataspace dataspace) const {
-    if ((dataspace == Dataspace::BT2020_PQ && hasHDR10Support()) ||
-        (dataspace == Dataspace::BT2020_HLG && hasHLGSupport())) {
-        auto iter =
-                mColorModes.find(getColorModeKey(dataspace, RenderIntent::TONE_MAP_COLORIMETRIC));
-        return iter == mColorModes.end() || iter->second.dataspace != dataspace;
-    }
-
-    return false;
+const Rect& DisplayDevice::getBounds() const {
+    return mCompositionDisplay->getState().bounds;
 }
 
-void DisplayDevice::getBestColorMode(Dataspace dataspace, RenderIntent intent,
-                                     Dataspace* outDataspace, ColorMode* outMode,
-                                     RenderIntent* outIntent) const {
-    auto iter = mColorModes.find(getColorModeKey(dataspace, intent));
-    if (iter != mColorModes.end()) {
-        *outDataspace = iter->second.dataspace;
-        *outMode = iter->second.colorMode;
-        *outIntent = iter->second.renderIntent;
-    } else {
-        // this is unexpected on a WCG display
-        if (hasWideColorGamut()) {
-            ALOGE("map unknown (%s)/(%s) to default color mode",
-                  dataspaceDetails(static_cast<android_dataspace_t>(dataspace)).c_str(),
-                  decodeRenderIntent(intent).c_str());
-        }
+const Region& DisplayDevice::getUndefinedRegion() const {
+    return mCompositionDisplay->getState().undefinedRegion;
+}
 
-        *outDataspace = Dataspace::UNKNOWN;
-        *outMode = ColorMode::NATIVE;
-        *outIntent = RenderIntent::COLORIMETRIC;
-    }
+bool DisplayDevice::needsFiltering() const {
+    return mCompositionDisplay->getState().needsFiltering;
+}
+
+uint32_t DisplayDevice::getLayerStack() const {
+    return mCompositionDisplay->getState().layerStackId;
+}
+
+const ui::Transform& DisplayDevice::getTransform() const {
+    return mCompositionDisplay->getState().transform;
+}
+
+const Rect& DisplayDevice::getViewport() const {
+    return mCompositionDisplay->getState().viewport;
+}
+
+const Rect& DisplayDevice::getFrame() const {
+    return mCompositionDisplay->getState().frame;
+}
+
+const Rect& DisplayDevice::getScissor() const {
+    return mCompositionDisplay->getState().scissor;
+}
+
+bool DisplayDevice::hasWideColorGamut() const {
+    return mCompositionDisplay->getDisplayColorProfile()->hasWideColorGamut();
+}
+
+bool DisplayDevice::hasHDR10PlusSupport() const {
+    return mCompositionDisplay->getDisplayColorProfile()->hasHDR10PlusSupport();
+}
+
+bool DisplayDevice::hasHDR10Support() const {
+    return mCompositionDisplay->getDisplayColorProfile()->hasHDR10Support();
+}
+
+bool DisplayDevice::hasHLGSupport() const {
+    return mCompositionDisplay->getDisplayColorProfile()->hasHLGSupport();
+}
+
+bool DisplayDevice::hasDolbyVisionSupport() const {
+    return mCompositionDisplay->getDisplayColorProfile()->hasDolbyVisionSupport();
+}
+
+int DisplayDevice::getSupportedPerFrameMetadata() const {
+    return mCompositionDisplay->getDisplayColorProfile()->getSupportedPerFrameMetadata();
+}
+
+const HdrCapabilities& DisplayDevice::getHdrCapabilities() const {
+    return mCompositionDisplay->getDisplayColorProfile()->getHdrCapabilities();
 }
 
 std::atomic<int32_t> DisplayDeviceState::sNextSequenceId(1);

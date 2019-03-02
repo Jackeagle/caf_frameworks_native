@@ -20,9 +20,14 @@
 #define ATRACE_TAG ATRACE_TAG_GRAPHICS
 
 #include "BufferStateLayer.h"
+#include "ColorLayer.h"
+
+#include "TimeStats/TimeStats.h"
 
 #include <private/gui/SyncFeatures.h>
 #include <renderengine/Image.h>
+
+#include <limits>
 
 namespace android {
 
@@ -44,10 +49,28 @@ BufferStateLayer::~BufferStateLayer() = default;
 // Interface implementation for Layer
 // -----------------------------------------------------------------------
 void BufferStateLayer::onLayerDisplayed(const sp<Fence>& releaseFence) {
-    // The transaction completed callback can only be sent if the release fence from the PREVIOUS
-    // frame has fired. In practice, we should never actually wait on the previous release fence
-    // but we should store it just in case.
-    mPreviousReleaseFence = releaseFence;
+    // The previous release fence notifies the client that SurfaceFlinger is done with the previous
+    // buffer that was presented on this layer. The first transaction that came in this frame that
+    // replaced the previous buffer on this layer needs this release fence, because the fence will
+    // let the client know when that previous buffer is removed from the screen.
+    //
+    // Every other transaction on this layer does not need a release fence because no other
+    // Transactions that were set on this layer this frame are going to have their preceeding buffer
+    // removed from the display this frame.
+    //
+    // For example, if we have 3 transactions this frame. The first transaction doesn't contain a
+    // buffer so it doesn't need a previous release fence because the layer still needs the previous
+    // buffer. The second transaction contains a buffer so it needs a previous release fence because
+    // the previous buffer will be released this frame. The third transaction also contains a
+    // buffer. It replaces the buffer in the second transaction. The buffer in the second
+    // transaction will now no longer be presented so it is released immediately and the third
+    // transaction doesn't need a previous release fence.
+    for (auto& handle : mDrawingState.callbackHandles) {
+        if (handle->releasePreviousBuffer) {
+            handle->previousReleaseFence = releaseFence;
+            break;
+        }
+    }
 }
 
 void BufferStateLayer::setTransformHint(uint32_t /*orientation*/) const {
@@ -56,7 +79,10 @@ void BufferStateLayer::setTransformHint(uint32_t /*orientation*/) const {
 }
 
 void BufferStateLayer::releasePendingBuffer(nsecs_t /*dequeueReadyTime*/) {
-    return;
+    mFlinger->getTransactionCompletedThread().addPresentedCallbackHandles(
+            mDrawingState.callbackHandles);
+
+    mDrawingState.callbackHandles = {};
 }
 
 bool BufferStateLayer::shouldPresentNow(nsecs_t /*expectedPresentTime*/) const {
@@ -95,10 +121,9 @@ bool BufferStateLayer::applyPendingStates(Layer::State* stateToCommit) {
     return stateUpdateAvailable;
 }
 
-Rect BufferStateLayer::getCrop(const Layer::State& s) const {
-    return (getEffectiveScalingMode() == NATIVE_WINDOW_SCALING_MODE_SCALE_CROP)
-            ? GLConsumer::scaleDownCrop(s.crop, s.active.w, s.active.h)
-            : s.crop;
+// Crop that applies to the window
+Rect BufferStateLayer::getCrop(const Layer::State& /*s*/) const {
+    return Rect::INVALID_RECT;
 }
 
 bool BufferStateLayer::setTransform(uint32_t transform) {
@@ -123,6 +148,40 @@ bool BufferStateLayer::setCrop(const Rect& crop) {
     if (mCurrentState.crop == crop) return false;
     mCurrentState.sequence++;
     mCurrentState.crop = crop;
+    mCurrentState.modified = true;
+    setTransactionFlags(eTransactionNeeded);
+    return true;
+}
+
+bool BufferStateLayer::setFrame(const Rect& frame) {
+    int x = frame.left;
+    int y = frame.top;
+    int w = frame.getWidth();
+    int h = frame.getHeight();
+
+    if (x < 0) {
+        x = 0;
+        w = frame.right;
+    }
+
+    if (y < 0) {
+        y = 0;
+        h = frame.bottom;
+    }
+
+    if (mCurrentState.active.transform.tx() == x && mCurrentState.active.transform.ty() == y &&
+        mCurrentState.active.w == w && mCurrentState.active.h == h) {
+        return false;
+    }
+
+    if (!frame.isValid()) {
+        x = y = w = h = 0;
+    }
+    mCurrentState.active.transform.set(x, y);
+    mCurrentState.active.w = w;
+    mCurrentState.active.h = h;
+
+    mCurrentState.sequence++;
     mCurrentState.modified = true;
     setTransactionFlags(eTransactionNeeded);
     return true;
@@ -220,14 +279,14 @@ bool BufferStateLayer::setTransactionCompletedListeners(
 
             // Notify the transaction completed thread that there is a pending latched callback
             // handle
-            mFlinger->getTransactionCompletedThread().registerPendingLatchedCallbackHandle(handle);
+            mFlinger->getTransactionCompletedThread().registerPendingCallbackHandle(handle);
 
             // Store so latched time and release fence can be set
             mCurrentState.callbackHandles.push_back(handle);
 
         } else { // If this layer will NOT need to be relatched and presented this frame
             // Notify the transaction completed thread this handle is done
-            mFlinger->getTransactionCompletedThread().addUnlatchedCallbackHandle(handle);
+            mFlinger->getTransactionCompletedThread().addUnpresentedCallbackHandle(handle);
         }
     }
 
@@ -237,27 +296,6 @@ bool BufferStateLayer::setTransactionCompletedListeners(
     return willPresent;
 }
 
-bool BufferStateLayer::setSize(uint32_t w, uint32_t h) {
-    if (mCurrentState.active.w == w && mCurrentState.active.h == h) return false;
-    mCurrentState.active.w = w;
-    mCurrentState.active.h = h;
-    mCurrentState.modified = true;
-    setTransactionFlags(eTransactionNeeded);
-    return true;
-}
-
-bool BufferStateLayer::setPosition(float x, float y, bool /*immediate*/) {
-    if (mCurrentState.active.transform.tx() == x && mCurrentState.active.transform.ty() == y)
-        return false;
-
-    mCurrentState.active.transform.set(x, y);
-
-    mCurrentState.sequence++;
-    mCurrentState.modified = true;
-    setTransactionFlags(eTransactionNeeded);
-    return true;
-}
-
 bool BufferStateLayer::setTransparentRegionHint(const Region& transparent) {
     mCurrentState.transparentRegionHint = transparent;
     mCurrentState.modified = true;
@@ -265,21 +303,26 @@ bool BufferStateLayer::setTransparentRegionHint(const Region& transparent) {
     return true;
 }
 
-bool BufferStateLayer::setMatrix(const layer_state_t::matrix22_t& matrix,
-                                 bool allowNonRectPreservingTransforms) {
-    ui::Transform t;
-    t.set(matrix.dsdx, matrix.dtdy, matrix.dtdx, matrix.dsdy);
-
-    if (!allowNonRectPreservingTransforms && !t.preserveRects()) {
-        ALOGW("Attempt to set rotation matrix without permission ACCESS_SURFACE_FLINGER ignored");
-        return false;
+Rect BufferStateLayer::getBufferSize(const State& s) const {
+    // for buffer state layers we use the display frame size as the buffer size.
+    if (getActiveWidth(s) < UINT32_MAX && getActiveHeight(s) < UINT32_MAX) {
+        return Rect(getActiveWidth(s), getActiveHeight(s));
     }
 
-    mCurrentState.sequence++;
-    mCurrentState.active.transform.set(matrix.dsdx, matrix.dtdy, matrix.dtdx, matrix.dsdy);
-    mCurrentState.modified = true;
-    setTransactionFlags(eTransactionNeeded);
-    return true;
+    // if the display frame is not defined, use the parent bounds as the buffer size.
+    const auto& p = mDrawingParent.promote();
+    if (p != nullptr) {
+        Rect parentBounds = Rect(p->computeBounds(Region()));
+        if (!parentBounds.isEmpty()) {
+            return parentBounds;
+        }
+    }
+
+    // if there is no parent layer, use the buffer's bounds as the buffer size
+    if (s.buffer) {
+        return s.buffer->getBounds();
+    }
+    return Rect::INVALID_RECT;
 }
 // -----------------------------------------------------------------------
 
@@ -315,8 +358,30 @@ ui::Dataspace BufferStateLayer::getDrawingDataSpace() const {
     return getDrawingState().dataspace;
 }
 
+// Crop that applies to the buffer
 Rect BufferStateLayer::getDrawingCrop() const {
-    return Rect::INVALID_RECT;
+    const State& s(getDrawingState());
+
+    if (s.crop.isEmpty() && s.buffer) {
+        return s.buffer->getBounds();
+    } else if (s.buffer) {
+        Rect crop = s.crop;
+        crop.left = std::max(crop.left, 0);
+        crop.top = std::max(crop.top, 0);
+        uint32_t bufferWidth = s.buffer->getWidth();
+        uint32_t bufferHeight = s.buffer->getHeight();
+        if (bufferHeight <= std::numeric_limits<int32_t>::max() &&
+            bufferWidth <= std::numeric_limits<int32_t>::max()) {
+            crop.right = std::min(crop.right, static_cast<int32_t>(bufferWidth));
+            crop.bottom = std::min(crop.bottom, static_cast<int32_t>(bufferHeight));
+        }
+        if (!crop.isValid()) {
+            // Crop rect is out of bounds, return whole buffer
+            return s.buffer->getBounds();
+        }
+        return crop;
+    }
+    return s.crop;
 }
 
 uint32_t BufferStateLayer::getDrawingScalingMode() const {
@@ -336,6 +401,9 @@ int BufferStateLayer::getDrawingApi() const {
 }
 
 PixelFormat BufferStateLayer::getPixelFormat() const {
+    if (!mActiveBuffer) {
+        return PIXEL_FORMAT_NONE;
+    }
     return mActiveBuffer->format;
 }
 
@@ -454,19 +522,19 @@ status_t BufferStateLayer::updateTexImage(bool& /*recomputeVisibleRegions*/, nse
         ALOGE("[%s] rejecting buffer: "
               "bufferWidth=%d, bufferHeight=%d, front.active.{w=%d, h=%d}",
               mName.string(), bufferWidth, bufferHeight, s.active.w, s.active.h);
-        mTimeStats.removeTimeRecord(layerID, getFrameNumber());
+        mFlinger->mTimeStats->removeTimeRecord(layerID, getFrameNumber());
         return BAD_VALUE;
     }
 
-    mFlinger->getTransactionCompletedThread()
-            .addLatchedCallbackHandles(getDrawingState().callbackHandles, latchTime,
-                                       mPreviousReleaseFence);
+    for (auto& handle : mDrawingState.callbackHandles) {
+        handle->latchTime = latchTime;
+    }
 
     // Handle sync fences
     if (SyncFeatures::getInstance().useNativeFenceSync() && releaseFence != Fence::NO_FENCE) {
         // TODO(alecmouri): Fail somewhere upstream if the fence is invalid.
         if (!releaseFence->isValid()) {
-            mTimeStats.clearLayerRecord(layerID);
+            mFlinger->mTimeStats->onDestroy(layerID);
             return UNKNOWN_ERROR;
         }
 
@@ -476,7 +544,7 @@ status_t BufferStateLayer::updateTexImage(bool& /*recomputeVisibleRegions*/, nse
         auto currentStatus = s.acquireFence->getStatus();
         if (currentStatus == Fence::Status::Invalid) {
             ALOGE("Existing fence has invalid state");
-            mTimeStats.clearLayerRecord(layerID);
+            mFlinger->mTimeStats->onDestroy(layerID);
             return BAD_VALUE;
         }
 
@@ -484,7 +552,7 @@ status_t BufferStateLayer::updateTexImage(bool& /*recomputeVisibleRegions*/, nse
         if (incomingStatus == Fence::Status::Invalid) {
             ALOGE("New fence has invalid state");
             mDrawingState.acquireFence = releaseFence;
-            mTimeStats.clearLayerRecord(layerID);
+            mFlinger->mTimeStats->onDestroy(layerID);
             return BAD_VALUE;
         }
 
@@ -500,7 +568,7 @@ status_t BufferStateLayer::updateTexImage(bool& /*recomputeVisibleRegions*/, nse
                 // synchronization is broken, the best we can do is hope fences
                 // signal in order so the new fence will act like a union
                 mDrawingState.acquireFence = releaseFence;
-                mTimeStats.clearLayerRecord(layerID);
+                mFlinger->mTimeStats->onDestroy(layerID);
                 return BAD_VALUE;
             }
             mDrawingState.acquireFence = mergedFence;
@@ -523,15 +591,15 @@ status_t BufferStateLayer::updateTexImage(bool& /*recomputeVisibleRegions*/, nse
         // a GL-composited layer) not at all.
         status_t err = bindTextureImage();
         if (err != NO_ERROR) {
-            mTimeStats.clearLayerRecord(layerID);
+            mFlinger->mTimeStats->onDestroy(layerID);
             return BAD_VALUE;
         }
     }
 
     // TODO(marissaw): properly support mTimeStats
-    mTimeStats.setPostTime(layerID, getFrameNumber(), getName().c_str(), latchTime);
-    mTimeStats.setAcquireFence(layerID, getFrameNumber(), getCurrentFenceTime());
-    mTimeStats.setLatchTime(layerID, getFrameNumber(), latchTime);
+    mFlinger->mTimeStats->setPostTime(layerID, getFrameNumber(), getName().c_str(), latchTime);
+    mFlinger->mTimeStats->setAcquireFence(layerID, getFrameNumber(), getCurrentFenceTime());
+    mFlinger->mTimeStats->setLatchTime(layerID, getFrameNumber(), latchTime);
 
     return NO_ERROR;
 }

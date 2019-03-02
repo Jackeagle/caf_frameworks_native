@@ -29,6 +29,17 @@
 
 namespace android {
 
+const char* motionClassificationToString(MotionClassification classification) {
+    switch (classification) {
+        case MotionClassification::NONE:
+            return "NONE";
+        case MotionClassification::AMBIGUOUS_GESTURE:
+            return "AMBIGUOUS_GESTURE";
+        case MotionClassification::DEEP_PRESS:
+            return "DEEP_PRESS";
+    }
+}
+
 // --- InputEvent ---
 
 void InputEvent::initialize(int32_t deviceId, int32_t source, int32_t displayId) {
@@ -131,15 +142,24 @@ static inline void scaleAxisValue(PointerCoords& c, int axis, float scaleFactor)
     }
 }
 
-void PointerCoords::scale(float scaleFactor) {
+void PointerCoords::scale(float globalScaleFactor, float windowXScale, float windowYScale) {
     // No need to scale pressure or size since they are normalized.
     // No need to scale orientation since it is meaningless to do so.
-    scaleAxisValue(*this, AMOTION_EVENT_AXIS_X, scaleFactor);
-    scaleAxisValue(*this, AMOTION_EVENT_AXIS_Y, scaleFactor);
-    scaleAxisValue(*this, AMOTION_EVENT_AXIS_TOUCH_MAJOR, scaleFactor);
-    scaleAxisValue(*this, AMOTION_EVENT_AXIS_TOUCH_MINOR, scaleFactor);
-    scaleAxisValue(*this, AMOTION_EVENT_AXIS_TOOL_MAJOR, scaleFactor);
-    scaleAxisValue(*this, AMOTION_EVENT_AXIS_TOOL_MINOR, scaleFactor);
+
+    // If there is a global scale factor, it is included in the windowX/YScale
+    // so we don't need to apply it twice to the X/Y axes.
+    // However we don't want to apply any windowXYScale not included in the global scale
+    // to the TOUCH_MAJOR/MINOR coordinates.
+    scaleAxisValue(*this, AMOTION_EVENT_AXIS_X, windowXScale);
+    scaleAxisValue(*this, AMOTION_EVENT_AXIS_Y, windowYScale);
+    scaleAxisValue(*this, AMOTION_EVENT_AXIS_TOUCH_MAJOR, globalScaleFactor);
+    scaleAxisValue(*this, AMOTION_EVENT_AXIS_TOUCH_MINOR, globalScaleFactor);
+    scaleAxisValue(*this, AMOTION_EVENT_AXIS_TOOL_MAJOR, globalScaleFactor);
+    scaleAxisValue(*this, AMOTION_EVENT_AXIS_TOOL_MINOR, globalScaleFactor);
+}
+
+void PointerCoords::scale(float globalScaleFactor) {
+    scale(globalScaleFactor, globalScaleFactor, globalScaleFactor);
 }
 
 void PointerCoords::applyOffset(float xOffset, float yOffset) {
@@ -225,6 +245,7 @@ void MotionEvent::initialize(
         int32_t edgeFlags,
         int32_t metaState,
         int32_t buttonState,
+        MotionClassification classification,
         float xOffset,
         float yOffset,
         float xPrecision,
@@ -241,6 +262,7 @@ void MotionEvent::initialize(
     mEdgeFlags = edgeFlags;
     mMetaState = metaState;
     mButtonState = buttonState;
+    mClassification = classification;
     mXOffset = xOffset;
     mYOffset = yOffset;
     mXPrecision = xPrecision;
@@ -261,6 +283,7 @@ void MotionEvent::copyFrom(const MotionEvent* other, bool keepHistory) {
     mEdgeFlags = other->mEdgeFlags;
     mMetaState = other->mMetaState;
     mButtonState = other->mButtonState;
+    mClassification = other->mClassification;
     mXOffset = other->mXOffset;
     mYOffset = other->mYOffset;
     mXPrecision = other->mXPrecision;
@@ -345,15 +368,15 @@ void MotionEvent::offsetLocation(float xOffset, float yOffset) {
     mYOffset += yOffset;
 }
 
-void MotionEvent::scale(float scaleFactor) {
-    mXOffset *= scaleFactor;
-    mYOffset *= scaleFactor;
-    mXPrecision *= scaleFactor;
-    mYPrecision *= scaleFactor;
+void MotionEvent::scale(float globalScaleFactor) {
+    mXOffset *= globalScaleFactor;
+    mYOffset *= globalScaleFactor;
+    mXPrecision *= globalScaleFactor;
+    mYPrecision *= globalScaleFactor;
 
     size_t numSamples = mSamplePointerCoords.size();
     for (size_t i = 0; i < numSamples; i++) {
-        mSamplePointerCoords.editItemAt(i).scale(scaleFactor);
+        mSamplePointerCoords.editItemAt(i).scale(globalScaleFactor);
     }
 }
 
@@ -442,6 +465,7 @@ status_t MotionEvent::readFromParcel(Parcel* parcel) {
     mEdgeFlags = parcel->readInt32();
     mMetaState = parcel->readInt32();
     mButtonState = parcel->readInt32();
+    mClassification = static_cast<MotionClassification>(parcel->readByte());
     mXOffset = parcel->readFloat();
     mYOffset = parcel->readFloat();
     mXPrecision = parcel->readFloat();
@@ -492,6 +516,7 @@ status_t MotionEvent::writeToParcel(Parcel* parcel) const {
     parcel->writeInt32(mEdgeFlags);
     parcel->writeInt32(mMetaState);
     parcel->writeInt32(mButtonState);
+    parcel->writeByte(static_cast<int8_t>(mClassification));
     parcel->writeFloat(mXOffset);
     parcel->writeFloat(mYOffset);
     parcel->writeFloat(mXPrecision);

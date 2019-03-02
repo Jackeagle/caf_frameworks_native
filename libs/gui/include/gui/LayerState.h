@@ -30,6 +30,7 @@
 #include <input/InputWindow.h>
 #endif
 
+#include <gui/LayerMetadata.h>
 #include <math/vec3.h>
 #include <ui/GraphicTypes.h>
 #include <ui/Rect.h>
@@ -82,6 +83,11 @@ struct layer_state_t {
         eColorTransformChanged = 0x10000000,
         eListenerCallbacksChanged = 0x20000000,
         eInputInfoChanged = 0x40000000,
+        eCornerRadiusChanged = 0x80000000,
+        eFrameChanged = 0x1'00000000,
+        eCachedBufferChanged = 0x2'00000000,
+        eBackgroundColorChanged = 0x4'00000000,
+        eMetadataChanged = 0x8'00000000,
     };
 
     layer_state_t()
@@ -97,15 +103,19 @@ struct layer_state_t {
             mask(0),
             reserved(0),
             crop_legacy(Rect::INVALID_RECT),
+            cornerRadius(0.0f),
             frameNumber_legacy(0),
             overrideScalingMode(-1),
             transform(0),
             transformToDisplayInverse(false),
             crop(Rect::INVALID_RECT),
+            frame(Rect::INVALID_RECT),
             dataspace(ui::Dataspace::UNKNOWN),
             surfaceDamageRegion(),
             api(-1),
-            colorTransform(mat4()) {
+            colorTransform(mat4()),
+            bgColorAlpha(0),
+            bgColorDataspace(ui::Dataspace::UNKNOWN) {
         matrix.dsdx = matrix.dtdy = 1.0f;
         matrix.dsdy = matrix.dtdx = 0.0f;
         hdrMetadata.validTypes = 0;
@@ -121,8 +131,12 @@ struct layer_state_t {
         float dtdy{0};
         float dsdy{0};
     };
+    struct cached_buffer_t {
+        sp<IBinder> token = nullptr;
+        int32_t bufferId = -1;
+    };
     sp<IBinder> surface;
-    uint32_t what;
+    uint64_t what;
     float x;
     float y;
     int32_t z;
@@ -135,6 +149,7 @@ struct layer_state_t {
     uint8_t reserved;
     matrix22_t matrix;
     Rect crop_legacy;
+    float cornerRadius;
     sp<IBinder> barrierHandle_legacy;
     sp<IBinder> reparentHandle;
     uint64_t frameNumber_legacy;
@@ -154,6 +169,7 @@ struct layer_state_t {
     uint32_t transform;
     bool transformToDisplayInverse;
     Rect crop;
+    Rect frame;
     sp<GraphicBuffer> buffer;
     sp<Fence> acquireFence;
     ui::Dataspace dataspace;
@@ -167,6 +183,15 @@ struct layer_state_t {
 #ifndef NO_INPUT
     InputWindowInfo inputInfo;
 #endif
+
+    cached_buffer_t cachedBuffer;
+
+    LayerMetadata metadata;
+
+    // The following refer to the alpha, and dataspace, respectively of
+    // the background color layer
+    float bgColorAlpha;
+    ui::Dataspace bgColorDataspace;
 };
 
 struct ComposerState {
@@ -220,6 +245,20 @@ struct DisplayState {
 
     status_t write(Parcel& output) const;
     status_t read(const Parcel& input);
+};
+
+struct InputWindowCommands {
+    struct TransferTouchFocusCommand {
+        sp<IBinder> fromToken;
+        sp<IBinder> toToken;
+    };
+
+    std::vector<TransferTouchFocusCommand> transferTouchFocusCommands;
+
+    void merge(const InputWindowCommands& other);
+    void clear();
+    void write(Parcel& output) const;
+    void read(const Parcel& input);
 };
 
 static inline int compare_type(const ComposerState& lhs, const ComposerState& rhs) {

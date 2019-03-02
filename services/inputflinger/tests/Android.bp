@@ -2,10 +2,12 @@
 
 cc_test {
     name: "inputflinger_tests",
-    cpp_std: "c++17",
     srcs: [
-        "InputReader_test.cpp",
+        "BlockingQueue_test.cpp",
+        "TestInputListener.cpp",
+        "InputClassifier_test.cpp",
         "InputDispatcher_test.cpp",
+        "InputReader_test.cpp",
     ],
     cflags: [
         "-Wall",
@@ -14,6 +16,7 @@ cc_test {
         "-Wno-unused-parameter",
     ],
     shared_libs: [
+        "android.hardware.input.classifier@1.0",
         "libbase",
         "libbinder",
         "libcutils",
@@ -24,6 +27,8 @@ cc_test {
         "libui",
         "libinput",
         "libinputflinger",
+        "libinputreader",
+        "libinputflinger_base",
         "libinputservice",
     ],
 }

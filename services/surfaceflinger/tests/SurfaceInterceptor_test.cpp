@@ -44,6 +44,7 @@ constexpr uint32_t SIZE_UPDATE = 134;
 constexpr uint32_t STACK_UPDATE = 1;
 constexpr uint64_t DEFERRED_UPDATE = 0;
 constexpr float ALPHA_UPDATE = 0.29f;
+constexpr float CORNER_RADIUS_UPDATE = 0.2f;
 constexpr float POSITION_UPDATE = 121;
 const Rect CROP_UPDATE(16, 16, 32, 32);
 
@@ -167,6 +168,7 @@ public:
     bool alphaUpdateFound(const SurfaceChange& change, bool foundAlpha);
     bool layerUpdateFound(const SurfaceChange& change, bool foundLayer);
     bool cropUpdateFound(const SurfaceChange& change, bool foundCrop);
+    bool cornerRadiusUpdateFound(const SurfaceChange& change, bool foundCornerRadius);
     bool matrixUpdateFound(const SurfaceChange& change, bool foundMatrix);
     bool scalingModeUpdateFound(const SurfaceChange& change, bool foundScalingMode);
     bool transparentRegionHintUpdateFound(const SurfaceChange& change, bool foundTransparentRegion);
@@ -198,6 +200,7 @@ public:
     void alphaUpdate(Transaction&);
     void layerUpdate(Transaction&);
     void cropUpdate(Transaction&);
+    void cornerRadiusUpdate(Transaction&);
     void matrixUpdate(Transaction&);
     void overrideScalingModeUpdate(Transaction&);
     void transparentRegionHintUpdate(Transaction&);
@@ -313,6 +316,10 @@ void SurfaceInterceptorTest::alphaUpdate(Transaction& t) {
     t.setAlpha(mBGSurfaceControl, ALPHA_UPDATE);
 }
 
+void SurfaceInterceptorTest::cornerRadiusUpdate(Transaction& t) {
+    t.setCornerRadius(mBGSurfaceControl, CORNER_RADIUS_UPDATE);
+}
+
 void SurfaceInterceptorTest::layerUpdate(Transaction& t) {
     t.setLayer(mBGSurfaceControl, LAYER_UPDATE);
 }
@@ -369,6 +376,7 @@ void SurfaceInterceptorTest::runAllUpdates() {
     runInTransaction(&SurfaceInterceptorTest::positionUpdate);
     runInTransaction(&SurfaceInterceptorTest::sizeUpdate);
     runInTransaction(&SurfaceInterceptorTest::alphaUpdate);
+    runInTransaction(&SurfaceInterceptorTest::cornerRadiusUpdate);
     runInTransaction(&SurfaceInterceptorTest::layerUpdate);
     runInTransaction(&SurfaceInterceptorTest::cropUpdate);
     runInTransaction(&SurfaceInterceptorTest::matrixUpdate);
@@ -428,6 +436,17 @@ bool SurfaceInterceptorTest::alphaUpdateFound(const SurfaceChange& change, bool 
         [] () { FAIL(); }();
     }
     return foundAlpha;
+}
+
+bool SurfaceInterceptorTest::cornerRadiusUpdateFound(const SurfaceChange &change,
+                                                     bool foundCornerRadius) {
+    bool hasCornerRadius(change.corner_radius().corner_radius() == CORNER_RADIUS_UPDATE);
+    if (hasCornerRadius && !foundCornerRadius) {
+        foundCornerRadius = true;
+    } else if (hasCornerRadius && foundCornerRadius) {
+        [] () { FAIL(); }();
+    }
+    return foundCornerRadius;
 }
 
 bool SurfaceInterceptorTest::layerUpdateFound(const SurfaceChange& change, bool foundLayer) {
@@ -571,6 +590,9 @@ bool SurfaceInterceptorTest::surfaceUpdateFound(const Trace& trace,
                             break;
                         case SurfaceChange::SurfaceChangeCase::kCrop:
                             foundUpdate = cropUpdateFound(change, foundUpdate);
+                            break;
+                        case SurfaceChange::SurfaceChangeCase::kCornerRadius:
+                            foundUpdate = cornerRadiusUpdateFound(change, foundUpdate);
                             break;
                         case SurfaceChange::SurfaceChangeCase::kMatrix:
                             foundUpdate = matrixUpdateFound(change, foundUpdate);
@@ -730,6 +752,11 @@ TEST_F(SurfaceInterceptorTest, InterceptCropUpdateWorks) {
     captureTest(&SurfaceInterceptorTest::cropUpdate, SurfaceChange::SurfaceChangeCase::kCrop);
 }
 
+TEST_F(SurfaceInterceptorTest, InterceptCornerRadiusUpdateWorks) {
+    captureTest(&SurfaceInterceptorTest::cornerRadiusUpdate,
+            SurfaceChange::SurfaceChangeCase::kCornerRadius);
+}
+
 TEST_F(SurfaceInterceptorTest, InterceptMatrixUpdateWorks) {
     captureTest(&SurfaceInterceptorTest::matrixUpdate, SurfaceChange::SurfaceChangeCase::kMatrix);
 }
@@ -777,18 +804,6 @@ TEST_F(SurfaceInterceptorTest, InterceptAllUpdatesWorks) {
 TEST_F(SurfaceInterceptorTest, InterceptSurfaceCreationWorks) {
     captureTest(&SurfaceInterceptorTest::surfaceCreation,
             Increment::IncrementCase::kSurfaceCreation);
-}
-
-TEST_F(SurfaceInterceptorTest, InterceptSurfaceDeletionWorks) {
-    enableInterceptor();
-    sp<SurfaceControl> layerToDelete = mComposerClient->createSurface(String8(LAYER_NAME),
-            SIZE_UPDATE, SIZE_UPDATE, PIXEL_FORMAT_RGBA_8888, 0);
-    mComposerClient->destroySurface(layerToDelete->getHandle());
-    disableInterceptor();
-
-    Trace capturedTrace;
-    ASSERT_EQ(NO_ERROR, readProtoFile(&capturedTrace));
-    ASSERT_TRUE(singleIncrementFound(capturedTrace, Increment::IncrementCase::kSurfaceDeletion));
 }
 
 TEST_F(SurfaceInterceptorTest, InterceptDisplayCreationWorks) {

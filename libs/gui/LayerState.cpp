@@ -16,6 +16,8 @@
 
 #define LOG_TAG "LayerState"
 
+#include <inttypes.h>
+
 #include <utils/Errors.h>
 #include <binder/Parcel.h>
 #include <gui/ISurfaceComposerClient.h>
@@ -27,7 +29,7 @@ namespace android {
 status_t layer_state_t::write(Parcel& output) const
 {
     output.writeStrongBinder(surface);
-    output.writeUint32(what);
+    output.writeUint64(what);
     output.writeFloat(x);
     output.writeFloat(y);
     output.writeInt32(z);
@@ -57,6 +59,7 @@ status_t layer_state_t::write(Parcel& output) const
     output.writeUint32(transform);
     output.writeBool(transformToDisplayInverse);
     output.write(crop);
+    output.write(frame);
     if (buffer) {
         output.writeBool(true);
         output.write(*buffer);
@@ -82,6 +85,7 @@ status_t layer_state_t::write(Parcel& output) const
 
     memcpy(output.writeInplace(16 * sizeof(float)),
            colorTransform.asArray(), 16 * sizeof(float));
+    output.writeFloat(cornerRadius);
 
     if (output.writeVectorSize(listenerCallbacks) == NO_ERROR) {
         for (const auto& [listener, callbackIds] : listenerCallbacks) {
@@ -90,13 +94,20 @@ status_t layer_state_t::write(Parcel& output) const
         }
     }
 
+    output.writeStrongBinder(cachedBuffer.token);
+    output.writeInt32(cachedBuffer.bufferId);
+    output.writeParcelable(metadata);
+
+    output.writeFloat(bgColorAlpha);
+    output.writeUint32(static_cast<uint32_t>(bgColorDataspace));
+
     return NO_ERROR;
 }
 
 status_t layer_state_t::read(const Parcel& input)
 {
     surface = input.readStrongBinder();
-    what = input.readUint32();
+    what = input.readUint64();
     x = input.readFloat();
     y = input.readFloat();
     z = input.readInt32();
@@ -132,6 +143,7 @@ status_t layer_state_t::read(const Parcel& input)
     transform = input.readUint32();
     transformToDisplayInverse = input.readBool();
     input.read(crop);
+    input.read(frame);
     buffer = new GraphicBuffer();
     if (input.readBool()) {
         input.read(*buffer);
@@ -149,6 +161,7 @@ status_t layer_state_t::read(const Parcel& input)
     }
 
     colorTransform = mat4(static_cast<const float*>(input.readInplace(16 * sizeof(float))));
+    cornerRadius = input.readFloat();
 
     int32_t listenersSize = input.readInt32();
     for (int32_t i = 0; i < listenersSize; i++) {
@@ -157,6 +170,13 @@ status_t layer_state_t::read(const Parcel& input)
         input.readInt64Vector(&callbackIds);
         listenerCallbacks.emplace_back(listener, callbackIds);
     }
+
+    cachedBuffer.token = input.readStrongBinder();
+    cachedBuffer.bufferId = input.readInt32();
+    input.readParcelable(&metadata);
+
+    bgColorAlpha = input.readFloat();
+    bgColorDataspace = static_cast<ui::Dataspace>(input.readUint32());
 
     return NO_ERROR;
 }
@@ -270,6 +290,10 @@ void layer_state_t::merge(const layer_state_t& other) {
         what |= eCropChanged_legacy;
         crop_legacy = other.crop_legacy;
     }
+    if (other.what & eCornerRadiusChanged) {
+        what |= eCornerRadiusChanged;
+        cornerRadius = other.cornerRadius;
+    }
     if (other.what & eDeferTransaction_legacy) {
         what |= eDeferTransaction_legacy;
         barrierHandle_legacy = other.barrierHandle_legacy;
@@ -313,6 +337,10 @@ void layer_state_t::merge(const layer_state_t& other) {
     if (other.what & eCropChanged) {
         what |= eCropChanged;
         crop = other.crop;
+    }
+    if (other.what & eFrameChanged) {
+        what |= eFrameChanged;
+        frame = other.frame;
     }
     if (other.what & eBufferChanged) {
         what |= eBufferChanged;
@@ -358,10 +386,56 @@ void layer_state_t::merge(const layer_state_t& other) {
     }
 #endif
 
+    if (other.what & eCachedBufferChanged) {
+        what |= eCachedBufferChanged;
+        cachedBuffer = other.cachedBuffer;
+    }
+    if (other.what & eBackgroundColorChanged) {
+        what |= eBackgroundColorChanged;
+        color = other.color;
+        bgColorAlpha = other.bgColorAlpha;
+        bgColorDataspace = other.bgColorDataspace;
+    }
+    if (other.what & eMetadataChanged) {
+        what |= eMetadataChanged;
+        metadata.merge(other.metadata);
+    }
     if ((other.what & what) != other.what) {
         ALOGE("Unmerged SurfaceComposer Transaction properties. LayerState::merge needs updating? "
-              "other.what=0x%X what=0x%X",
+              "other.what=0x%" PRIu64 " what=0x%" PRIu64,
               other.what, what);
+    }
+}
+
+// ------------------------------- InputWindowCommands ----------------------------------------
+
+void InputWindowCommands::merge(const InputWindowCommands& other) {
+    transferTouchFocusCommands
+            .insert(transferTouchFocusCommands.end(),
+                    std::make_move_iterator(other.transferTouchFocusCommands.begin()),
+                    std::make_move_iterator(other.transferTouchFocusCommands.end()));
+}
+
+void InputWindowCommands::clear() {
+    transferTouchFocusCommands.clear();
+}
+
+void InputWindowCommands::write(Parcel& output) const {
+    output.writeUint32(static_cast<uint32_t>(transferTouchFocusCommands.size()));
+    for (const auto& transferTouchFocusCommand : transferTouchFocusCommands) {
+        output.writeStrongBinder(transferTouchFocusCommand.fromToken);
+        output.writeStrongBinder(transferTouchFocusCommand.toToken);
+    }
+}
+
+void InputWindowCommands::read(const Parcel& input) {
+    size_t count = input.readUint32();
+    transferTouchFocusCommands.clear();
+    for (size_t i = 0; i < count; i++) {
+        TransferTouchFocusCommand transferTouchFocusCommand;
+        transferTouchFocusCommand.fromToken = input.readStrongBinder();
+        transferTouchFocusCommand.toToken = input.readStrongBinder();
+        transferTouchFocusCommands.emplace_back(transferTouchFocusCommand);
     }
 }
 

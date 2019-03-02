@@ -8,12 +8,9 @@
 
 #include <mutex>
 
-#include "AsyncCallRecorder.h"
-#include "Scheduler/DispSync.h"
 #include "Scheduler/EventControlThread.h"
 #include "Scheduler/EventThread.h"
 #include "Scheduler/Scheduler.h"
-#include "mock/MockDispSync.h"
 #include "mock/MockEventThread.h"
 
 using testing::_;
@@ -23,9 +20,10 @@ namespace android {
 
 class SchedulerTest : public testing::Test {
 protected:
-    class MockEventThreadConnection : public BnDisplayEventConnection {
+    class MockEventThreadConnection : public android::EventThreadConnection {
     public:
-        MockEventThreadConnection() = default;
+        explicit MockEventThreadConnection(EventThread* eventThread)
+              : EventThreadConnection(eventThread, ResyncCallback()) {}
         ~MockEventThreadConnection() = default;
 
         MOCK_METHOD1(stealReceiveChannel, status_t(gui::BitTube* outChannel));
@@ -43,9 +41,8 @@ protected:
               : Scheduler([](bool) {}), mEventThread(std::move(eventThread)) {}
 
         std::unique_ptr<EventThread> makeEventThread(
-                const std::string& /* connectionName */, DispSync* /* dispSync */,
+                const char* /* connectionName */, DispSync* /* dispSync */,
                 nsecs_t /* phaseOffsetNs */,
-                impl::EventThread::ResyncWithRateLimitCallback /* resyncCallback */,
                 impl::EventThread::InterceptVSyncsCallback /* interceptCallback */) override {
             return std::move(mEventThread);
         }
@@ -60,13 +57,9 @@ protected:
     ~SchedulerTest() override;
 
     sp<Scheduler::ConnectionHandle> mConnectionHandle;
-    mock::DispSync* mPrimaryDispSync = new mock::DispSync();
     mock::EventThread* mEventThread;
     std::unique_ptr<MockScheduler> mScheduler;
     sp<MockEventThreadConnection> mEventThreadConnection;
-
-    AsyncCallRecorder<void (*)()> mResyncCallRecorder;
-    AsyncCallRecorder<void (*)(nsecs_t)> mInterceptVSyncCallRecorder;
 };
 
 SchedulerTest::SchedulerTest() {
@@ -77,16 +70,18 @@ SchedulerTest::SchedulerTest() {
     std::unique_ptr<mock::EventThread> eventThread = std::make_unique<mock::EventThread>();
     mEventThread = eventThread.get();
     mScheduler = std::make_unique<MockScheduler>(std::move(eventThread));
-    mEventThreadConnection = new MockEventThreadConnection();
+    EXPECT_CALL(*mEventThread, registerDisplayEventConnection(_)).WillOnce(Return(0));
+
+    mEventThreadConnection = new MockEventThreadConnection(mEventThread);
 
     // createConnection call to scheduler makes a createEventConnection call to EventThread. Make
     // sure that call gets executed and returns an EventThread::Connection object.
-    EXPECT_CALL(*mEventThread, createEventConnection())
+    EXPECT_CALL(*mEventThread, createEventConnection(_))
             .WillRepeatedly(Return(mEventThreadConnection));
 
-    mConnectionHandle =
-            mScheduler->createConnection("appConnection", 16, mResyncCallRecorder.getInvocable(),
-                                         mInterceptVSyncCallRecorder.getInvocable());
+    mConnectionHandle = mScheduler->createConnection("appConnection", 16, ResyncCallback(),
+                                                     impl::EventThread::InterceptVSyncsCallback());
+    EXPECT_TRUE(mConnectionHandle != nullptr);
 }
 
 SchedulerTest::~SchedulerTest() {
@@ -99,17 +94,13 @@ namespace {
 /* ------------------------------------------------------------------------
  * Test cases
  */
-TEST_F(SchedulerTest, canCreateAndDestroyTest) {
-    EXPECT_FALSE(mResyncCallRecorder.waitForCall().has_value());
-    EXPECT_FALSE(mInterceptVSyncCallRecorder.waitForCall().has_value());
-    EXPECT_EQ(0, mConnectionHandle->id);
-}
 
 TEST_F(SchedulerTest, testNullPtr) {
     // Passing a null pointer for ConnectionHandle is a valid argument. The code doesn't throw any
     // exceptions, just gracefully continues.
     sp<IDisplayEventConnection> returnedValue;
-    ASSERT_NO_FATAL_FAILURE(returnedValue = mScheduler->createDisplayEventConnection(nullptr));
+    ASSERT_NO_FATAL_FAILURE(
+            returnedValue = mScheduler->createDisplayEventConnection(nullptr, ResyncCallback()));
     EXPECT_TRUE(returnedValue == nullptr);
     EXPECT_TRUE(mScheduler->getEventThread(nullptr) == nullptr);
     EXPECT_TRUE(mScheduler->getEventConnection(nullptr) == nullptr);
@@ -117,7 +108,7 @@ TEST_F(SchedulerTest, testNullPtr) {
             mScheduler->hotplugReceived(nullptr, EventThread::DisplayType::Primary, false));
     ASSERT_NO_FATAL_FAILURE(mScheduler->onScreenAcquired(nullptr));
     ASSERT_NO_FATAL_FAILURE(mScheduler->onScreenReleased(nullptr));
-    String8 testString;
+    std::string testString;
     ASSERT_NO_FATAL_FAILURE(mScheduler->dump(nullptr, testString));
     EXPECT_TRUE(testString == "");
     ASSERT_NO_FATAL_FAILURE(mScheduler->setPhaseOffset(nullptr, 10));
@@ -129,8 +120,9 @@ TEST_F(SchedulerTest, invalidConnectionHandle) {
     sp<Scheduler::ConnectionHandle> connectionHandle = new Scheduler::ConnectionHandle(20);
 
     sp<IDisplayEventConnection> returnedValue;
-    ASSERT_NO_FATAL_FAILURE(returnedValue =
-                                    mScheduler->createDisplayEventConnection(connectionHandle));
+    ASSERT_NO_FATAL_FAILURE(
+            returnedValue =
+                    mScheduler->createDisplayEventConnection(connectionHandle, ResyncCallback()));
     EXPECT_TRUE(returnedValue == nullptr);
     EXPECT_TRUE(mScheduler->getEventThread(connectionHandle) == nullptr);
     EXPECT_TRUE(mScheduler->getEventConnection(connectionHandle) == nullptr);
@@ -146,7 +138,7 @@ TEST_F(SchedulerTest, invalidConnectionHandle) {
     EXPECT_CALL(*mEventThread, onScreenReleased()).Times(0);
     ASSERT_NO_FATAL_FAILURE(mScheduler->onScreenReleased(connectionHandle));
 
-    String8 testString;
+    std::string testString;
     EXPECT_CALL(*mEventThread, dump(_)).Times(0);
     ASSERT_NO_FATAL_FAILURE(mScheduler->dump(connectionHandle, testString));
     EXPECT_TRUE(testString == "");
@@ -157,8 +149,9 @@ TEST_F(SchedulerTest, invalidConnectionHandle) {
 
 TEST_F(SchedulerTest, validConnectionHandle) {
     sp<IDisplayEventConnection> returnedValue;
-    ASSERT_NO_FATAL_FAILURE(returnedValue =
-                                    mScheduler->createDisplayEventConnection(mConnectionHandle));
+    ASSERT_NO_FATAL_FAILURE(
+            returnedValue =
+                    mScheduler->createDisplayEventConnection(mConnectionHandle, ResyncCallback()));
     EXPECT_TRUE(returnedValue != nullptr);
     ASSERT_EQ(returnedValue, mEventThreadConnection);
 
@@ -176,7 +169,7 @@ TEST_F(SchedulerTest, validConnectionHandle) {
     EXPECT_CALL(*mEventThread, onScreenReleased()).Times(1);
     ASSERT_NO_FATAL_FAILURE(mScheduler->onScreenReleased(mConnectionHandle));
 
-    String8 testString("dump");
+    std::string testString("dump");
     EXPECT_CALL(*mEventThread, dump(testString)).Times(1);
     ASSERT_NO_FATAL_FAILURE(mScheduler->dump(mConnectionHandle, testString));
     EXPECT_TRUE(testString != "");
@@ -184,6 +177,5 @@ TEST_F(SchedulerTest, validConnectionHandle) {
     EXPECT_CALL(*mEventThread, setPhaseOffset(10)).Times(1);
     ASSERT_NO_FATAL_FAILURE(mScheduler->setPhaseOffset(mConnectionHandle, 10));
 }
-
 } // namespace
 } // namespace android

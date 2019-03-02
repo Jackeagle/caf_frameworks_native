@@ -26,6 +26,8 @@ BufferHubBase::BufferHubBase(const std::string& endpoint_path)
       cid_(-1) {}
 
 BufferHubBase::~BufferHubBase() {
+  // buffer_state and fence_state are not reset here. They will be used to
+  // clean up epoll fd if necessary in ProducerChannel::RemoveConsumer method.
   if (metadata_header_ != nullptr) {
     metadata_buffer_.Unlock();
   }
@@ -122,16 +124,16 @@ int BufferHubBase::ImportBuffer() {
   // memory region will be preserved.
   buffer_state_ = &metadata_header_->buffer_state;
   ALOGD_IF(TRACE,
-           "BufferHubBase::ImportBuffer: id=%d, buffer_state=%" PRIx64 ".",
+           "BufferHubBase::ImportBuffer: id=%d, buffer_state=%" PRIx32 ".",
            id(), buffer_state_->load(std::memory_order_acquire));
   fence_state_ = &metadata_header_->fence_state;
   ALOGD_IF(TRACE,
-           "BufferHubBase::ImportBuffer: id=%d, fence_state=%" PRIx64 ".", id(),
+           "BufferHubBase::ImportBuffer: id=%d, fence_state=%" PRIx32 ".", id(),
            fence_state_->load(std::memory_order_acquire));
   active_clients_bit_mask_ = &metadata_header_->active_clients_bit_mask;
   ALOGD_IF(
       TRACE,
-      "BufferHubBase::ImportBuffer: id=%d, active_clients_bit_mask=%" PRIx64
+      "BufferHubBase::ImportBuffer: id=%d, active_clients_bit_mask=%" PRIx32
       ".",
       id(), active_clients_bit_mask_->load(std::memory_order_acquire));
 
@@ -169,7 +171,7 @@ int BufferHubBase::UpdateSharedFence(const LocalHandle& new_fence,
       // If ready fence is valid, we put that into the epoll set.
       epoll_event event;
       event.events = EPOLLIN;
-      event.data.u64 = client_state_mask();
+      event.data.u32 = client_state_mask();
       pending_fence_fd_ = new_fence.Duplicate();
       if (epoll_ctl(shared_fence.Get(), EPOLL_CTL_ADD, pending_fence_fd_.Get(),
                     &event) < 0) {
@@ -194,12 +196,6 @@ int BufferHubBase::UpdateSharedFence(const LocalHandle& new_fence,
   return 0;
 }
 
-int BufferHubBase::Poll(int timeout_ms) {
-  ATRACE_NAME("BufferHubBase::Poll");
-  pollfd p = {event_fd(), POLLIN, 0};
-  return poll(&p, 1, timeout_ms);
-}
-
 int BufferHubBase::Lock(int usage, int x, int y, int width, int height,
                         void** address) {
   return buffer_.Lock(usage, x, y, width, height, address);
@@ -214,13 +210,6 @@ int BufferHubBase::GetBlobReadWritePointer(size_t size, void** addr) {
   if (ret == 0)
     Unlock();
   return ret;
-}
-
-void BufferHubBase::GetBlobFds(int* fds, size_t* fds_count,
-                               size_t max_fds_count) const {
-  size_t numFds = static_cast<size_t>(native_handle()->numFds);
-  *fds_count = std::min(max_fds_count, numFds);
-  std::copy(native_handle()->data, native_handle()->data + *fds_count, fds);
 }
 
 }  // namespace dvr

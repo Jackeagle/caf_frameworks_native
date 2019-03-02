@@ -286,10 +286,6 @@ status_t Replayer::dispatchEvent(int index) {
             std::thread(&Replayer::createSurfaceControl, this, increment.surface_creation(), event)
                     .detach();
         } break;
-        case increment.kSurfaceDeletion: {
-            std::thread(&Replayer::deleteSurfaceControl, this, increment.surface_deletion(), event)
-                    .detach();
-        } break;
         case increment.kBufferUpdate: {
             std::lock_guard<std::mutex> lock1(mLayerLock);
             std::lock_guard<std::mutex> lock2(mBufferQueueSchedulerLock);
@@ -384,6 +380,9 @@ status_t Replayer::doSurfaceTransaction(
                 break;
             case SurfaceChange::SurfaceChangeCase::kCrop:
                 setCrop(transaction, change.id(), change.crop());
+                break;
+            case SurfaceChange::SurfaceChangeCase::kCornerRadius:
+                setCornerRadius(transaction, change.id(), change.corner_radius());
                 break;
             case SurfaceChange::SurfaceChangeCase::kMatrix:
                 setMatrix(transaction, change.id(), change.matrix());
@@ -487,6 +486,13 @@ void Replayer::setCrop(SurfaceComposerClient::Transaction& t,
     Rect r = Rect(cc.rectangle().left(), cc.rectangle().top(), cc.rectangle().right(),
             cc.rectangle().bottom());
     t.setCrop_legacy(mLayers[id], r);
+}
+
+void Replayer::setCornerRadius(SurfaceComposerClient::Transaction& t,
+        layer_id id, const CornerRadiusChange& cc) {
+    ALOGV("Layer %d: Setting Corner Radius -- cornerRadius=%d", id, cc.corner_radius());
+
+    t.setCornerRadius(mLayers[id], cc.corner_radius());
 }
 
 void Replayer::setMatrix(SurfaceComposerClient::Transaction& t,
@@ -618,46 +624,9 @@ status_t Replayer::createSurfaceControl(
     return NO_ERROR;
 }
 
-status_t Replayer::deleteSurfaceControl(
-        const SurfaceDeletion& delete_, const std::shared_ptr<Event>& event) {
-    ALOGV("Deleting %d Surface Control", delete_.id());
-    event->readyToExecute();
-
-    std::lock_guard<std::mutex> lock1(mPendingLayersLock);
-
-    mLayersPendingRemoval.push_back(delete_.id());
-
-    const auto& iterator = mBufferQueueSchedulers.find(delete_.id());
-    if (iterator != mBufferQueueSchedulers.end()) {
-        (*iterator).second->stopScheduling();
-    }
-
-    std::lock_guard<std::mutex> lock2(mLayerLock);
-    if (mLayers[delete_.id()] != nullptr) {
-        mComposerClient->destroySurface(mLayers[delete_.id()]->getHandle());
-    }
-
-    return NO_ERROR;
-}
-
-void Replayer::doDeleteSurfaceControls() {
-    std::lock_guard<std::mutex> lock1(mPendingLayersLock);
-    std::lock_guard<std::mutex> lock2(mLayerLock);
-    if (!mLayersPendingRemoval.empty()) {
-        for (int id : mLayersPendingRemoval) {
-            mLayers.erase(id);
-            mColors.erase(id);
-            mBufferQueueSchedulers.erase(id);
-        }
-        mLayersPendingRemoval.clear();
-    }
-}
-
 status_t Replayer::injectVSyncEvent(
         const VSyncEvent& vSyncEvent, const std::shared_ptr<Event>& event) {
     ALOGV("Injecting VSync Event");
-
-    doDeleteSurfaceControls();
 
     event->readyToExecute();
 

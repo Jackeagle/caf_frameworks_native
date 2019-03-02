@@ -17,11 +17,14 @@
 #undef LOG_TAG
 #define LOG_TAG "CompositionTest"
 
+#include <compositionengine/mock/DisplaySurface.h>
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
-
 #include <gui/IProducerListener.h>
 #include <log/log.h>
+#include <renderengine/mock/Framebuffer.h>
+#include <renderengine/mock/Image.h>
+#include <renderengine/mock/RenderEngine.h>
 #include <system/window.h>
 #include <utils/String8.h>
 
@@ -31,12 +34,10 @@
 
 #include "TestableSurfaceFlinger.h"
 #include "mock/DisplayHardware/MockComposer.h"
-#include "mock/DisplayHardware/MockDisplaySurface.h"
 #include "mock/MockDispSync.h"
 #include "mock/MockEventControlThread.h"
 #include "mock/MockEventThread.h"
 #include "mock/MockMessageQueue.h"
-#include "mock/RenderEngine/MockRenderEngine.h"
 #include "mock/system/window/MockNativeWindow.h"
 
 namespace android {
@@ -46,6 +47,7 @@ using testing::_;
 using testing::AtLeast;
 using testing::ByMove;
 using testing::DoAll;
+using testing::Invoke;
 using testing::IsNull;
 using testing::Mock;
 using testing::NotNull;
@@ -93,6 +95,10 @@ public:
         EXPECT_CALL(*mPrimaryDispSync, computeNextRefresh(0)).WillRepeatedly(Return(0));
         EXPECT_CALL(*mPrimaryDispSync, getPeriod())
                 .WillRepeatedly(Return(FakeHwcDisplayInjector::DEFAULT_REFRESH_RATE));
+        EXPECT_CALL(*mNativeWindow, query(NATIVE_WINDOW_WIDTH, _))
+                .WillRepeatedly(DoAll(SetArgPointee<1>(DEFAULT_DISPLAY_WIDTH), Return(0)));
+        EXPECT_CALL(*mNativeWindow, query(NATIVE_WINDOW_HEIGHT, _))
+                .WillRepeatedly(DoAll(SetArgPointee<1>(DEFAULT_DISPLAY_HEIGHT), Return(0)));
 
         mFlinger.setupRenderEngine(std::unique_ptr<renderengine::RenderEngine>(mRenderEngine));
         setupComposer(0);
@@ -138,9 +144,12 @@ public:
     TestableSurfaceFlinger mFlinger;
     sp<DisplayDevice> mDisplay;
     sp<DisplayDevice> mExternalDisplay;
-    sp<mock::DisplaySurface> mDisplaySurface = new mock::DisplaySurface();
-    renderengine::mock::Surface* mRenderSurface = new renderengine::mock::Surface();
+    sp<compositionengine::mock::DisplaySurface> mDisplaySurface =
+            new compositionengine::mock::DisplaySurface();
     mock::NativeWindow* mNativeWindow = new mock::NativeWindow();
+
+    sp<GraphicBuffer> mBuffer = new GraphicBuffer();
+    ANativeWindowBuffer* mNativeWindowBuffer = mBuffer->getNativeBuffer();
 
     mock::EventThread* mEventThread = new mock::EventThread();
     mock::EventControlThread* mEventControlThread = new mock::EventControlThread();
@@ -242,8 +251,6 @@ struct BaseDisplayVariant {
         test->mDisplay = FakeDisplayDeviceInjector(test->mFlinger, DEFAULT_DISPLAY_ID,
                                                    false /* isVirtual */, true /* isPrimary */)
                                  .setDisplaySurface(test->mDisplaySurface)
-                                 .setRenderSurface(std::unique_ptr<renderengine::Surface>(
-                                         test->mRenderSurface))
                                  .setNativeWindow(test->mNativeWindow)
                                  .setSecure(Derived::IS_SECURE)
                                  .setPowerMode(Derived::INIT_POWER_MODE)
@@ -266,13 +273,9 @@ struct BaseDisplayVariant {
         EXPECT_CALL(*test->mRenderEngine, checkErrors()).WillRepeatedly(Return());
         EXPECT_CALL(*test->mRenderEngine, isCurrent()).WillRepeatedly(Return(true));
 
-        EXPECT_CALL(*test->mRenderEngine, setCurrentSurface(Ref(*test->mRenderSurface)))
-                .WillOnce(Return(true));
-        EXPECT_CALL(*test->mRenderEngine,
-                    setViewportAndProjection(DEFAULT_DISPLAY_WIDTH, DEFAULT_DISPLAY_HEIGHT,
-                                             Rect(DEFAULT_DISPLAY_WIDTH, DEFAULT_DISPLAY_HEIGHT),
-                                             ui::Transform::ROT_0))
-                .Times(1);
+        EXPECT_CALL(*test->mRenderEngine, flush()).WillRepeatedly(Invoke([]() {
+            return base::unique_fd(0);
+        }));
 
         EXPECT_CALL(*test->mDisplaySurface, onFrameCommitted()).Times(1);
         EXPECT_CALL(*test->mDisplaySurface, advanceFrame()).Times(1);
@@ -285,8 +288,10 @@ struct BaseDisplayVariant {
     static void setupCommonScreensCaptureCallExpectations(CompositionTest* test) {
         // Called once with a non-null value to set a framebuffer, and then
         // again with nullptr to clear it.
-        EXPECT_CALL(*test->mReFrameBuffer, setNativeWindowBuffer(NotNull())).WillOnce(Return(true));
-        EXPECT_CALL(*test->mReFrameBuffer, setNativeWindowBuffer(IsNull())).WillOnce(Return(true));
+        EXPECT_CALL(*test->mReFrameBuffer, setNativeWindowBuffer(NotNull(), false))
+                .WillOnce(Return(true));
+        EXPECT_CALL(*test->mReFrameBuffer, setNativeWindowBuffer(IsNull(), false))
+                .WillOnce(Return(true));
 
         EXPECT_CALL(*test->mRenderEngine, checkErrors()).WillRepeatedly(Return());
         EXPECT_CALL(*test->mRenderEngine, createFramebuffer())
@@ -322,13 +327,14 @@ struct BaseDisplayVariant {
     }
 
     static void setupHwcCompositionCallExpectations(CompositionTest* test) {
-        EXPECT_CALL(*test->mDisplaySurface, prepareFrame(DisplaySurface::COMPOSITION_HWC)).Times(1);
-
-        EXPECT_CALL(*test->mRenderEngine, disableScissor()).Times(1);
+        EXPECT_CALL(*test->mDisplaySurface,
+                    prepareFrame(compositionengine::DisplaySurface::COMPOSITION_HWC))
+                .Times(1);
     }
 
     static void setupRECompositionCallExpectations(CompositionTest* test) {
-        EXPECT_CALL(*test->mDisplaySurface, prepareFrame(DisplaySurface::COMPOSITION_GLES))
+        EXPECT_CALL(*test->mDisplaySurface,
+                    prepareFrame(compositionengine::DisplaySurface::COMPOSITION_GLES))
                 .Times(1);
         EXPECT_CALL(*test->mDisplaySurface, getClientTargetAcquireFence())
                 .WillRepeatedly(ReturnRef(test->mClientTargetAcquireFence));
@@ -344,12 +350,20 @@ struct BaseDisplayVariant {
                     setViewportAndProjection(DEFAULT_DISPLAY_WIDTH, DEFAULT_DISPLAY_HEIGHT,
                                              Rect(DEFAULT_DISPLAY_WIDTH, DEFAULT_DISPLAY_HEIGHT),
                                              ui::Transform::ROT_0))
-                .Times(1)
-                .RetiresOnSaturation();
-        EXPECT_CALL(*test->mRenderEngine, setCurrentSurface(Ref(*test->mRenderSurface)))
-                .WillOnce(Return(true))
-                .RetiresOnSaturation();
-        EXPECT_CALL(*test->mRenderSurface, swapBuffers()).Times(1);
+                .Times(1);
+        EXPECT_CALL(*test->mReFrameBuffer, setNativeWindowBuffer(NotNull(), false))
+                .WillOnce(Return(true));
+        EXPECT_CALL(*test->mReFrameBuffer, setNativeWindowBuffer(IsNull(), false))
+                .WillOnce(Return(true));
+        EXPECT_CALL(*test->mRenderEngine, createFramebuffer())
+                .WillOnce(Return(
+                        ByMove(std::unique_ptr<renderengine::Framebuffer>(test->mReFrameBuffer))));
+        EXPECT_CALL(*test->mRenderEngine, bindFrameBuffer(test->mReFrameBuffer)).Times(1);
+        EXPECT_CALL(*test->mRenderEngine, unbindFrameBuffer(test->mReFrameBuffer)).Times(1);
+        EXPECT_CALL(*test->mNativeWindow, queueBuffer(_, _)).WillOnce(Return(0));
+        EXPECT_CALL(*test->mNativeWindow, dequeueBuffer(_, _))
+                .WillOnce(DoAll(SetArgPointee<0>(test->mNativeWindowBuffer), SetArgPointee<1>(-1),
+                                Return(0)));
     }
 
     template <typename Case>
@@ -575,7 +589,8 @@ struct BaseLayerProperties {
         EXPECT_CALL(*test->mRenderEngine,
                     setupLayerBlending(true, false, false,
                                        half4(LayerProperties::COLOR[0], LayerProperties::COLOR[1],
-                                             LayerProperties::COLOR[2], LayerProperties::COLOR[3])))
+                                             LayerProperties::COLOR[2], LayerProperties::COLOR[3]),
+                                       0.0f))
                 .Times(1);
 
         EXPECT_CALL(*test->mRenderEngine, createImage())
@@ -621,7 +636,8 @@ struct BaseLayerProperties {
         EXPECT_CALL(*test->mRenderEngine,
                     setupLayerBlending(true, false, true,
                                        half4(LayerProperties::COLOR[0], LayerProperties::COLOR[1],
-                                             LayerProperties::COLOR[2], LayerProperties::COLOR[3])))
+                                             LayerProperties::COLOR[2], LayerProperties::COLOR[3]),
+                                       0.0f))
                 .Times(1);
         EXPECT_CALL(*test->mRenderEngine, drawMesh(_)).Times(1);
         EXPECT_CALL(*test->mRenderEngine, disableBlending()).Times(1);
@@ -685,7 +701,8 @@ struct SecureLayerProperties : public BaseLayerProperties<SecureLayerProperties>
         EXPECT_CALL(*test->mRenderEngine,
                     setupLayerBlending(true, false, false,
                                        half4(Base::COLOR[0], Base::COLOR[1], Base::COLOR[2],
-                                             Base::COLOR[3])))
+                                             Base::COLOR[3]),
+                                       0.0f))
                 .Times(1);
         EXPECT_CALL(*test->mRenderEngine, setSourceDataSpace(ui::Dataspace::UNKNOWN)).Times(1);
         EXPECT_CALL(*test->mRenderEngine, drawMesh(_)).Times(1);
@@ -756,7 +773,7 @@ struct BaseLayerVariant {
 
         const auto displayId = test->mDisplay->getId();
         ASSERT_TRUE(displayId);
-        layer->createHwcLayer(test->mFlinger.mFlinger->getBE().mHwc.get(), *displayId);
+        layer->createHwcLayer(&test->mFlinger.getHwComposer(), *displayId);
 
         Mock::VerifyAndClear(test->mComposer);
 

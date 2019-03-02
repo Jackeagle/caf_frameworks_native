@@ -22,6 +22,10 @@
 
 #include <grallocusage/GrallocUsageConversion.h>
 
+#ifndef LIBUI_IN_VNDK
+#include <ui/BufferHubBuffer.h>
+#endif // LIBUI_IN_VNDK
+
 #include <ui/Gralloc2.h>
 #include <ui/GraphicBufferAllocator.h>
 #include <ui/GraphicBufferMapper.h>
@@ -88,6 +92,22 @@ GraphicBuffer::GraphicBuffer(const native_handle_t* inHandle, HandleWrapMethod m
     mInitCheck = initWithHandle(inHandle, method, inWidth, inHeight, inFormat, inLayerCount,
                                 inUsage, inStride);
 }
+
+#ifndef LIBUI_IN_VNDK
+GraphicBuffer::GraphicBuffer(std::unique_ptr<BufferHubBuffer> buffer) : GraphicBuffer() {
+    if (buffer == nullptr) {
+        mInitCheck = BAD_VALUE;
+        return;
+    }
+
+    mInitCheck = initWithHandle(buffer->DuplicateHandle(), /*method=*/TAKE_UNREGISTERED_HANDLE,
+                                buffer->desc().width, buffer->desc().height,
+                                static_cast<PixelFormat>(buffer->desc().format),
+                                buffer->desc().layers, buffer->desc().usage, buffer->desc().stride);
+    mBufferId = buffer->id();
+    mBufferHubBuffer = std::move(buffer);
+}
+#endif // LIBUI_IN_VNDK
 
 GraphicBuffer::~GraphicBuffer()
 {
@@ -216,15 +236,15 @@ status_t GraphicBuffer::initWithHandle(const native_handle_t* inHandle, HandleWr
     return NO_ERROR;
 }
 
-status_t GraphicBuffer::lock(uint32_t inUsage, void** vaddr)
-{
+status_t GraphicBuffer::lock(uint32_t inUsage, void** vaddr, int32_t* outBytesPerPixel,
+                             int32_t* outBytesPerStride) {
     const Rect lockBounds(width, height);
-    status_t res = lock(inUsage, lockBounds, vaddr);
+    status_t res = lock(inUsage, lockBounds, vaddr, outBytesPerPixel, outBytesPerStride);
     return res;
 }
 
-status_t GraphicBuffer::lock(uint32_t inUsage, const Rect& rect, void** vaddr)
-{
+status_t GraphicBuffer::lock(uint32_t inUsage, const Rect& rect, void** vaddr,
+                             int32_t* outBytesPerPixel, int32_t* outBytesPerStride) {
     if (rect.left < 0 || rect.right  > width ||
         rect.top  < 0 || rect.bottom > height) {
         ALOGE("locking pixels (%d,%d,%d,%d) outside of buffer (w=%d, h=%d)",
@@ -232,7 +252,10 @@ status_t GraphicBuffer::lock(uint32_t inUsage, const Rect& rect, void** vaddr)
                 width, height);
         return BAD_VALUE;
     }
-    status_t res = getBufferMapper().lock(handle, inUsage, rect, vaddr);
+
+    status_t res = getBufferMapper().lock(handle, inUsage, rect, vaddr, outBytesPerPixel,
+                                          outBytesPerStride);
+
     return res;
 }
 
@@ -286,8 +309,10 @@ status_t GraphicBuffer::lockAsync(uint64_t inProducerUsage,
                 width, height);
         return BAD_VALUE;
     }
-    status_t res = getBufferMapper().lockAsync(handle, inProducerUsage,
-            inConsumerUsage, rect, vaddr, fenceFd);
+
+    int32_t bytesPerPixel, bytesPerStride;
+    status_t res = getBufferMapper().lockAsync(handle, inProducerUsage, inConsumerUsage, rect,
+                                               vaddr, fenceFd, &bytesPerPixel, &bytesPerStride);
     return res;
 }
 
@@ -482,6 +507,12 @@ status_t GraphicBuffer::unflatten(
 
     return NO_ERROR;
 }
+
+#ifndef LIBUI_IN_VNDK
+bool GraphicBuffer::isBufferHubBuffer() const {
+    return mBufferHubBuffer != nullptr;
+}
+#endif // LIBUI_IN_VNDK
 
 // ---------------------------------------------------------------------------
 

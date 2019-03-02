@@ -16,40 +16,36 @@
 
 #pragma once
 
-#include "BufferLayerConsumer.h"
-#include "Client.h"
-#include "Layer.h"
-#include "DisplayHardware/HWComposer.h"
-#include "DisplayHardware/HWComposerBufferCache.h"
-#include "FrameTracker.h"
-#include "LayerVector.h"
-#include "MonitoredProducer.h"
-#include "SurfaceFlinger.h"
+#include <sys/types.h>
+#include <cstdint>
+#include <list>
 
 #include <gui/ISurfaceComposerClient.h>
 #include <gui/LayerState.h>
 #include <renderengine/Mesh.h>
 #include <renderengine/Texture.h>
+#include <system/window.h> // For NATIVE_WINDOW_SCALING_MODE_FREEZE
 #include <ui/FrameStats.h>
 #include <ui/GraphicBuffer.h>
 #include <ui/PixelFormat.h>
 #include <ui/Region.h>
-
 #include <utils/RefBase.h>
 #include <utils/String8.h>
 #include <utils/Timers.h>
 
-#include <system/window.h> // For NATIVE_WINDOW_SCALING_MODE_FREEZE
-
-#include <stdint.h>
-#include <sys/types.h>
-#include <list>
+#include "BufferLayerConsumer.h"
+#include "Client.h"
+#include "DisplayHardware/HWComposer.h"
+#include "FrameTracker.h"
+#include "Layer.h"
+#include "LayerVector.h"
+#include "MonitoredProducer.h"
+#include "SurfaceFlinger.h"
 
 namespace android {
 
 class BufferLayer : public Layer {
 public:
-    friend class ExBufferLayer;
     explicit BufferLayer(const LayerCreationArgs& args);
     ~BufferLayer() override;
 
@@ -57,6 +53,8 @@ public:
     // Overriden from Layer
     // -----------------------------------------------------------------------
 public:
+    std::shared_ptr<compositionengine::Layer> getCompositionLayer() const override;
+
     // If we have received a new buffer this frame, we will pass its surface
     // damage down to hardware composer. Otherwise, we must send a region with
     // one empty rect.
@@ -71,6 +69,10 @@ public:
 
     // isVisible - true if this layer is visible, false otherwise
     bool isVisible() const override;
+
+    // isProtected - true if the layer may contain protected content in the
+    // GRALLOC_USAGE_PROTECTED sense.
+    bool isProtected() const override;
 
     // isFixedSize - true if content has a fixed size
     bool isFixedSize() const override;
@@ -111,10 +113,6 @@ public:
     uint32_t getEffectiveScalingMode() const override;
     // -----------------------------------------------------------------------
 
-    virtual bool isHDRLayer() const { return false; }
-    virtual bool canAllowGPUForProtected() const { return false; }
-    virtual bool isScreenshot() const { return false; }
-
     // -----------------------------------------------------------------------
     // Functions that must be implemented by derived classes
     // -----------------------------------------------------------------------
@@ -154,13 +152,6 @@ private:
 
     virtual void setHwcLayerBuffer(DisplayId displayId) = 0;
 
-    // -----------------------------------------------------------------------
-
-public:
-    // isProtected - true if the layer may contain protected content in the
-    // GRALLOC_USAGE_PROTECTED sense.
-    bool isProtected() const;
-
 protected:
     // Loads the corresponding system property once per process
     static bool latchUnsignaledBuffers();
@@ -175,9 +166,11 @@ protected:
     // from GLES
     const uint32_t mTextureName;
 
+    bool mRefreshPending{false};
+
 private:
-    // needsLinearFiltering - true if this surface's state requires filtering
-    bool needsFiltering(const RenderArea& renderArea) const;
+    // Returns true if this layer requires filtering
+    bool needsFiltering() const;
 
     // drawing
     void drawWithOpenGL(const RenderArea& renderArea, bool useIdentityTransform) const;
@@ -192,9 +185,9 @@ private:
     // The texture used to draw the layer in GLES composition mode
     mutable renderengine::Texture mTexture;
 
-    bool mRefreshPending{false};
-
     Rect getBufferSize(const State& s) const override;
+
+    std::shared_ptr<compositionengine::Layer> mCompositionLayer;
 };
 
 } // namespace android

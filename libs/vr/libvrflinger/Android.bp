@@ -47,6 +47,7 @@ sharedLibraries = [
     "liblog",
     "libhardware",
     "libnativewindow",
+    "libprocessgroup",
     "libutils",
     "libEGL",
     "libGLESv1_CM",
@@ -84,9 +85,6 @@ cc_library_static {
         "-Werror",
         "-Wno-error=sign-compare", // to fix later
         "-Wno-unused-variable",
-    ],
-    cppflags: [
-        "-std=c++1z"
     ],
     shared_libs: sharedLibraries,
     whole_static_libs: staticLibraries,

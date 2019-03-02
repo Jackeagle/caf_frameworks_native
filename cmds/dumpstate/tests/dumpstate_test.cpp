@@ -36,6 +36,7 @@
 #include <android-base/properties.h>
 #include <android-base/stringprintf.h>
 #include <android-base/strings.h>
+#include <cutils/properties.h>
 
 namespace android {
 namespace os {
@@ -58,6 +59,9 @@ using ::testing::internal::GetCapturedStdout;
 
 class DumpstateListenerMock : public IDumpstateListener {
   public:
+    MOCK_METHOD1(onProgress, binder::Status(int32_t progress));
+    MOCK_METHOD1(onError, binder::Status(int32_t error_code));
+    MOCK_METHOD0(onFinished, binder::Status());
     MOCK_METHOD1(onProgressUpdated, binder::Status(int32_t progress));
     MOCK_METHOD1(onMaxProgressUpdated, binder::Status(int32_t max_progress));
     MOCK_METHOD4(onSectionComplete, binder::Status(const ::std::string& name, int32_t status,
@@ -148,7 +152,10 @@ class DumpOptionsTest : public Test {
     virtual void SetUp() {
         options_ = Dumpstate::DumpOptions();
     }
-
+    void TearDown() {
+        // Reset the property
+        property_set("dumpstate.options", "");
+    }
     Dumpstate::DumpOptions options_;
 };
 
@@ -159,13 +166,12 @@ TEST_F(DumpOptionsTest, InitializeNone) {
     };
     // clang-format on
 
-    Dumpstate::DumpOptions options;
     Dumpstate::RunStatus status = options_.Initialize(ARRAY_SIZE(argv), argv);
 
     EXPECT_EQ(status, Dumpstate::RunStatus::OK);
+
     EXPECT_FALSE(options_.do_add_date);
     EXPECT_FALSE(options_.do_zip_file);
-    EXPECT_EQ("", options_.use_outfile);
     EXPECT_FALSE(options_.use_socket);
     EXPECT_FALSE(options_.use_control_socket);
     EXPECT_FALSE(options_.show_header_only);
@@ -176,13 +182,280 @@ TEST_F(DumpOptionsTest, InitializeNone) {
     EXPECT_FALSE(options_.do_broadcast);
 }
 
+TEST_F(DumpOptionsTest, InitializeAdbBugreport) {
+    // clang-format off
+    char* argv[] = {
+        const_cast<char*>("dumpstatez"),
+        const_cast<char*>("-S"),
+        const_cast<char*>("-d"),
+        const_cast<char*>("-z"),
+    };
+    // clang-format on
+
+    Dumpstate::RunStatus status = options_.Initialize(ARRAY_SIZE(argv), argv);
+
+    EXPECT_EQ(status, Dumpstate::RunStatus::OK);
+    EXPECT_TRUE(options_.do_add_date);
+    EXPECT_TRUE(options_.do_zip_file);
+    EXPECT_TRUE(options_.use_control_socket);
+
+    // Other options retain default values
+    EXPECT_TRUE(options_.do_vibrate);
+    EXPECT_FALSE(options_.show_header_only);
+    EXPECT_FALSE(options_.do_fb);
+    EXPECT_FALSE(options_.do_progress_updates);
+    EXPECT_FALSE(options_.is_remote_mode);
+    EXPECT_FALSE(options_.do_broadcast);
+    EXPECT_FALSE(options_.use_socket);
+}
+
+TEST_F(DumpOptionsTest, InitializeAdbShellBugreport) {
+    // clang-format off
+    char* argv[] = {
+        const_cast<char*>("dumpstate"),
+        const_cast<char*>("-s"),
+    };
+    // clang-format on
+
+    Dumpstate::RunStatus status = options_.Initialize(ARRAY_SIZE(argv), argv);
+
+    EXPECT_EQ(status, Dumpstate::RunStatus::OK);
+    EXPECT_TRUE(options_.use_socket);
+
+    // Other options retain default values
+    EXPECT_TRUE(options_.do_vibrate);
+    EXPECT_FALSE(options_.do_add_date);
+    EXPECT_FALSE(options_.do_zip_file);
+    EXPECT_FALSE(options_.use_control_socket);
+    EXPECT_FALSE(options_.show_header_only);
+    EXPECT_FALSE(options_.do_fb);
+    EXPECT_FALSE(options_.do_progress_updates);
+    EXPECT_FALSE(options_.is_remote_mode);
+    EXPECT_FALSE(options_.do_broadcast);
+}
+
+TEST_F(DumpOptionsTest, InitializeFullBugReport) {
+    // clang-format off
+    char* argv[] = {
+        const_cast<char*>("bugreport"),
+        const_cast<char*>("-d"),
+        const_cast<char*>("-p"),
+        const_cast<char*>("-B"),
+        const_cast<char*>("-z"),
+    };
+    // clang-format on
+    property_set("dumpstate.options", "bugreportfull");
+
+    Dumpstate::RunStatus status = options_.Initialize(ARRAY_SIZE(argv), argv);
+
+    EXPECT_EQ(status, Dumpstate::RunStatus::OK);
+    EXPECT_TRUE(options_.do_add_date);
+    EXPECT_TRUE(options_.do_fb);
+    EXPECT_TRUE(options_.do_zip_file);
+    EXPECT_TRUE(options_.do_broadcast);
+
+    // Other options retain default values
+    EXPECT_TRUE(options_.do_vibrate);
+    EXPECT_FALSE(options_.use_control_socket);
+    EXPECT_FALSE(options_.show_header_only);
+    EXPECT_FALSE(options_.do_progress_updates);
+    EXPECT_FALSE(options_.is_remote_mode);
+    EXPECT_FALSE(options_.use_socket);
+    EXPECT_FALSE(options_.do_start_service);
+}
+
+TEST_F(DumpOptionsTest, InitializeInteractiveBugReport) {
+    // clang-format off
+    char* argv[] = {
+        const_cast<char*>("bugreport"),
+        const_cast<char*>("-d"),
+        const_cast<char*>("-p"),
+        const_cast<char*>("-B"),
+        const_cast<char*>("-z"),
+    };
+    // clang-format on
+
+    property_set("dumpstate.options", "bugreportplus");
+
+    Dumpstate::RunStatus status = options_.Initialize(ARRAY_SIZE(argv), argv);
+
+    EXPECT_EQ(status, Dumpstate::RunStatus::OK);
+    EXPECT_TRUE(options_.do_add_date);
+    EXPECT_TRUE(options_.do_broadcast);
+    EXPECT_TRUE(options_.do_zip_file);
+    EXPECT_TRUE(options_.do_progress_updates);
+    EXPECT_TRUE(options_.do_start_service);
+    EXPECT_FALSE(options_.do_fb);
+
+    // Other options retain default values
+    EXPECT_TRUE(options_.do_vibrate);
+    EXPECT_FALSE(options_.use_control_socket);
+    EXPECT_FALSE(options_.show_header_only);
+    EXPECT_FALSE(options_.is_remote_mode);
+    EXPECT_FALSE(options_.use_socket);
+}
+
+TEST_F(DumpOptionsTest, InitializeRemoteBugReport) {
+    // clang-format off
+    char* argv[] = {
+        const_cast<char*>("bugreport"),
+        const_cast<char*>("-d"),
+        const_cast<char*>("-p"),
+        const_cast<char*>("-B"),
+        const_cast<char*>("-z"),
+    };
+    // clang-format on
+
+    property_set("dumpstate.options", "bugreportremote");
+
+    Dumpstate::RunStatus status = options_.Initialize(ARRAY_SIZE(argv), argv);
+
+    EXPECT_EQ(status, Dumpstate::RunStatus::OK);
+    EXPECT_TRUE(options_.do_add_date);
+    EXPECT_TRUE(options_.do_broadcast);
+    EXPECT_TRUE(options_.do_zip_file);
+    EXPECT_TRUE(options_.is_remote_mode);
+    EXPECT_FALSE(options_.do_vibrate);
+    EXPECT_FALSE(options_.do_fb);
+
+    // Other options retain default values
+    EXPECT_FALSE(options_.use_control_socket);
+    EXPECT_FALSE(options_.show_header_only);
+    EXPECT_FALSE(options_.do_progress_updates);
+    EXPECT_FALSE(options_.use_socket);
+}
+
+TEST_F(DumpOptionsTest, InitializeWearBugReport) {
+    // clang-format off
+    char* argv[] = {
+        const_cast<char*>("bugreport"),
+        const_cast<char*>("-d"),
+        const_cast<char*>("-p"),
+        const_cast<char*>("-B"),
+        const_cast<char*>("-z"),
+    };
+    // clang-format on
+
+    property_set("dumpstate.options", "bugreportwear");
+
+    Dumpstate::RunStatus status = options_.Initialize(ARRAY_SIZE(argv), argv);
+
+    EXPECT_EQ(status, Dumpstate::RunStatus::OK);
+    EXPECT_TRUE(options_.do_add_date);
+    EXPECT_TRUE(options_.do_fb);
+    EXPECT_TRUE(options_.do_broadcast);
+    EXPECT_TRUE(options_.do_zip_file);
+    EXPECT_TRUE(options_.do_progress_updates);
+    EXPECT_TRUE(options_.do_start_service);
+
+    // Other options retain default values
+    EXPECT_TRUE(options_.do_vibrate);
+    EXPECT_FALSE(options_.use_control_socket);
+    EXPECT_FALSE(options_.show_header_only);
+    EXPECT_FALSE(options_.is_remote_mode);
+    EXPECT_FALSE(options_.use_socket);
+}
+
+TEST_F(DumpOptionsTest, InitializeTelephonyBugReport) {
+    // clang-format off
+    char* argv[] = {
+        const_cast<char*>("bugreport"),
+        const_cast<char*>("-d"),
+        const_cast<char*>("-p"),
+        const_cast<char*>("-B"),
+        const_cast<char*>("-z"),
+    };
+    // clang-format on
+
+    property_set("dumpstate.options", "bugreporttelephony");
+
+    Dumpstate::RunStatus status = options_.Initialize(ARRAY_SIZE(argv), argv);
+
+    EXPECT_EQ(status, Dumpstate::RunStatus::OK);
+    EXPECT_TRUE(options_.do_add_date);
+    EXPECT_TRUE(options_.do_fb);
+    EXPECT_TRUE(options_.do_broadcast);
+    EXPECT_TRUE(options_.do_zip_file);
+    EXPECT_TRUE(options_.telephony_only);
+
+    // Other options retain default values
+    EXPECT_TRUE(options_.do_vibrate);
+    EXPECT_FALSE(options_.use_control_socket);
+    EXPECT_FALSE(options_.show_header_only);
+    EXPECT_FALSE(options_.do_progress_updates);
+    EXPECT_FALSE(options_.is_remote_mode);
+    EXPECT_FALSE(options_.use_socket);
+}
+
+TEST_F(DumpOptionsTest, InitializeWifiBugReport) {
+    // clang-format off
+    char* argv[] = {
+        const_cast<char*>("bugreport"),
+        const_cast<char*>("-d"),
+        const_cast<char*>("-p"),
+        const_cast<char*>("-B"),
+        const_cast<char*>("-z"),
+    };
+    // clang-format on
+
+    property_set("dumpstate.options", "bugreportwifi");
+
+    Dumpstate::RunStatus status = options_.Initialize(ARRAY_SIZE(argv), argv);
+
+    EXPECT_EQ(status, Dumpstate::RunStatus::OK);
+    EXPECT_TRUE(options_.do_add_date);
+    EXPECT_TRUE(options_.do_fb);
+    EXPECT_TRUE(options_.do_broadcast);
+    EXPECT_TRUE(options_.do_zip_file);
+    EXPECT_TRUE(options_.wifi_only);
+
+    // Other options retain default values
+    EXPECT_TRUE(options_.do_vibrate);
+    EXPECT_FALSE(options_.use_control_socket);
+    EXPECT_FALSE(options_.show_header_only);
+    EXPECT_FALSE(options_.do_progress_updates);
+    EXPECT_FALSE(options_.is_remote_mode);
+    EXPECT_FALSE(options_.use_socket);
+}
+
+TEST_F(DumpOptionsTest, InitializeDefaultBugReport) {
+    // default: commandline options are not overridden
+    // clang-format off
+    char* argv[] = {
+        const_cast<char*>("bugreport"),
+        const_cast<char*>("-d"),
+        const_cast<char*>("-p"),
+        const_cast<char*>("-B"),
+        const_cast<char*>("-z"),
+    };
+    // clang-format on
+
+    property_set("dumpstate.options", "");
+
+    Dumpstate::RunStatus status = options_.Initialize(ARRAY_SIZE(argv), argv);
+
+    EXPECT_EQ(status, Dumpstate::RunStatus::OK);
+    EXPECT_TRUE(options_.do_add_date);
+    EXPECT_TRUE(options_.do_fb);
+    EXPECT_TRUE(options_.do_zip_file);
+    EXPECT_TRUE(options_.do_broadcast);
+
+    // Other options retain default values
+    EXPECT_TRUE(options_.do_vibrate);
+    EXPECT_FALSE(options_.use_control_socket);
+    EXPECT_FALSE(options_.show_header_only);
+    EXPECT_FALSE(options_.do_progress_updates);
+    EXPECT_FALSE(options_.is_remote_mode);
+    EXPECT_FALSE(options_.use_socket);
+    EXPECT_FALSE(options_.wifi_only);
+}
+
 TEST_F(DumpOptionsTest, InitializePartial1) {
     // clang-format off
     char* argv[] = {
         const_cast<char*>("dumpstate"),
         const_cast<char*>("-d"),
         const_cast<char*>("-z"),
-        const_cast<char*>("-o abc"),
         const_cast<char*>("-s"),
         const_cast<char*>("-S"),
 
@@ -195,7 +468,6 @@ TEST_F(DumpOptionsTest, InitializePartial1) {
     EXPECT_TRUE(options_.do_add_date);
     EXPECT_TRUE(options_.do_zip_file);
     // TODO: Maybe we should trim the filename
-    EXPECT_EQ(" abc", std::string(options_.use_outfile));
     EXPECT_TRUE(options_.use_socket);
     EXPECT_TRUE(options_.use_control_socket);
 
@@ -234,7 +506,6 @@ TEST_F(DumpOptionsTest, InitializePartial2) {
     // Other options retain default values
     EXPECT_FALSE(options_.do_add_date);
     EXPECT_FALSE(options_.do_zip_file);
-    EXPECT_EQ("", options_.use_outfile);
     EXPECT_FALSE(options_.use_socket);
     EXPECT_FALSE(options_.use_control_socket);
 }
@@ -269,15 +540,21 @@ TEST_F(DumpOptionsTest, InitializeUnknown) {
 
 TEST_F(DumpOptionsTest, ValidateOptionsNeedOutfile1) {
     options_.do_zip_file = true;
+    // Writing to socket = !writing to file.
+    options_.use_socket = true;
     EXPECT_FALSE(options_.ValidateOptions());
-    options_.use_outfile = "a/b/c";
+
+    options_.use_socket = false;
     EXPECT_TRUE(options_.ValidateOptions());
 }
 
 TEST_F(DumpOptionsTest, ValidateOptionsNeedOutfile2) {
     options_.do_broadcast = true;
+    // Writing to socket = !writing to file.
+    options_.use_socket = true;
     EXPECT_FALSE(options_.ValidateOptions());
-    options_.use_outfile = "a/b/c";
+
+    options_.use_socket = false;
     EXPECT_TRUE(options_.ValidateOptions());
 }
 
@@ -286,13 +563,11 @@ TEST_F(DumpOptionsTest, ValidateOptionsNeedZipfile) {
     EXPECT_FALSE(options_.ValidateOptions());
 
     options_.do_zip_file = true;
-    options_.use_outfile = "a/b/c";  // do_zip_file needs outfile
     EXPECT_TRUE(options_.ValidateOptions());
 }
 
 TEST_F(DumpOptionsTest, ValidateOptionsUpdateProgressNeedsBroadcast) {
     options_.do_progress_updates = true;
-    options_.use_outfile = "a/b/c";  // do_progress_updates needs outfile
     EXPECT_FALSE(options_.ValidateOptions());
 
     options_.do_broadcast = true;
@@ -306,7 +581,6 @@ TEST_F(DumpOptionsTest, ValidateOptionsRemoteMode) {
     options_.do_broadcast = true;
     options_.do_zip_file = true;
     options_.do_add_date = true;
-    options_.use_outfile = "a/b/c";  // do_broadcast needs outfile
     EXPECT_TRUE(options_.ValidateOptions());
 }
 
@@ -363,8 +637,9 @@ class DumpstateTest : public DumpstateBaseTest {
         }
 
         if (update_progress) {
-            message += android::base::StringPrintf("Setting progress (%s): %d/%d\n",
-                                                   listener_name.c_str(), progress, max);
+            message += android::base::StringPrintf("Setting progress (%s): %d/%d (%d%%)\n",
+                                                   listener_name.c_str(), progress, max,
+                                                   (100 * progress / max));
         }
 
         return message;
@@ -523,12 +798,14 @@ TEST_F(DumpstateTest, RunCommandProgress) {
     SetProgress(0, 30);
 
     EXPECT_CALL(*listener, onProgressUpdated(20));
+    EXPECT_CALL(*listener, onProgress(66));  // 20/30 %
     EXPECT_EQ(0, RunCommand("", {kSimpleCommand}, CommandOptions::WithTimeout(20).Build()));
     std::string progress_message = GetProgressMessage(ds.listener_name_, 20, 30);
     EXPECT_THAT(out, StrEq("stdout\n"));
     EXPECT_THAT(err, StrEq("stderr\n" + progress_message));
 
     EXPECT_CALL(*listener, onProgressUpdated(30));
+    EXPECT_CALL(*listener, onProgress(100));  // 35/35 %
     EXPECT_EQ(0, RunCommand("", {kSimpleCommand}, CommandOptions::WithTimeout(10).Build()));
     progress_message = GetProgressMessage(ds.listener_name_, 30, 30);
     EXPECT_THAT(out, StrEq("stdout\n"));
@@ -537,6 +814,7 @@ TEST_F(DumpstateTest, RunCommandProgress) {
     // Run a command that will increase maximum timeout.
     EXPECT_CALL(*listener, onProgressUpdated(31));
     EXPECT_CALL(*listener, onMaxProgressUpdated(37));
+    EXPECT_CALL(*listener, onProgress(83));  // 31/37 %
     EXPECT_EQ(0, RunCommand("", {kSimpleCommand}, CommandOptions::WithTimeout(1).Build()));
     progress_message = GetProgressMessage(ds.listener_name_, 31, 37, 30);  // 20% increase
     EXPECT_THAT(out, StrEq("stdout\n"));
@@ -545,6 +823,7 @@ TEST_F(DumpstateTest, RunCommandProgress) {
     // Make sure command ran while in dry_run is counted.
     SetDryRun(true);
     EXPECT_CALL(*listener, onProgressUpdated(35));
+    EXPECT_CALL(*listener, onProgress(94));  // 35/37 %
     EXPECT_EQ(0, RunCommand("", {kSimpleCommand}, CommandOptions::WithTimeout(4).Build()));
     progress_message = GetProgressMessage(ds.listener_name_, 35, 37);
     EXPECT_THAT(out, IsEmpty());
@@ -561,6 +840,7 @@ TEST_F(DumpstateTest, RunCommandProgressIgnoreThreshold) {
 
     // First update should always be sent.
     EXPECT_CALL(*listener, onProgressUpdated(1));
+    EXPECT_CALL(*listener, onProgress(12));  // 1/12 %
     EXPECT_EQ(0, RunCommand("", {kSimpleCommand}, CommandOptions::WithTimeout(1).Build()));
     std::string progress_message = GetProgressMessage(ds.listener_name_, 1, 8);
     EXPECT_THAT(out, StrEq("stdout\n"));
@@ -573,6 +853,7 @@ TEST_F(DumpstateTest, RunCommandProgressIgnoreThreshold) {
 
     // Third update should be sent because it reaches threshold (6 - 1 = 5).
     EXPECT_CALL(*listener, onProgressUpdated(6));
+    EXPECT_CALL(*listener, onProgress(75));  // 6/8 %
     EXPECT_EQ(0, RunCommand("", {kSimpleCommand}, CommandOptions::WithTimeout(1).Build()));
     progress_message = GetProgressMessage(ds.listener_name_, 6, 8);
     EXPECT_THAT(out, StrEq("stdout\n"));
@@ -812,6 +1093,7 @@ TEST_F(DumpstateTest, DumpFileUpdateProgress) {
     SetProgress(0, 30);
 
     EXPECT_CALL(*listener, onProgressUpdated(5));
+    EXPECT_CALL(*listener, onProgress(16));  // 5/30 %
     EXPECT_EQ(0, DumpFile("", kTestDataPath + "single-line.txt"));
 
     std::string progress_message =

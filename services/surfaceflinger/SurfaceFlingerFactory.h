@@ -44,10 +44,18 @@ class Scheduler;
 class StartPropertySetThread;
 class SurfaceFlinger;
 class SurfaceInterceptor;
+class TimeStats;
 
 struct DisplayDeviceCreationArgs;
 struct LayerCreationArgs;
 
+namespace compositionengine {
+class CompositionEngine;
+} // namespace compositionengine
+
+namespace scheduler {
+class PhaseOffsets;
+} // namespace scheduler
 namespace surfaceflinger {
 
 class NativeWindowSurface;
@@ -62,6 +70,7 @@ public:
             std::function<void(bool)> setVSyncEnabled) = 0;
     virtual std::unique_ptr<HWComposer> createHWComposer(const std::string& serviceName) = 0;
     virtual std::unique_ptr<MessageQueue> createMessageQueue() = 0;
+    virtual std::unique_ptr<scheduler::PhaseOffsets> createPhaseOffsets() = 0;
     virtual std::unique_ptr<Scheduler> createScheduler(std::function<void(bool)> callback) = 0;
     virtual std::unique_ptr<SurfaceInterceptor> createSurfaceInterceptor(SurfaceFlinger*) = 0;
 
@@ -77,10 +86,14 @@ public:
     virtual std::unique_ptr<surfaceflinger::NativeWindowSurface> createNativeWindowSurface(
             const sp<IGraphicBufferProducer>&) = 0;
 
+    virtual std::unique_ptr<compositionengine::CompositionEngine> createCompositionEngine() = 0;
+
     virtual sp<BufferQueueLayer> createBufferQueueLayer(const LayerCreationArgs& args) = 0;
     virtual sp<BufferStateLayer> createBufferStateLayer(const LayerCreationArgs& args) = 0;
     virtual sp<ColorLayer> createColorLayer(const LayerCreationArgs& args) = 0;
     virtual sp<ContainerLayer> createContainerLayer(const LayerCreationArgs& args) = 0;
+
+    virtual std::shared_ptr<TimeStats> createTimeStats() = 0;
 
 protected:
     ~Factory() = default;

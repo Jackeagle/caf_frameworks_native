@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include <compositionengine/impl/CompositionEngine.h>
 #include <ui/GraphicBuffer.h>
 
 #include "BufferQueueLayer.h"
@@ -32,7 +33,9 @@
 #include "Scheduler/DispSync.h"
 #include "Scheduler/EventControlThread.h"
 #include "Scheduler/MessageQueue.h"
+#include "Scheduler/PhaseOffsets.h"
 #include "Scheduler/Scheduler.h"
+#include "TimeStats/TimeStats.h"
 
 namespace android::surfaceflinger {
 
@@ -58,12 +61,16 @@ sp<SurfaceFlinger> createSurfaceFlinger() {
         }
 
         std::unique_ptr<HWComposer> createHWComposer(const std::string& serviceName) override {
-            return std::make_unique<HWComposer>(
+            return std::make_unique<android::impl::HWComposer>(
                     std::make_unique<Hwc2::impl::Composer>(serviceName));
         }
 
         std::unique_ptr<MessageQueue> createMessageQueue() override {
             return std::make_unique<android::impl::MessageQueue>();
+        }
+
+        std::unique_ptr<scheduler::PhaseOffsets> createPhaseOffsets() override {
+            return std::make_unique<scheduler::impl::PhaseOffsets>();
         }
 
         std::unique_ptr<Scheduler> createScheduler(std::function<void(bool)> callback) override {
@@ -101,6 +108,10 @@ sp<SurfaceFlinger> createSurfaceFlinger() {
             return surfaceflinger::impl::createNativeWindowSurface(producer);
         }
 
+        std::unique_ptr<compositionengine::CompositionEngine> createCompositionEngine() override {
+            return compositionengine::impl::createCompositionEngine();
+        }
+
         sp<ContainerLayer> createContainerLayer(const LayerCreationArgs& args) override {
             return new ContainerLayer(args);
         }
@@ -115,6 +126,10 @@ sp<SurfaceFlinger> createSurfaceFlinger() {
 
         sp<ColorLayer> createColorLayer(const LayerCreationArgs& args) override {
             return new ColorLayer(args);
+        }
+
+        std::shared_ptr<TimeStats> createTimeStats() override {
+            return std::make_shared<android::impl::TimeStats>();
         }
     };
     static Factory factory;

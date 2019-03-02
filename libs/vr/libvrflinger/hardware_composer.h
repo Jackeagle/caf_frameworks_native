@@ -22,7 +22,6 @@
 #include <dvr/dvr_vsync.h>
 #include <pdx/file_handle.h>
 #include <pdx/rpc/variant.h>
-#include <private/dvr/buffer_hub_client.h>
 #include <private/dvr/shared_buffer_helpers.h>
 #include <private/dvr/vsync_service.h>
 
@@ -196,7 +195,7 @@ class Layer {
     AcquiredBuffer acquired_buffer;
     pdx::LocalHandle release_fence;
 
-    SourceSurface(const std::shared_ptr<DirectDisplaySurface>& surface)
+    explicit SourceSurface(const std::shared_ptr<DirectDisplaySurface>& surface)
         : surface(surface) {}
 
     // Attempts to acquire a new buffer from the surface and return a tuple with
