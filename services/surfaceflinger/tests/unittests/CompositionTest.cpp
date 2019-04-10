@@ -22,6 +22,7 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 #include <gui/IProducerListener.h>
+#include <gui/LayerMetadata.h>
 #include <log/log.h>
 #include <renderengine/mock/Framebuffer.h>
 #include <renderengine/mock/Image.h>
@@ -592,8 +593,6 @@ struct BaseLayerProperties {
                     renderengine::LayerSettings layer = layerSettings.back();
                     EXPECT_THAT(layer.source.buffer.buffer, Not(IsNull()));
                     EXPECT_THAT(layer.source.buffer.fence, Not(IsNull()));
-                    EXPECT_EQ(renderengine::Buffer::CachingHint::NO_CACHE,
-                              layer.source.buffer.cacheHint);
                     EXPECT_EQ(DEFAULT_TEXTURE_ID, layer.source.buffer.textureName);
                     EXPECT_EQ(false, layer.source.buffer.isY410BT2020);
                     EXPECT_EQ(true, layer.source.buffer.usePremultipliedAlpha);
@@ -808,7 +807,7 @@ struct ColorLayerVariant : public BaseLayerVariant<LayerProperties> {
             return new ColorLayer(LayerCreationArgs(test->mFlinger.mFlinger.get(), sp<Client>(),
                                                     String8("test-layer"), LayerProperties::WIDTH,
                                                     LayerProperties::HEIGHT,
-                                                    LayerProperties::LAYER_FLAGS));
+                                                    LayerProperties::LAYER_FLAGS, LayerMetadata()));
         });
 
         auto& layerDrawingState = test->mFlinger.mutableLayerDrawingState(layer);
@@ -849,7 +848,7 @@ struct BufferLayerVariant : public BaseLayerVariant<LayerProperties> {
                             LayerCreationArgs(test->mFlinger.mFlinger.get(), sp<Client>(),
                                               String8("test-layer"), LayerProperties::WIDTH,
                                               LayerProperties::HEIGHT,
-                                              LayerProperties::LAYER_FLAGS));
+                                              LayerProperties::LAYER_FLAGS, LayerMetadata()));
                 });
 
         LayerProperties::setupLayerState(test, layer);

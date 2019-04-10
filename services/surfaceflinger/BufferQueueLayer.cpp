@@ -342,10 +342,6 @@ status_t BufferQueueLayer::updateActiveBuffer() {
     return NO_ERROR;
 }
 
-bool BufferQueueLayer::useCachedBufferForClientComposition() const {
-    return mConsumer->getAndSetCurrentBufferCacheHint();
-}
-
 status_t BufferQueueLayer::updateFrameNumber(nsecs_t latchTime) {
     mPreviousFrameNumber = mCurrentFrameNumber;
     mCurrentFrameNumber = mConsumer->getFrameNumber();
@@ -366,7 +362,7 @@ void BufferQueueLayer::setHwcLayerBuffer(const sp<const DisplayDevice>& display)
     uint32_t hwcSlot = 0;
     sp<GraphicBuffer> hwcBuffer;
     (*outputLayer->editState().hwc)
-            .hwcBufferCache.getHwcBuffer(mActiveBufferSlot, mActiveBuffer, &hwcSlot, &hwcBuffer);
+            .hwcBufferCache.getHwcBuffer(mActiveBuffer, &hwcSlot, &hwcBuffer);
 
     auto acquireFence = mConsumer->getCurrentFence();
     auto error = hwcLayer->setBuffer(hwcSlot, hwcBuffer, acquireFence);
@@ -396,10 +392,9 @@ void BufferQueueLayer::fakeVsync() {
 void BufferQueueLayer::onFrameAvailable(const BufferItem& item) {
     // Add this buffer from our internal queue tracker
     { // Autolock scope
-        if (mFlinger->mUse90Hz && mFlinger->mUseSmart90ForVideo) {
-            // Report the requested present time to the Scheduler, if the feature is turned on.
-            mFlinger->mScheduler->addFramePresentTimeForLayer(item.mTimestamp,
-                                                              item.mIsAutoTimestamp, mName.c_str());
+        if (mFlinger->mUseSmart90ForVideo) {
+            // Report mApi ID for each layer.
+            mFlinger->mScheduler->addNativeWindowApi(item.mApi);
         }
 
         Mutex::Autolock lock(mQueueItemLock);
@@ -427,6 +422,21 @@ void BufferQueueLayer::onFrameAvailable(const BufferItem& item) {
 
     mFlinger->mInterceptor->saveBufferUpdate(this, item.mGraphicBuffer->getWidth(),
                                              item.mGraphicBuffer->getHeight(), item.mFrameNumber);
+
+    if (mFlinger->mDolphinFuncsEnabled) {
+        Mutex::Autolock lock(mFlinger->mDolphinStateLock);
+        const auto displayId = mFlinger->getInternalDisplayIdLocked();
+        const Vector< sp<Layer> >& visibleLayersSortedByZ =
+            mFlinger->getLayerSortedByZForHwcDisplay(*displayId);
+        bool isTransparentRegion = this->visibleNonTransparentRegion.isEmpty();
+        int visibleLayerNum = visibleLayersSortedByZ.size();
+        Rect crop = this->getContentCrop();
+        int32_t width = crop.getWidth();
+        int32_t height = crop.getHeight();
+        String8 name = this->getName();
+        mFlinger->mDolphinOnFrameAvailable(isTransparentRegion, visibleLayerNum,
+                                           width, height, name);
+    }
 
     // If this layer is orphaned, then we run a fake vsync pulse so that
     // dequeueBuffer doesn't block indefinitely.

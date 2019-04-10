@@ -189,7 +189,7 @@ void TransactionCompletedListener::addSurfaceControlToCallbacks(
 }
 
 void TransactionCompletedListener::onTransactionCompleted(ListenerStats listenerStats) {
-    std::lock_guard lock(mMutex);
+    std::lock_guard<std::mutex> lock(mMutex);
 
     /* This listener knows all the sp<IBinder> to sp<SurfaceControl> for all its registered
      * callbackIds, except for when Transactions are merged together. This probably cannot be
@@ -242,7 +242,7 @@ public:
     }
 
     int32_t getId(const sp<GraphicBuffer>& buffer) {
-        std::lock_guard lock(mMutex);
+        std::lock_guard<std::mutex> lock(mMutex);
 
         auto itr = mBuffers.find(buffer);
         if (itr == mBuffers.end()) {
@@ -253,7 +253,7 @@ public:
     }
 
     int32_t cache(const sp<GraphicBuffer>& buffer) {
-        std::lock_guard lock(mMutex);
+        std::lock_guard<std::mutex> lock(mMutex);
 
         int32_t bufferId = getNextAvailableId();
 
@@ -989,6 +989,20 @@ SurfaceComposerClient::Transaction& SurfaceComposerClient::Transaction::setDesir
     return *this;
 }
 
+SurfaceComposerClient::Transaction& SurfaceComposerClient::Transaction::setColorSpaceAgnostic(
+        const sp<SurfaceControl>& sc, const bool agnostic) {
+    layer_state_t* s = getLayerState(sc);
+    if (!s) {
+        mStatus = BAD_INDEX;
+        return *this;
+    }
+    s->what |= layer_state_t::eColorSpaceAgnosticChanged;
+    s->colorSpaceAgnostic = agnostic;
+
+    registerSurfaceControlForCallback(sc);
+    return *this;
+}
+
 SurfaceComposerClient::Transaction&
 SurfaceComposerClient::Transaction::addTransactionCompletedCallback(
         TransactionCompletedCallbackTakesContext callback, void* callbackContext) {
@@ -1388,6 +1402,12 @@ status_t SurfaceComposerClient::setAllowedDisplayConfigs(
                                                                            allowedConfigs);
 }
 
+status_t SurfaceComposerClient::getAllowedDisplayConfigs(const sp<IBinder>& displayToken,
+                                                         std::vector<int32_t>* outAllowedConfigs) {
+    return ComposerService::getComposerService()->getAllowedDisplayConfigs(displayToken,
+                                                                           outAllowedConfigs);
+}
+
 status_t SurfaceComposerClient::getDisplayColorModes(const sp<IBinder>& display,
         Vector<ColorMode>* outColorModes) {
     return ComposerService::getComposerService()->getDisplayColorModes(display, outColorModes);
@@ -1468,6 +1488,30 @@ status_t SurfaceComposerClient::isWideColorDisplay(const sp<IBinder>& display,
                                                    bool* outIsWideColorDisplay) {
     return ComposerService::getComposerService()->isWideColorDisplay(display,
                                                                      outIsWideColorDisplay);
+}
+
+status_t SurfaceComposerClient::addRegionSamplingListener(
+        const Rect& samplingArea, const sp<IBinder>& stopLayerHandle,
+        const sp<IRegionSamplingListener>& listener) {
+    return ComposerService::getComposerService()->addRegionSamplingListener(samplingArea,
+                                                                            stopLayerHandle,
+                                                                            listener);
+}
+
+status_t SurfaceComposerClient::removeRegionSamplingListener(
+        const sp<IRegionSamplingListener>& listener) {
+    return ComposerService::getComposerService()->removeRegionSamplingListener(listener);
+}
+
+bool SurfaceComposerClient::getDisplayBrightnessSupport(const sp<IBinder>& displayToken) {
+    bool support = false;
+    ComposerService::getComposerService()->getDisplayBrightnessSupport(displayToken, &support);
+    return support;
+}
+
+status_t SurfaceComposerClient::setDisplayBrightness(const sp<IBinder>& displayToken,
+                                                     float brightness) {
+    return ComposerService::getComposerService()->setDisplayBrightness(displayToken, brightness);
 }
 
 // ----------------------------------------------------------------------------

@@ -50,6 +50,7 @@ struct DisplayInfo;
 class HdrCapabilities;
 class ISurfaceComposerClient;
 class IGraphicBufferProducer;
+class IRegionSamplingListener;
 class Region;
 
 // ---------------------------------------------------------------------------
@@ -117,6 +118,12 @@ public:
     static status_t setAllowedDisplayConfigs(const sp<IBinder>& displayToken,
                                              const std::vector<int32_t>& allowedConfigs);
 
+    // Returns the allowed display configurations currently set.
+    // The allowedConfigs in a vector of indexes corresponding to the configurations
+    // returned from getDisplayConfigs().
+    static status_t getAllowedDisplayConfigs(const sp<IBinder>& displayToken,
+                                             std::vector<int32_t>* outAllowedConfigs);
+
     // Gets the list of supported color modes for the given display
     static status_t getDisplayColorModes(const sp<IBinder>& display,
             Vector<ui::ColorMode>* outColorModes);
@@ -160,6 +167,32 @@ public:
 
     // Queries whether a given display is wide color display.
     static status_t isWideColorDisplay(const sp<IBinder>& display, bool* outIsWideColorDisplay);
+
+    /*
+     * Returns whether brightness operations are supported on a display.
+     *
+     * displayToken
+     *      The token of the display.
+     *
+     * Returns whether brightness operations are supported on a display or not.
+     */
+    static bool getDisplayBrightnessSupport(const sp<IBinder>& displayToken);
+
+    /*
+     * Sets the brightness of a display.
+     *
+     * displayToken
+     *      The token of the display whose brightness is set.
+     * brightness
+     *      A number between 0.0 (minimum brightness) and 1.0 (maximum brightness), or -1.0f to
+     *      turn the backlight off.
+     *
+     * Returns NO_ERROR upon success. Otherwise,
+     *      NAME_NOT_FOUND    if the display handle is invalid, or
+     *      BAD_VALUE         if the brightness value is invalid, or
+     *      INVALID_OPERATION if brightness operaetions are not supported.
+     */
+    static status_t setDisplayBrightness(const sp<IBinder>& displayToken, float brightness);
 
     // ------------------------------------------------------------------------
     // surface creation / destruction
@@ -354,6 +387,7 @@ public:
         Transaction& setSidebandStream(const sp<SurfaceControl>& sc,
                                        const sp<NativeHandle>& sidebandStream);
         Transaction& setDesiredPresentTime(nsecs_t desiredPresentTime);
+        Transaction& setColorSpaceAgnostic(const sp<SurfaceControl>& sc, const bool agnostic);
 
         Transaction& addTransactionCompletedCallback(
                 TransactionCompletedCallbackTakesContext callback, void* callbackContext);
@@ -442,6 +476,10 @@ public:
 
     static status_t getDisplayedContentSample(const sp<IBinder>& display, uint64_t maxFrames,
                                               uint64_t timestamp, DisplayedFrameStats* outStats);
+    static status_t addRegionSamplingListener(const Rect& samplingArea,
+                                              const sp<IBinder>& stopLayerHandle,
+                                              const sp<IRegionSamplingListener>& listener);
+    static status_t removeRegionSamplingListener(const sp<IRegionSamplingListener>& listener);
 
 private:
     virtual void onFirstRef();

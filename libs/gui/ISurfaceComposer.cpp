@@ -792,18 +792,18 @@ public:
         Parcel data, reply;
         status_t error = data.writeInterfaceToken(ISurfaceComposer::getInterfaceDescriptor());
         if (error != NO_ERROR) {
-            ALOGE("addRegionSamplingListener: Failed to write interface token");
+            ALOGE("removeRegionSamplingListener: Failed to write interface token");
             return error;
         }
         error = data.writeStrongBinder(IInterface::asBinder(listener));
         if (error != NO_ERROR) {
-            ALOGE("addRegionSamplingListener: Failed to write listener");
+            ALOGE("removeRegionSamplingListener: Failed to write listener");
             return error;
         }
         error = remote()->transact(BnSurfaceComposer::REMOVE_REGION_SAMPLING_LISTENER, data,
                                    &reply);
         if (error != NO_ERROR) {
-            ALOGE("addRegionSamplingListener: Failed to transact");
+            ALOGE("removeRegionSamplingListener: Failed to transact");
         }
         return error;
     }
@@ -832,6 +832,86 @@ public:
             return result;
         }
         return reply.readInt32();
+    }
+
+    virtual status_t getAllowedDisplayConfigs(const sp<IBinder>& displayToken,
+                                              std::vector<int32_t>* outAllowedConfigs) {
+        if (!outAllowedConfigs) return BAD_VALUE;
+        Parcel data, reply;
+        status_t result = data.writeInterfaceToken(ISurfaceComposer::getInterfaceDescriptor());
+        if (result != NO_ERROR) {
+            ALOGE("getAllowedDisplayConfigs failed to writeInterfaceToken: %d", result);
+            return result;
+        }
+        result = data.writeStrongBinder(displayToken);
+        if (result != NO_ERROR) {
+            ALOGE("getAllowedDisplayConfigs failed to writeStrongBinder: %d", result);
+            return result;
+        }
+        result = remote()->transact(BnSurfaceComposer::GET_ALLOWED_DISPLAY_CONFIGS, data, &reply);
+        if (result != NO_ERROR) {
+            ALOGE("getAllowedDisplayConfigs failed to transact: %d", result);
+            return result;
+        }
+        result = reply.readInt32Vector(outAllowedConfigs);
+        if (result != NO_ERROR) {
+            ALOGE("getAllowedDisplayConfigs failed to readInt32Vector: %d", result);
+            return result;
+        }
+        return reply.readInt32();
+    }
+
+    virtual status_t getDisplayBrightnessSupport(const sp<IBinder>& displayToken,
+                                                 bool* outSupport) const {
+        Parcel data, reply;
+        status_t error = data.writeInterfaceToken(ISurfaceComposer::getInterfaceDescriptor());
+        if (error != NO_ERROR) {
+            ALOGE("getDisplayBrightnessSupport: failed to write interface token: %d", error);
+            return error;
+        }
+        error = data.writeStrongBinder(displayToken);
+        if (error != NO_ERROR) {
+            ALOGE("getDisplayBrightnessSupport: failed to write display token: %d", error);
+            return error;
+        }
+        error = remote()->transact(BnSurfaceComposer::GET_DISPLAY_BRIGHTNESS_SUPPORT, data, &reply);
+        if (error != NO_ERROR) {
+            ALOGE("getDisplayBrightnessSupport: failed to transact: %d", error);
+            return error;
+        }
+        bool support;
+        error = reply.readBool(&support);
+        if (error != NO_ERROR) {
+            ALOGE("getDisplayBrightnessSupport: failed to read support: %d", error);
+            return error;
+        }
+        *outSupport = support;
+        return NO_ERROR;
+    }
+
+    virtual status_t setDisplayBrightness(const sp<IBinder>& displayToken, float brightness) const {
+        Parcel data, reply;
+        status_t error = data.writeInterfaceToken(ISurfaceComposer::getInterfaceDescriptor());
+        if (error != NO_ERROR) {
+            ALOGE("setDisplayBrightness: failed to write interface token: %d", error);
+            return error;
+        }
+        error = data.writeStrongBinder(displayToken);
+        if (error != NO_ERROR) {
+            ALOGE("setDisplayBrightness: failed to write display token: %d", error);
+            return error;
+        }
+        error = data.writeFloat(brightness);
+        if (error != NO_ERROR) {
+            ALOGE("setDisplayBrightness: failed to write brightness: %d", error);
+            return error;
+        }
+        error = remote()->transact(BnSurfaceComposer::SET_DISPLAY_BRIGHTNESS, data, &reply);
+        if (error != NO_ERROR) {
+            ALOGE("setDisplayBrightness: failed to transact: %d", error);
+            return error;
+        }
+        return NO_ERROR;
     }
 };
 
@@ -1353,6 +1433,44 @@ status_t BnSurfaceComposer::onTransact(
             status_t result = setAllowedDisplayConfigs(displayToken, allowedConfigs);
             reply->writeInt32(result);
             return result;
+        }
+        case GET_ALLOWED_DISPLAY_CONFIGS: {
+            CHECK_INTERFACE(ISurfaceComposer, data, reply);
+            sp<IBinder> displayToken = data.readStrongBinder();
+            std::vector<int32_t> allowedConfigs;
+            status_t result = getAllowedDisplayConfigs(displayToken, &allowedConfigs);
+            reply->writeInt32Vector(allowedConfigs);
+            reply->writeInt32(result);
+            return result;
+        }
+        case GET_DISPLAY_BRIGHTNESS_SUPPORT: {
+            CHECK_INTERFACE(ISurfaceComposer, data, reply);
+            sp<IBinder> displayToken;
+            status_t error = data.readNullableStrongBinder(&displayToken);
+            if (error != NO_ERROR) {
+                ALOGE("getDisplayBrightnessSupport: failed to read display token: %d", error);
+                return error;
+            }
+            bool support = false;
+            error = getDisplayBrightnessSupport(displayToken, &support);
+            reply->writeBool(support);
+            return error;
+        }
+        case SET_DISPLAY_BRIGHTNESS: {
+            CHECK_INTERFACE(ISurfaceComposer, data, reply);
+            sp<IBinder> displayToken;
+            status_t error = data.readNullableStrongBinder(&displayToken);
+            if (error != NO_ERROR) {
+                ALOGE("setDisplayBrightness: failed to read display token: %d", error);
+                return error;
+            }
+            float brightness = -1.0f;
+            error = data.readFloat(&brightness);
+            if (error != NO_ERROR) {
+                ALOGE("setDisplayBrightness: failed to read brightness: %d", error);
+                return error;
+            }
+            return setDisplayBrightness(displayToken, brightness);
         }
         default: {
             return BBinder::onTransact(code, data, reply, flags);
