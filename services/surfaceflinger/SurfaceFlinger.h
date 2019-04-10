@@ -664,9 +664,6 @@ private:
     bool canAllocateHwcDisplayIdForVDS(uint64_t usage);
     bool skipColorLayer(const char* layerType);
 
-    bool canAllocateHwcDisplayIdForVDS(uint64_t usage);
-    bool skipColorLayer(const char* layerType);
-
     sp<StartPropertySetThread> mStartPropertySetThread;
 
     /* ------------------------------------------------------------------------
