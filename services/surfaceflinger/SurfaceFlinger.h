@@ -648,6 +648,7 @@ private:
                                      bool forSystem, int* outSyncFd);
     void traverseLayersInDisplay(const sp<const DisplayDevice>& display,
                                  const LayerVector::Visitor& visitor);
+
     bool canAllocateHwcDisplayIdForVDS(uint64_t usage);
     bool skipColorLayer(const char* layerType);
 
