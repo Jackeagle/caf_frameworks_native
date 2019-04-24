@@ -12,7 +12,6 @@
 
 #include <private/android_filesystem_config.h>
 #include <private/gui/ComposerService.h>
-
 #include <ui/DisplayInfo.h>
 #include <utils/String8.h>
 
@@ -62,9 +61,11 @@ protected:
     }
 
     void setupBackgroundSurface() {
-        mDisplay = SurfaceComposerClient::getBuiltInDisplay(ISurfaceComposer::eDisplayIdMain);
+        mDisplay = SurfaceComposerClient::getInternalDisplayToken();
+        ASSERT_FALSE(mDisplay == nullptr);
+
         DisplayInfo info;
-        SurfaceComposerClient::getDisplayInfo(mDisplay, &info);
+        ASSERT_EQ(NO_ERROR, SurfaceComposerClient::getDisplayInfo(mDisplay, &info));
         const ssize_t displayWidth = info.w;
         const ssize_t displayHeight = info.h;
 
@@ -170,10 +171,8 @@ TEST_F(CredentialsTest, ClientInitTest) {
 }
 
 TEST_F(CredentialsTest, GetBuiltInDisplayAccessTest) {
-    std::function<bool()> condition = [=]() {
-        sp<IBinder> display(
-                SurfaceComposerClient::getBuiltInDisplay(ISurfaceComposer::eDisplayIdMain));
-        return (display != nullptr);
+    std::function<bool()> condition = [] {
+        return SurfaceComposerClient::getInternalDisplayToken() != nullptr;
     };
     // Anyone can access display information.
     ASSERT_NO_FATAL_FAILURE(checkWithPrivileges(condition, true, true));
@@ -183,7 +182,7 @@ TEST_F(CredentialsTest, AllowedGetterMethodsTest) {
     // The following methods are tested with a UID that is not root, graphics,
     // or system, to show that anyone can access them.
     setBinUID();
-    sp<IBinder> display(SurfaceComposerClient::getBuiltInDisplay(ISurfaceComposer::eDisplayIdMain));
+    const auto display = SurfaceComposerClient::getInternalDisplayToken();
     ASSERT_TRUE(display != nullptr);
 
     DisplayInfo info;
@@ -199,7 +198,7 @@ TEST_F(CredentialsTest, AllowedGetterMethodsTest) {
 }
 
 TEST_F(CredentialsTest, GetDisplayColorModesTest) {
-    sp<IBinder> display(SurfaceComposerClient::getBuiltInDisplay(ISurfaceComposer::eDisplayIdMain));
+    const auto display = SurfaceComposerClient::getInternalDisplayToken();
     std::function<status_t()> condition = [=]() {
         Vector<ui::ColorMode> outColorModes;
         return SurfaceComposerClient::getDisplayColorModes(display, &outColorModes);
@@ -208,7 +207,7 @@ TEST_F(CredentialsTest, GetDisplayColorModesTest) {
 }
 
 TEST_F(CredentialsTest, GetDisplayNativePrimariesTest) {
-    sp<IBinder> display(SurfaceComposerClient::getBuiltInDisplay(ISurfaceComposer::eDisplayIdMain));
+    const auto display = SurfaceComposerClient::getInternalDisplayToken();
     std::function<status_t()> condition = [=]() {
         ui::DisplayPrimaries primaries;
         return SurfaceComposerClient::getDisplayNativePrimaries(display, primaries);
@@ -217,7 +216,7 @@ TEST_F(CredentialsTest, GetDisplayNativePrimariesTest) {
 }
 
 TEST_F(CredentialsTest, SetActiveConfigTest) {
-    sp<IBinder> display(SurfaceComposerClient::getBuiltInDisplay(ISurfaceComposer::eDisplayIdMain));
+    const auto display = SurfaceComposerClient::getInternalDisplayToken();
     std::function<status_t()> condition = [=]() {
         return SurfaceComposerClient::setActiveConfig(display, 0);
     };
@@ -225,7 +224,7 @@ TEST_F(CredentialsTest, SetActiveConfigTest) {
 }
 
 TEST_F(CredentialsTest, SetActiveColorModeTest) {
-    sp<IBinder> display(SurfaceComposerClient::getBuiltInDisplay(ISurfaceComposer::eDisplayIdMain));
+    const auto display = SurfaceComposerClient::getInternalDisplayToken();
     std::function<status_t()> condition = [=]() {
         return SurfaceComposerClient::setActiveColorMode(display, ui::ColorMode::NATIVE);
     };
@@ -258,7 +257,7 @@ TEST_F(CredentialsTest, DISABLED_DestroyDisplayTest) {
 }
 
 TEST_F(CredentialsTest, CaptureTest) {
-    sp<IBinder> display(SurfaceComposerClient::getBuiltInDisplay(ISurfaceComposer::eDisplayIdMain));
+    const auto display = SurfaceComposerClient::getInternalDisplayToken();
     std::function<status_t()> condition = [=]() {
         sp<GraphicBuffer> outBuffer;
         return ScreenshotClient::capture(display, ui::Dataspace::V0_SRGB,
@@ -324,7 +323,8 @@ TEST_F(CredentialsTest, GetLayerDebugInfo) {
 }
 
 TEST_F(CredentialsTest, IsWideColorDisplayBasicCorrectness) {
-    sp<IBinder> display(SurfaceComposerClient::getBuiltInDisplay(ISurfaceComposer::eDisplayIdMain));
+    const auto display = SurfaceComposerClient::getInternalDisplayToken();
+    ASSERT_FALSE(display == nullptr);
     bool result = false;
     status_t error = SurfaceComposerClient::isWideColorDisplay(display, &result);
     ASSERT_EQ(NO_ERROR, error);
@@ -346,12 +346,20 @@ TEST_F(CredentialsTest, IsWideColorDisplayBasicCorrectness) {
 }
 
 TEST_F(CredentialsTest, IsWideColorDisplayWithPrivileges) {
-    sp<IBinder> display(SurfaceComposerClient::getBuiltInDisplay(ISurfaceComposer::eDisplayIdMain));
+    const auto display = SurfaceComposerClient::getInternalDisplayToken();
+    ASSERT_FALSE(display == nullptr);
     std::function<status_t()> condition = [=]() {
         bool result = false;
         return SurfaceComposerClient::isWideColorDisplay(display, &result);
     };
     ASSERT_NO_FATAL_FAILURE(checkWithPrivileges<status_t>(condition, NO_ERROR, NO_ERROR));
+}
+
+TEST_F(CredentialsTest, GetActiveColorModeBasicCorrectness) {
+    const auto display = SurfaceComposerClient::getInternalDisplayToken();
+    ASSERT_FALSE(display == nullptr);
+    ColorMode colorMode = SurfaceComposerClient::getActiveColorMode(display);
+    ASSERT_NE(static_cast<ColorMode>(BAD_VALUE), colorMode);
 }
 
 } // namespace android

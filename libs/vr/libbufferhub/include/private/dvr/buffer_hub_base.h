@@ -21,19 +21,6 @@ class BufferHubBase : public pdx::Client {
   // a file descriptor for the new channel or a negative error code.
   Status<LocalChannelHandle> CreateConsumer();
 
-  // Polls the fd for |timeout_ms| milliseconds (-1 for infinity).
-  int Poll(int timeout_ms);
-
-  // Locks the area specified by (x, y, width, height) for a specific usage. If
-  // the usage is software then |addr| will be updated to point to the address
-  // of the buffer in virtual memory. The caller should only access/modify the
-  // pixels in the specified area. anything else is undefined behavior.
-  int Lock(int usage, int x, int y, int width, int height, void** addr);
-
-  // Must be called after Lock() when the caller has finished changing the
-  // buffer.
-  int Unlock();
-
   // Gets a blob buffer that was created with ProducerBuffer::CreateBlob.
   // Locking and Unlocking is handled internally. There's no need to Unlock
   // after calling this method.
@@ -51,10 +38,6 @@ class BufferHubBase : public pdx::Client {
     // ION API directly instead of gralloc.
     return LocalHandle(dup(native_handle()->data[0]));
   }
-
-  // Get up to |max_fds_count| file descriptors for accessing the blob shared
-  // memory. |fds_count| will contain the actual number of file descriptors.
-  void GetBlobFds(int* fds, size_t* fds_count, size_t max_fds_count) const;
 
   using Client::event_fd;
 
@@ -114,8 +97,8 @@ class BufferHubBase : public pdx::Client {
   uint32_t usage() const { return buffer_.usage(); }
   uint32_t layer_count() const { return buffer_.layer_count(); }
 
-  uint64_t GetQueueIndex() const { return metadata_header_->queue_index; }
-  void SetQueueIndex(uint64_t index) { metadata_header_->queue_index = index; }
+  uint64_t GetQueueIndex() const { return metadata_header_->queueIndex; }
+  void SetQueueIndex(uint64_t index) { metadata_header_->queueIndex = index; }
 
  protected:
   explicit BufferHubBase(LocalChannelHandle channel);
@@ -134,6 +117,16 @@ class BufferHubBase : public pdx::Client {
   // shouldn't be poll'ed by the other end.
   int UpdateSharedFence(const LocalHandle& new_fence,
                         const LocalHandle& shared_fence);
+
+  // Locks the area specified by (x, y, width, height) for a specific usage. If
+  // the usage is software then |addr| will be updated to point to the address
+  // of the buffer in virtual memory. The caller should only access/modify the
+  // pixels in the specified area. anything else is undefined behavior.
+  int Lock(int usage, int x, int y, int width, int height, void** addr);
+
+  // Must be called after Lock() when the caller has finished changing the
+  // buffer.
+  int Unlock();
 
   // IonBuffer that is shared between bufferhubd, producer, and consumers.
   size_t metadata_buf_size_{0};

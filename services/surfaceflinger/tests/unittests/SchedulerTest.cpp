@@ -18,12 +18,14 @@ using testing::Return;
 
 namespace android {
 
+constexpr PhysicalDisplayId PHYSICAL_DISPLAY_ID = 999;
+
 class SchedulerTest : public testing::Test {
 protected:
     class MockEventThreadConnection : public android::EventThreadConnection {
     public:
         explicit MockEventThreadConnection(EventThread* eventThread)
-              : EventThreadConnection(eventThread, ResyncCallback()) {}
+              : EventThreadConnection(eventThread, ResyncCallback(), ResetIdleTimerCallback()) {}
         ~MockEventThreadConnection() = default;
 
         MOCK_METHOD1(stealReceiveChannel, status_t(gui::BitTube* outChannel));
@@ -31,14 +33,17 @@ protected:
         MOCK_METHOD0(requestNextVsync, void());
     };
 
+    scheduler::RefreshRateConfigs mRefreshRateConfigs;
+
     /**
      * This mock Scheduler class uses implementation of mock::EventThread but keeps everything else
      * the same.
      */
     class MockScheduler : public android::Scheduler {
     public:
-        MockScheduler(std::unique_ptr<EventThread> eventThread)
-              : Scheduler([](bool) {}), mEventThread(std::move(eventThread)) {}
+        MockScheduler(const scheduler::RefreshRateConfigs& refreshRateConfigs,
+                      std::unique_ptr<EventThread> eventThread)
+              : Scheduler([](bool) {}, refreshRateConfigs), mEventThread(std::move(eventThread)) {}
 
         std::unique_ptr<EventThread> makeEventThread(
                 const char* /* connectionName */, DispSync* /* dispSync */,
@@ -69,14 +74,14 @@ SchedulerTest::SchedulerTest() {
 
     std::unique_ptr<mock::EventThread> eventThread = std::make_unique<mock::EventThread>();
     mEventThread = eventThread.get();
-    mScheduler = std::make_unique<MockScheduler>(std::move(eventThread));
+    mScheduler = std::make_unique<MockScheduler>(mRefreshRateConfigs, std::move(eventThread));
     EXPECT_CALL(*mEventThread, registerDisplayEventConnection(_)).WillOnce(Return(0));
 
     mEventThreadConnection = new MockEventThreadConnection(mEventThread);
 
     // createConnection call to scheduler makes a createEventConnection call to EventThread. Make
     // sure that call gets executed and returns an EventThread::Connection object.
-    EXPECT_CALL(*mEventThread, createEventConnection(_))
+    EXPECT_CALL(*mEventThread, createEventConnection(_, _))
             .WillRepeatedly(Return(mEventThreadConnection));
 
     mConnectionHandle = mScheduler->createConnection("appConnection", 16, ResyncCallback(),
@@ -104,8 +109,7 @@ TEST_F(SchedulerTest, testNullPtr) {
     EXPECT_TRUE(returnedValue == nullptr);
     EXPECT_TRUE(mScheduler->getEventThread(nullptr) == nullptr);
     EXPECT_TRUE(mScheduler->getEventConnection(nullptr) == nullptr);
-    ASSERT_NO_FATAL_FAILURE(
-            mScheduler->hotplugReceived(nullptr, EventThread::DisplayType::Primary, false));
+    ASSERT_NO_FATAL_FAILURE(mScheduler->hotplugReceived(nullptr, PHYSICAL_DISPLAY_ID, false));
     ASSERT_NO_FATAL_FAILURE(mScheduler->onScreenAcquired(nullptr));
     ASSERT_NO_FATAL_FAILURE(mScheduler->onScreenReleased(nullptr));
     std::string testString;
@@ -129,8 +133,8 @@ TEST_F(SchedulerTest, invalidConnectionHandle) {
 
     // The EXPECT_CALLS make sure we don't call the functions on the subsequent event threads.
     EXPECT_CALL(*mEventThread, onHotplugReceived(_, _)).Times(0);
-    ASSERT_NO_FATAL_FAILURE(mScheduler->hotplugReceived(connectionHandle,
-                                                        EventThread::DisplayType::Primary, false));
+    ASSERT_NO_FATAL_FAILURE(
+            mScheduler->hotplugReceived(connectionHandle, PHYSICAL_DISPLAY_ID, false));
 
     EXPECT_CALL(*mEventThread, onScreenAcquired()).Times(0);
     ASSERT_NO_FATAL_FAILURE(mScheduler->onScreenAcquired(connectionHandle));
@@ -158,10 +162,9 @@ TEST_F(SchedulerTest, validConnectionHandle) {
     EXPECT_TRUE(mScheduler->getEventThread(mConnectionHandle) != nullptr);
     EXPECT_TRUE(mScheduler->getEventConnection(mConnectionHandle) != nullptr);
 
-    EXPECT_CALL(*mEventThread, onHotplugReceived(EventThread::DisplayType::Primary, false))
-            .Times(1);
-    ASSERT_NO_FATAL_FAILURE(mScheduler->hotplugReceived(mConnectionHandle,
-                                                        EventThread::DisplayType::Primary, false));
+    EXPECT_CALL(*mEventThread, onHotplugReceived(PHYSICAL_DISPLAY_ID, false)).Times(1);
+    ASSERT_NO_FATAL_FAILURE(
+            mScheduler->hotplugReceived(mConnectionHandle, PHYSICAL_DISPLAY_ID, false));
 
     EXPECT_CALL(*mEventThread, onScreenAcquired()).Times(1);
     ASSERT_NO_FATAL_FAILURE(mScheduler->onScreenAcquired(mConnectionHandle));

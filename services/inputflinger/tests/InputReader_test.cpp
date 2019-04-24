@@ -103,6 +103,10 @@ public:
         return mDisplayId;
     }
 
+    const std::map<int32_t, std::vector<int32_t>>& getSpots() {
+        return mSpotsByDisplay;
+    }
+
 private:
     virtual bool getBounds(float* outMinX, float* outMinY, float* outMaxX, float* outMaxY) const {
         *outMinX = mMinX;
@@ -130,11 +134,22 @@ private:
     virtual void setPresentation(Presentation) {
     }
 
-    virtual void setSpots(const PointerCoords*, const uint32_t*, BitSet32) {
+    virtual void setSpots(const PointerCoords*, const uint32_t*, BitSet32 spotIdBits,
+            int32_t displayId) {
+        std::vector<int32_t> newSpots;
+        // Add spots for fingers that are down.
+        for (BitSet32 idBits(spotIdBits); !idBits.isEmpty(); ) {
+            uint32_t id = idBits.clearFirstMarkedBit();
+            newSpots.push_back(id);
+        }
+
+        mSpotsByDisplay[displayId] = newSpots;
     }
 
     virtual void clearSpots() {
     }
+
+    std::map<int32_t, std::vector<int32_t>> mSpotsByDisplay;
 };
 
 
@@ -143,7 +158,7 @@ private:
 class FakeInputReaderPolicy : public InputReaderPolicyInterface {
     InputReaderConfiguration mConfig;
     KeyedVector<int32_t, sp<FakePointerController> > mPointerControllers;
-    Vector<InputDeviceInfo> mInputDevices;
+    std::vector<InputDeviceInfo> mInputDevices;
     std::vector<DisplayViewport> mViewports;
     TouchAffineTransformation transform;
 
@@ -211,7 +226,7 @@ public:
         return &mConfig;
     }
 
-    const Vector<InputDeviceInfo>& getInputDevices() const {
+    const std::vector<InputDeviceInfo>& getInputDevices() const {
         return mInputDevices;
     }
 
@@ -226,6 +241,10 @@ public:
 
     void setPointerCapture(bool enabled) {
         mConfig.pointerCapture = enabled;
+    }
+
+    void setShowTouches(bool enabled) {
+        mConfig.showTouches = enabled;
     }
 
 private:
@@ -261,7 +280,7 @@ private:
         return mPointerControllers.valueFor(deviceId);
     }
 
-    virtual void notifyInputDevicesChanged(const Vector<InputDeviceInfo>& inputDevices) {
+    virtual void notifyInputDevicesChanged(const std::vector<InputDeviceInfo>& inputDevices) {
         mInputDevices = inputDevices;
     }
 
@@ -295,7 +314,7 @@ class FakeEventHub : public EventHubInterface {
         KeyedVector<int32_t, KeyInfo> keysByScanCode;
         KeyedVector<int32_t, KeyInfo> keysByUsageCode;
         KeyedVector<int32_t, bool> leds;
-        Vector<VirtualKeyDefinition> virtualKeys;
+        std::vector<VirtualKeyDefinition> virtualKeys;
         bool enabled;
 
         status_t enable() {
@@ -316,6 +335,7 @@ class FakeEventHub : public EventHubInterface {
     KeyedVector<int32_t, Device*> mDevices;
     std::vector<std::string> mExcludedDevices;
     List<RawEvent> mEvents;
+    std::unordered_map<int32_t /*deviceId*/, std::vector<TouchVideoFrame>> mVideoFrames;
 
 protected:
     virtual ~FakeEventHub() {
@@ -462,7 +482,7 @@ public:
 
     void addVirtualKeyDefinition(int32_t deviceId, const VirtualKeyDefinition& definition) {
         Device* device = getDevice(deviceId);
-        device->virtualKeys.push(definition);
+        device->virtualKeys.push_back(definition);
     }
 
     void enqueueEvent(nsecs_t when, int32_t deviceId, int32_t type,
@@ -478,6 +498,11 @@ public:
         if (type == EV_ABS) {
             setAbsoluteAxisValue(deviceId, code, value);
         }
+    }
+
+    void setVideoFrames(std::unordered_map<int32_t /*deviceId*/,
+            std::vector<TouchVideoFrame>> videoFrames) {
+        mVideoFrames = std::move(videoFrames);
     }
 
     void assertQueueIsEmpty() {
@@ -595,6 +620,12 @@ private:
     }
 
     virtual std::vector<TouchVideoFrame> getVideoFrames(int32_t deviceId) {
+        auto it = mVideoFrames.find(deviceId);
+        if (it != mVideoFrames.end()) {
+            std::vector<TouchVideoFrame> frames = std::move(it->second);
+            mVideoFrames.erase(deviceId);
+            return frames;
+        }
         return {};
     }
 
@@ -697,12 +728,12 @@ private:
     }
 
     virtual void getVirtualKeyDefinitions(int32_t deviceId,
-            Vector<VirtualKeyDefinition>& outVirtualKeys) const {
+            std::vector<VirtualKeyDefinition>& outVirtualKeys) const {
         outVirtualKeys.clear();
 
         Device* device = getDevice(deviceId);
         if (device) {
-            outVirtualKeys.appendVector(device->virtualKeys);
+            outVirtualKeys = device->virtualKeys;
         }
     }
 
@@ -811,7 +842,7 @@ private:
         return ++mGeneration;
     }
 
-    virtual void getExternalStylusDevices(Vector<InputDeviceInfo>& outDevices) {
+    virtual void getExternalStylusDevices(std::vector<InputDeviceInfo>& outDevices) {
 
     }
 
@@ -834,7 +865,7 @@ class FakeInputMapper : public InputMapper {
     KeyedVector<int32_t, int32_t> mKeyCodeStates;
     KeyedVector<int32_t, int32_t> mScanCodeStates;
     KeyedVector<int32_t, int32_t> mSwitchStates;
-    Vector<int32_t> mSupportedKeyCodes;
+    std::vector<int32_t> mSupportedKeyCodes;
     RawEvent mLastEvent;
 
     bool mConfigureWasCalled;
@@ -894,7 +925,7 @@ public:
     }
 
     void addSupportedKeyCode(int32_t keyCode) {
-        mSupportedKeyCodes.add(keyCode);
+        mSupportedKeyCodes.push_back(keyCode);
     }
 
 private:
@@ -1278,7 +1309,7 @@ TEST_F(InputReaderTest, GetInputDevices) {
             0, nullptr)); // no classes so device will be ignored
 
 
-    Vector<InputDeviceInfo> inputDevices;
+    std::vector<InputDeviceInfo> inputDevices;
     mReader->getInputDevices(inputDevices);
 
     ASSERT_EQ(1U, inputDevices.size());
@@ -4405,7 +4436,7 @@ TEST_F(SingleTouchInputMapperTest, Process_ShouldHandleAllToolTypes) {
     ASSERT_EQ(AMOTION_EVENT_ACTION_MOVE, motionArgs.action);
     ASSERT_EQ(AMOTION_EVENT_TOOL_TYPE_STYLUS, motionArgs.pointerProperties[0].toolType);
 
-    // airbrush
+    // air-brush
     processKey(mapper, BTN_TOOL_PENCIL, 0);
     processKey(mapper, BTN_TOOL_AIRBRUSH, 1);
     processSync(mapper);
@@ -5912,7 +5943,7 @@ TEST_F(MultiTouchInputMapperTest, Process_ShouldHandleAllToolTypes) {
     ASSERT_EQ(AMOTION_EVENT_ACTION_MOVE, motionArgs.action);
     ASSERT_EQ(AMOTION_EVENT_TOOL_TYPE_STYLUS, motionArgs.pointerProperties[0].toolType);
 
-    // airbrush
+    // air-brush
     processKey(mapper, BTN_TOOL_PENCIL, 0);
     processKey(mapper, BTN_TOOL_AIRBRUSH, 1);
     processSync(mapper);
@@ -6313,6 +6344,161 @@ TEST_F(MultiTouchInputMapperTest, Process_Pointer_ShouldHandleDisplayId) {
     ASSERT_NO_FATAL_FAILURE(mFakeListener->assertNotifyMotionWasCalled(&motionArgs));
     ASSERT_EQ(AMOTION_EVENT_ACTION_HOVER_MOVE, motionArgs.action);
     ASSERT_EQ(SECONDARY_DISPLAY_ID, motionArgs.displayId);
+}
+
+TEST_F(MultiTouchInputMapperTest, Process_Pointer_ShowTouches) {
+    // Setup the first touch screen device.
+    MultiTouchInputMapper* mapper = new MultiTouchInputMapper(mDevice);
+    prepareAxes(POSITION | ID | SLOT);
+    addConfigurationProperty("touch.deviceType", "touchScreen");
+    addMapperAndConfigure(mapper);
+
+    // Create the second touch screen device, and enable multi fingers.
+    const std::string USB2 = "USB2";
+    const int32_t SECOND_DEVICE_ID = 2;
+    InputDeviceIdentifier identifier;
+    identifier.name = DEVICE_NAME;
+    identifier.location = USB2;
+    InputDevice* device2 = new InputDevice(mFakeContext, SECOND_DEVICE_ID, DEVICE_GENERATION,
+            DEVICE_CONTROLLER_NUMBER, identifier, DEVICE_CLASSES);
+    mFakeEventHub->addDevice(SECOND_DEVICE_ID, DEVICE_NAME, 0 /*classes*/);
+    mFakeEventHub->addAbsoluteAxis(SECOND_DEVICE_ID, ABS_MT_POSITION_X, RAW_X_MIN, RAW_X_MAX,
+            0 /*flat*/, 0 /*fuzz*/);
+    mFakeEventHub->addAbsoluteAxis(SECOND_DEVICE_ID, ABS_MT_POSITION_Y, RAW_Y_MIN, RAW_Y_MAX,
+            0 /*flat*/, 0 /*fuzz*/);
+    mFakeEventHub->addAbsoluteAxis(SECOND_DEVICE_ID, ABS_MT_TRACKING_ID, RAW_ID_MIN, RAW_ID_MAX,
+            0 /*flat*/, 0 /*fuzz*/);
+    mFakeEventHub->addAbsoluteAxis(SECOND_DEVICE_ID, ABS_MT_SLOT, RAW_SLOT_MIN, RAW_SLOT_MAX,
+            0 /*flat*/, 0 /*fuzz*/);
+    mFakeEventHub->setAbsoluteAxisValue(SECOND_DEVICE_ID, ABS_MT_SLOT, 0 /*value*/);
+    mFakeEventHub->addConfigurationProperty(SECOND_DEVICE_ID, String8("touch.deviceType"),
+            String8("touchScreen"));
+
+    // Setup the second touch screen device.
+    MultiTouchInputMapper* mapper2 = new MultiTouchInputMapper(device2);
+    device2->addMapper(mapper2);
+    device2->configure(ARBITRARY_TIME, mFakePolicy->getReaderConfiguration(), 0 /*changes*/);
+    device2->reset(ARBITRARY_TIME);
+
+    // Setup PointerController.
+    sp<FakePointerController> fakePointerController = new FakePointerController();
+    mFakePolicy->setPointerController(mDevice->getId(), fakePointerController);
+    mFakePolicy->setPointerController(SECOND_DEVICE_ID, fakePointerController);
+
+    // Setup policy for associated displays and show touches.
+    const uint8_t hdmi1 = 0;
+    const uint8_t hdmi2 = 1;
+    mFakePolicy->addInputPortAssociation(DEVICE_LOCATION, hdmi1);
+    mFakePolicy->addInputPortAssociation(USB2, hdmi2);
+    mFakePolicy->setShowTouches(true);
+
+    // Create displays.
+    prepareDisplay(DISPLAY_ORIENTATION_0, hdmi1);
+    prepareSecondaryDisplay(ViewportType::VIEWPORT_EXTERNAL, hdmi2);
+
+    // Default device will reconfigure above, need additional reconfiguration for another device.
+    device2->configure(ARBITRARY_TIME, mFakePolicy->getReaderConfiguration(),
+            InputReaderConfiguration::CHANGE_DISPLAY_INFO);
+
+    // Two fingers down at default display.
+    int32_t x1 = 100, y1 = 125, x2 = 300, y2 = 500;
+    processPosition(mapper, x1, y1);
+    processId(mapper, 1);
+    processSlot(mapper, 1);
+    processPosition(mapper, x2, y2);
+    processId(mapper, 2);
+    processSync(mapper);
+
+    std::map<int32_t, std::vector<int32_t>>::const_iterator iter =
+            fakePointerController->getSpots().find(DISPLAY_ID);
+    ASSERT_TRUE(iter != fakePointerController->getSpots().end());
+    ASSERT_EQ(size_t(2), iter->second.size());
+
+    // Two fingers down at second display.
+    processPosition(mapper2, x1, y1);
+    processId(mapper2, 1);
+    processSlot(mapper2, 1);
+    processPosition(mapper2, x2, y2);
+    processId(mapper2, 2);
+    processSync(mapper2);
+
+    iter = fakePointerController->getSpots().find(SECONDARY_DISPLAY_ID);
+    ASSERT_TRUE(iter != fakePointerController->getSpots().end());
+    ASSERT_EQ(size_t(2), iter->second.size());
+}
+
+TEST_F(MultiTouchInputMapperTest, VideoFrames_ReceivedByListener) {
+    MultiTouchInputMapper* mapper = new MultiTouchInputMapper(mDevice);
+    prepareAxes(POSITION);
+    addConfigurationProperty("touch.deviceType", "touchScreen");
+    prepareDisplay(DISPLAY_ORIENTATION_0);
+    addMapperAndConfigure(mapper);
+
+    NotifyMotionArgs motionArgs;
+    // Unrotated video frame
+    TouchVideoFrame frame(3, 2, {1, 2, 3, 4, 5, 6}, {1, 2});
+    std::vector<TouchVideoFrame> frames{frame};
+    mFakeEventHub->setVideoFrames({{mDevice->getId(), frames}});
+    processPosition(mapper, 100, 200);
+    processSync(mapper);
+    ASSERT_NO_FATAL_FAILURE(mFakeListener->assertNotifyMotionWasCalled(&motionArgs));
+    ASSERT_EQ(frames, motionArgs.videoFrames);
+
+    // Subsequent touch events should not have any videoframes
+    // This is implemented separately in FakeEventHub,
+    // but that should match the behaviour of TouchVideoDevice.
+    processPosition(mapper, 200, 200);
+    processSync(mapper);
+    ASSERT_NO_FATAL_FAILURE(mFakeListener->assertNotifyMotionWasCalled(&motionArgs));
+    ASSERT_EQ(std::vector<TouchVideoFrame>(), motionArgs.videoFrames);
+}
+
+TEST_F(MultiTouchInputMapperTest, VideoFrames_AreRotated) {
+    MultiTouchInputMapper* mapper = new MultiTouchInputMapper(mDevice);
+    prepareAxes(POSITION);
+    addConfigurationProperty("touch.deviceType", "touchScreen");
+    addMapperAndConfigure(mapper);
+    // Unrotated video frame
+    TouchVideoFrame frame(3, 2, {1, 2, 3, 4, 5, 6}, {1, 2});
+    NotifyMotionArgs motionArgs;
+
+    // Test all 4 orientations
+    for (int32_t orientation : {DISPLAY_ORIENTATION_0, DISPLAY_ORIENTATION_90,
+             DISPLAY_ORIENTATION_180, DISPLAY_ORIENTATION_270}) {
+        SCOPED_TRACE("Orientation " + StringPrintf("%i", orientation));
+        clearViewports();
+        prepareDisplay(orientation);
+        std::vector<TouchVideoFrame> frames{frame};
+        mFakeEventHub->setVideoFrames({{mDevice->getId(), frames}});
+        processPosition(mapper, 100, 200);
+        processSync(mapper);
+        ASSERT_NO_FATAL_FAILURE(mFakeListener->assertNotifyMotionWasCalled(&motionArgs));
+        frames[0].rotate(orientation);
+        ASSERT_EQ(frames, motionArgs.videoFrames);
+    }
+}
+
+TEST_F(MultiTouchInputMapperTest, VideoFrames_MultipleFramesAreRotated) {
+    MultiTouchInputMapper* mapper = new MultiTouchInputMapper(mDevice);
+    prepareAxes(POSITION);
+    addConfigurationProperty("touch.deviceType", "touchScreen");
+    addMapperAndConfigure(mapper);
+    // Unrotated video frames. There's no rule that they must all have the same dimensions,
+    // so mix these.
+    TouchVideoFrame frame1(3, 2, {1, 2, 3, 4, 5, 6}, {1, 2});
+    TouchVideoFrame frame2(3, 3, {0, 1, 2, 3, 4, 5, 6, 7, 8}, {1, 3});
+    TouchVideoFrame frame3(2, 2, {10, 20, 10, 0}, {1, 4});
+    std::vector<TouchVideoFrame> frames{frame1, frame2, frame3};
+    NotifyMotionArgs motionArgs;
+
+    prepareDisplay(DISPLAY_ORIENTATION_90);
+    mFakeEventHub->setVideoFrames({{mDevice->getId(), frames}});
+    processPosition(mapper, 100, 200);
+    processSync(mapper);
+    ASSERT_NO_FATAL_FAILURE(mFakeListener->assertNotifyMotionWasCalled(&motionArgs));
+    std::for_each(frames.begin(), frames.end(),
+            [](TouchVideoFrame& frame) { frame.rotate(DISPLAY_ORIENTATION_90); });
+    ASSERT_EQ(frames, motionArgs.videoFrames);
 }
 
 } // namespace android

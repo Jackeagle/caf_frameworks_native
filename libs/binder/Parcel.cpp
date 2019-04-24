@@ -76,14 +76,6 @@ static size_t pad_size(size_t s) {
 // Note: must be kept in sync with android/os/StrictMode.java's PENALTY_GATHER
 #define STRICT_MODE_PENALTY_GATHER (1 << 31)
 
-// XXX This can be made public if we want to provide
-// support for typed data.
-struct small_flat_data
-{
-    uint32_t type;
-    uint32_t data;
-};
-
 namespace android {
 
 static pthread_mutex_t gParcelGlobalAllocSizeLock = PTHREAD_MUTEX_INITIALIZER;
@@ -181,7 +173,10 @@ static void release_object(const sp<ProcessState>& proc,
                 if ((outAshmemSize != nullptr) && ashmem_valid(obj.handle)) {
                     int size = ashmem_get_size_region(obj.handle);
                     if (size > 0) {
-                        *outAshmemSize -= size;
+                        // ashmem size might have changed since last time it was accounted for, e.g.
+                        // in acquire_object(). Value of *outAshmemSize is not critical since we are
+                        // releasing the object anyway. Check for integer overflow condition.
+                        *outAshmemSize -= std::min(*outAshmemSize, static_cast<size_t>(size));
                     }
                 }
 
@@ -599,15 +594,51 @@ bool Parcel::hasFileDescriptors() const
     return mHasFds;
 }
 
+void Parcel::updateWorkSourceRequestHeaderPosition() const {
+    // Only update the request headers once. We only want to point
+    // to the first headers read/written.
+    if (!mRequestHeaderPresent) {
+        mWorkSourceRequestHeaderPosition = dataPosition();
+        mRequestHeaderPresent = true;
+    }
+}
+
 // Write RPC headers.  (previously just the interface token)
 status_t Parcel::writeInterfaceToken(const String16& interface)
 {
     const IPCThreadState* threadState = IPCThreadState::self();
     writeInt32(threadState->getStrictModePolicy() | STRICT_MODE_PENALTY_GATHER);
+    updateWorkSourceRequestHeaderPosition();
     writeInt32(threadState->shouldPropagateWorkSource() ?
             threadState->getCallingWorkSourceUid() : IPCThreadState::kUnsetWorkSource);
     // currently the interface identification token is just its name as a string
     return writeString16(interface);
+}
+
+bool Parcel::replaceCallingWorkSourceUid(uid_t uid)
+{
+    if (!mRequestHeaderPresent) {
+        return false;
+    }
+
+    const size_t initialPosition = dataPosition();
+    setDataPosition(mWorkSourceRequestHeaderPosition);
+    status_t err = writeInt32(uid);
+    setDataPosition(initialPosition);
+    return err == NO_ERROR;
+}
+
+uid_t Parcel::readCallingWorkSourceUid()
+{
+    if (!mRequestHeaderPresent) {
+        return IPCThreadState::kUnsetWorkSource;
+    }
+
+    const size_t initialPosition = dataPosition();
+    setDataPosition(mWorkSourceRequestHeaderPosition);
+    uid_t uid = readInt32();
+    setDataPosition(initialPosition);
+    return uid;
 }
 
 bool Parcel::checkInterface(IBinder* binder) const
@@ -634,6 +665,7 @@ bool Parcel::enforceInterface(const String16& interface,
       threadState->setStrictModePolicy(strictPolicy);
     }
     // WorkSource.
+    updateWorkSourceRequestHeaderPosition();
     int32_t workSource = readInt32();
     threadState->setCallingWorkSourceUidWithoutPropagation(workSource);
     // Interface descriptor.
@@ -2889,6 +2921,8 @@ void Parcel::initState()
     mAllowFds = true;
     mOwner = nullptr;
     mOpenAshmemSize = 0;
+    mWorkSourceRequestHeaderPosition = 0;
+    mRequestHeaderPresent = false;
 
     // racing multiple init leads only to multiple identical write
     if (gMaxFds == 0) {

@@ -126,16 +126,19 @@ TEST_F(SurfaceTest, QueuesToWindowComposerIsTrueWhenPurgatorized) {
 }
 
 // This test probably doesn't belong here.
-TEST_F(SurfaceTest, ScreenshotsOfProtectedBuffersSucceed) {
+TEST_F(SurfaceTest, ScreenshotsOfProtectedBuffersDontSucceed) {
     sp<ANativeWindow> anw(mSurface);
 
     // Verify the screenshot works with no protected buffers.
     sp<ISurfaceComposer> sf(ComposerService::getComposerService());
-    sp<IBinder> display(sf->getBuiltInDisplay(
-            ISurfaceComposer::eDisplayIdMain));
+
+    const sp<IBinder> display = sf->getInternalDisplayToken();
+    ASSERT_FALSE(display == nullptr);
+
     sp<GraphicBuffer> outBuffer;
+    bool ignored;
     ASSERT_EQ(NO_ERROR,
-              sf->captureScreen(display, &outBuffer, ui::Dataspace::V0_SRGB,
+              sf->captureScreen(display, &outBuffer, ignored, ui::Dataspace::V0_SRGB,
                                 ui::PixelFormat::RGBA_8888, Rect(), 64, 64, false));
 
     ASSERT_EQ(NO_ERROR, native_window_api_connect(anw.get(),
@@ -167,7 +170,7 @@ TEST_F(SurfaceTest, ScreenshotsOfProtectedBuffersSucceed) {
         ASSERT_EQ(NO_ERROR, anw->queueBuffer(anw.get(), buf, -1));
     }
     ASSERT_EQ(NO_ERROR,
-              sf->captureScreen(display, &outBuffer, ui::Dataspace::V0_SRGB,
+              sf->captureScreen(display, &outBuffer, ignored, ui::Dataspace::V0_SRGB,
                                 ui::PixelFormat::RGBA_8888, Rect(), 64, 64, false));
 }
 
@@ -552,12 +555,16 @@ public:
     sp<IBinder> createDisplay(const String8& /*displayName*/,
             bool /*secure*/) override { return nullptr; }
     void destroyDisplay(const sp<IBinder>& /*display */) override {}
-    sp<IBinder> getBuiltInDisplay(int32_t /*id*/) override { return nullptr; }
+    std::vector<PhysicalDisplayId> getPhysicalDisplayIds() const override { return {}; }
+    sp<IBinder> getPhysicalDisplayToken(PhysicalDisplayId) const override { return nullptr; }
     void setTransactionState(const Vector<ComposerState>& /*state*/,
                              const Vector<DisplayState>& /*displays*/, uint32_t /*flags*/,
                              const sp<IBinder>& /*applyToken*/,
                              const InputWindowCommands& /*inputWindowCommands*/,
-                             int64_t /*desiredPresentTime*/) override {}
+                             int64_t /*desiredPresentTime*/,
+                             const cached_buffer_t& /*cachedBuffer*/,
+                             const std::vector<ListenerCallbacks>& /*listenerCallbacks*/) override {
+    }
 
     void bootFinished() override {}
     bool authenticateSurfaceTexture(
@@ -609,18 +616,21 @@ public:
     status_t setActiveColorMode(const sp<IBinder>& /*display*/,
         ColorMode /*colorMode*/) override { return NO_ERROR; }
     status_t captureScreen(const sp<IBinder>& /*display*/, sp<GraphicBuffer>* /*outBuffer*/,
+                           bool& /* outCapturedSecureLayers */,
                            const ui::Dataspace /*reqDataspace*/,
                            const ui::PixelFormat /*reqPixelFormat*/, Rect /*sourceCrop*/,
                            uint32_t /*reqWidth*/, uint32_t /*reqHeight*/,
-                           bool /*useIdentityTransform*/, Rotation /*rotation*/) override {
+                           bool /*useIdentityTransform*/, Rotation /*rotation*/,
+                           bool /*captureSecureLayers*/) override {
         return NO_ERROR;
     }
-    virtual status_t captureLayers(const sp<IBinder>& /*parentHandle*/,
-                                   sp<GraphicBuffer>* /*outBuffer*/,
-                                   const ui::Dataspace /*reqDataspace*/,
-                                   const ui::PixelFormat /*reqPixelFormat*/,
-                                   const Rect& /*sourceCrop*/, float /*frameScale*/,
-                                   bool /*childrenOnly*/) override {
+    virtual status_t captureLayers(
+            const sp<IBinder>& /*parentHandle*/, sp<GraphicBuffer>* /*outBuffer*/,
+            const ui::Dataspace /*reqDataspace*/, const ui::PixelFormat /*reqPixelFormat*/,
+            const Rect& /*sourceCrop*/,
+            const std::unordered_set<sp<IBinder>,
+                                     ISurfaceComposer::SpHash<IBinder>>& /*excludeHandles*/,
+            float /*frameScale*/, bool /*childrenOnly*/) override {
         return NO_ERROR;
     }
     status_t clearAnimationFrameStats() override { return NO_ERROR; }
@@ -664,12 +674,33 @@ public:
     status_t getColorManagement(bool* /*outGetColorManagement*/) const override { return NO_ERROR; }
     status_t getProtectedContentSupport(bool* /*outSupported*/) const override { return NO_ERROR; }
 
-    status_t cacheBuffer(const sp<IBinder>& /*token*/, const sp<GraphicBuffer>& /*buffer*/,
-                         int32_t* /*outBufferId*/) {
+    status_t isWideColorDisplay(const sp<IBinder>&, bool*) const override { return NO_ERROR; }
+    status_t getDisplayBrightnessSupport(const sp<IBinder>& /*displayToken*/,
+                                         bool* /*outSupport*/) const override {
         return NO_ERROR;
     }
-    status_t uncacheBuffer(const sp<IBinder>& /*token*/, int32_t /*bufferId*/) { return NO_ERROR; }
-    status_t isWideColorDisplay(const sp<IBinder>&, bool*) const override { return NO_ERROR; }
+    status_t setDisplayBrightness(const sp<IBinder>& /*displayToken*/,
+                                  float /*brightness*/) const override {
+        return NO_ERROR;
+    }
+
+    status_t addRegionSamplingListener(const Rect& /*samplingArea*/,
+                                       const sp<IBinder>& /*stopLayerHandle*/,
+                                       const sp<IRegionSamplingListener>& /*listener*/) override {
+        return NO_ERROR;
+    }
+    status_t removeRegionSamplingListener(
+            const sp<IRegionSamplingListener>& /*listener*/) override {
+        return NO_ERROR;
+    }
+    status_t setAllowedDisplayConfigs(const sp<IBinder>& /*displayToken*/,
+                                      const std::vector<int32_t>& /*allowedConfigs*/) override {
+        return NO_ERROR;
+    }
+    status_t getAllowedDisplayConfigs(const sp<IBinder>& /*displayToken*/,
+                                      std::vector<int32_t>* /*outAllowedConfigs*/) override {
+        return NO_ERROR;
+    }
 
 protected:
     IBinder* onAsBinder() override { return nullptr; }

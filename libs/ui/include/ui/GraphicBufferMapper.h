@@ -41,6 +41,10 @@ class Rect;
 class GraphicBufferMapper : public Singleton<GraphicBufferMapper>
 {
 public:
+    enum Version {
+        GRALLOC_2,
+        GRALLOC_3,
+    };
     static void preloadHal();
     static inline GraphicBufferMapper& get() { return getInstance(); }
 
@@ -78,9 +82,14 @@ public:
 
     status_t unlockAsync(buffer_handle_t handle, int *fenceFd);
 
+    status_t isSupported(uint32_t width, uint32_t height, android::PixelFormat format,
+                         uint32_t layerCount, uint64_t usage, bool* outSupported);
+
     const GrallocMapper& getGrallocMapper() const {
         return reinterpret_cast<const GrallocMapper&>(*mMapper);
     }
+
+    Version getMapperVersion() const { return mMapperVersion; }
 
 private:
     friend class Singleton<GraphicBufferMapper>;
@@ -88,6 +97,8 @@ private:
     GraphicBufferMapper();
 
     std::unique_ptr<const GrallocMapper> mMapper;
+
+    Version mMapperVersion;
 };
 
 // ---------------------------------------------------------------------------

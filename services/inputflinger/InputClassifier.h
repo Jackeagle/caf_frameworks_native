@@ -17,6 +17,7 @@
 #ifndef _UI_INPUT_CLASSIFIER_H
 #define _UI_INPUT_CLASSIFIER_H
 
+#include <android-base/thread_annotations.h>
 #include <utils/RefBase.h>
 #include <unordered_map>
 #include <thread>
@@ -68,8 +69,19 @@ public:
      * provide a MotionClassification for the current gesture.
      */
     virtual MotionClassification classify(const NotifyMotionArgs& args) = 0;
+    /**
+     * Reset all internal HAL state.
+     */
     virtual void reset() = 0;
+    /**
+     * Reset HAL state for a specific device.
+     */
     virtual void reset(const NotifyDeviceResetArgs& args) = 0;
+
+    /**
+     * Dump the state of the motion classifier
+     */
+    virtual void dump(std::string& dump) = 0;
 };
 
 /**
@@ -77,6 +89,12 @@ public:
  * Provides classification to events.
  */
 class InputClassifierInterface : public virtual RefBase, public InputListenerInterface {
+public:
+    /**
+     * Dump the state of the input classifier.
+     * This method may be called on any thread (usually by the input manager).
+     */
+    virtual void dump(std::string& dump) = 0;
 protected:
     InputClassifierInterface() { }
     virtual ~InputClassifierInterface() { }
@@ -95,6 +113,9 @@ protected:
  */
 class MotionClassifier final : public MotionClassifierInterface {
 public:
+    /**
+     * The provided pointer to the service cannot be null.
+     */
     MotionClassifier(sp<android::hardware::input::classifier::V1_0::IInputClassifier> service);
     ~MotionClassifier();
     /**
@@ -110,9 +131,15 @@ public:
     virtual void reset() override;
     virtual void reset(const NotifyDeviceResetArgs& args) override;
 
+    virtual void dump(std::string& dump) override;
+
 private:
     // The events that need to be sent to the HAL.
     BlockingQueue<ClassifierEvent> mEvents;
+    /**
+     * Add an event to the queue mEvents.
+     */
+    void enqueueEvent(ClassifierEvent&& event);
     /**
      * Thread that will communicate with InputClassifier HAL.
      * This should be the only thread that communicates with InputClassifier HAL,
@@ -129,16 +156,16 @@ private:
      */
     void callInputClassifierHal();
     /**
-     * Access to the InputClassifier HAL
+     * Access to the InputClassifier HAL. Can always be safely dereferenced.
      */
-    sp<android::hardware::input::classifier::V1_0::IInputClassifier> mService;
+    const sp<android::hardware::input::classifier::V1_0::IInputClassifier> mService;
     std::mutex mLock;
     /**
      * Per-device input classifications. Should only be accessed using the
      * getClassification / setClassification methods.
      */
     std::unordered_map<int32_t /*deviceId*/, MotionClassification>
-            mClassifications; //GUARDED_BY(mLock);
+            mClassifications GUARDED_BY(mLock);
     /**
      * Set the current classification for a given device.
      */
@@ -148,7 +175,7 @@ private:
      */
     MotionClassification getClassification(int32_t deviceId);
     void updateClassification(int32_t deviceId, nsecs_t eventTime,
-        MotionClassification classification);
+            MotionClassification classification);
     /**
      * Clear all current classifications
      */
@@ -159,18 +186,9 @@ private:
      *
      * Accessed indirectly by both InputClassifier thread and the thread that receives notifyMotion.
      */
-    std::unordered_map<int32_t /*deviceId*/, nsecs_t /*downTime*/>
-            mLastDownTimes; //GUARDED_BY(mLock);
+    std::unordered_map<int32_t /*deviceId*/, nsecs_t /*downTime*/> mLastDownTimes GUARDED_BY(mLock);
+
     void updateLastDownTime(int32_t deviceId, nsecs_t downTime);
-    // Should only be accessed through isResetNeeded() and setResetNeeded()
-    bool mResetNeeded = false; //GUARDED_BY(mLock);
-    /**
-     * Check whether reset should be performed. Reset should be performed
-     * if the eventTime of the current event is older than mLastDownTime,
-     * i.e. a new gesture has already begun, but an older gesture is still being processed.
-     */
-    bool isResetNeeded(nsecs_t eventTime);
-    void setResetNeeded(bool isNeeded);
 
     /**
      * Exit the InputClassifier HAL thread.
@@ -179,23 +197,35 @@ private:
     void requestExit();
 };
 
+
 /**
  * Implementation of the InputClassifierInterface.
  * Represents a separate stage of input processing. All of the input events go through this stage.
  * Acts as a passthrough for all input events except for motion events.
  * The events of motion type are sent to MotionClassifier.
  */
-class InputClassifier : public InputClassifierInterface {
+class InputClassifier : public InputClassifierInterface,
+        public android::hardware::hidl_death_recipient {
 public:
     explicit InputClassifier(const sp<InputListenerInterface>& listener);
-    virtual void notifyConfigurationChanged(const NotifyConfigurationChangedArgs* args);
-    virtual void notifyKey(const NotifyKeyArgs* args);
-    virtual void notifyMotion(const NotifyMotionArgs* args);
-    virtual void notifySwitch(const NotifySwitchArgs* args);
-    virtual void notifyDeviceReset(const NotifyDeviceResetArgs* args);
+    // Some of the constructor logic is finished in onFirstRef
+    virtual void onFirstRef() override;
+
+    virtual void notifyConfigurationChanged(const NotifyConfigurationChangedArgs* args) override;
+    virtual void notifyKey(const NotifyKeyArgs* args) override;
+    virtual void notifyMotion(const NotifyMotionArgs* args) override;
+    virtual void notifySwitch(const NotifySwitchArgs* args) override;
+    virtual void notifyDeviceReset(const NotifyDeviceResetArgs* args) override;
+
+    virtual void serviceDied(uint64_t cookie,
+            const wp<android::hidl::base::V1_0::IBase>& who) override;
+
+    virtual void dump(std::string& dump) override;
 
 private:
-    std::unique_ptr<MotionClassifierInterface> mMotionClassifier = nullptr;
+    // Protect access to mMotionClassifier, since it may become null via a hidl callback
+    std::mutex mLock;
+    std::unique_ptr<MotionClassifierInterface> mMotionClassifier GUARDED_BY(mLock);
     // The next stage to pass input events to
     sp<InputListenerInterface> mListener;
 };

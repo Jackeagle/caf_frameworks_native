@@ -20,12 +20,10 @@
 #include <stdint.h>
 #include <sys/types.h>
 
-#include <utils/RefBase.h>
-#include <utils/Errors.h>
-#include <utils/Timers.h>
-#include <utils/Vector.h>
-
+#include <binder/IBinder.h>
 #include <binder/IInterface.h>
+
+#include <gui/ITransactionCompletedListener.h>
 
 #include <ui/ConfigStoreTypes.h>
 #include <ui/DisplayedFrameStats.h>
@@ -34,11 +32,19 @@
 #include <ui/GraphicTypes.h>
 #include <ui/PixelFormat.h>
 
+#include <utils/Errors.h>
+#include <utils/RefBase.h>
+#include <utils/Timers.h>
+#include <utils/Vector.h>
+
+#include <optional>
+#include <unordered_set>
 #include <vector>
 
 namespace android {
 // ----------------------------------------------------------------------------
 
+struct cached_buffer_t;
 struct ComposerState;
 struct DisplayState;
 struct DisplayInfo;
@@ -49,6 +55,7 @@ class HdrCapabilities;
 class IDisplayEventConnection;
 class IGraphicBufferProducer;
 class ISurfaceComposerClient;
+class IRegionSamplingListener;
 class Rect;
 enum class FrameEvent;
 
@@ -71,11 +78,6 @@ public:
         eEarlyWakeup = 0x04
     };
 
-    enum {
-        eDisplayIdMain = 0,
-        eDisplayIdHdmi = 1
-    };
-
     enum Rotation {
         eRotateNone = 0,
         eRotate90   = 1,
@@ -88,7 +90,7 @@ public:
         eVsyncSourceSurfaceFlinger = 1
     };
 
-    /* 
+    /*
      * Create a connection with SurfaceFlinger.
      */
     virtual sp<ISurfaceComposerClient> createConnection() = 0;
@@ -108,17 +110,35 @@ public:
      */
     virtual void destroyDisplay(const sp<IBinder>& display) = 0;
 
-    /* get the token for the existing default displays. possible values
-     * for id are eDisplayIdMain and eDisplayIdHdmi.
+    /* get stable IDs for connected physical displays.
      */
-    virtual sp<IBinder> getBuiltInDisplay(int32_t id) = 0;
+    virtual std::vector<PhysicalDisplayId> getPhysicalDisplayIds() const = 0;
+
+    // TODO(b/74619554): Remove this stopgap once the framework is display-agnostic.
+    std::optional<PhysicalDisplayId> getInternalDisplayId() const {
+        const auto displayIds = getPhysicalDisplayIds();
+        return displayIds.empty() ? std::nullopt : std::make_optional(displayIds.front());
+    }
+
+    /* get token for a physical display given its stable ID obtained via getPhysicalDisplayIds or a
+     * DisplayEventReceiver hotplug event.
+     */
+    virtual sp<IBinder> getPhysicalDisplayToken(PhysicalDisplayId displayId) const = 0;
+
+    // TODO(b/74619554): Remove this stopgap once the framework is display-agnostic.
+    sp<IBinder> getInternalDisplayToken() const {
+        const auto displayId = getInternalDisplayId();
+        return displayId ? getPhysicalDisplayToken(*displayId) : nullptr;
+    }
 
     /* open/close transactions. requires ACCESS_SURFACE_FLINGER permission */
     virtual void setTransactionState(const Vector<ComposerState>& state,
                                      const Vector<DisplayState>& displays, uint32_t flags,
                                      const sp<IBinder>& applyToken,
                                      const InputWindowCommands& inputWindowCommands,
-                                     int64_t desiredPresentTime) = 0;
+                                     int64_t desiredPresentTime,
+                                     const cached_buffer_t& uncacheBuffer,
+                                     const std::vector<ListenerCallbacks>& listenerCallbacks) = 0;
 
     /* signal that we're done booting.
      * Requires ACCESS_SURFACE_FLINGER permission
@@ -181,8 +201,7 @@ public:
      * of the buffer. The caller should pick the data space and pixel format
      * that it can consume.
      *
-     * At the moment, sourceCrop is ignored and is always set to the visible
-     * region (projected display viewport) of the screen.
+     * sourceCrop is the crop on the logical display.
      *
      * reqWidth and reqHeight specifies the size of the buffer.  When either
      * of them is 0, they are set to the size of the logical display viewport.
@@ -193,10 +212,11 @@ public:
      * it) around its center.
      */
     virtual status_t captureScreen(const sp<IBinder>& display, sp<GraphicBuffer>* outBuffer,
-                                   const ui::Dataspace reqDataspace,
+                                   bool& outCapturedSecureLayers, const ui::Dataspace reqDataspace,
                                    const ui::PixelFormat reqPixelFormat, Rect sourceCrop,
                                    uint32_t reqWidth, uint32_t reqHeight, bool useIdentityTransform,
-                                   Rotation rotation = eRotateNone) = 0;
+                                   Rotation rotation = eRotateNone,
+                                   bool captureSecureLayers = false) = 0;
     /**
      * Capture the specified screen. This requires READ_FRAME_BUFFER
      * permission.  This function will fail if there is a secure window on
@@ -221,9 +241,16 @@ public:
     virtual status_t captureScreen(const sp<IBinder>& display, sp<GraphicBuffer>* outBuffer,
                                    Rect sourceCrop, uint32_t reqWidth, uint32_t reqHeight,
                                    bool useIdentityTransform, Rotation rotation = eRotateNone) {
-        return captureScreen(display, outBuffer, ui::Dataspace::V0_SRGB, ui::PixelFormat::RGBA_8888,
-                             sourceCrop, reqWidth, reqHeight, useIdentityTransform, rotation);
+        bool outIgnored;
+        return captureScreen(display, outBuffer, outIgnored, ui::Dataspace::V0_SRGB,
+                             ui::PixelFormat::RGBA_8888, sourceCrop, reqWidth, reqHeight,
+                             useIdentityTransform, rotation);
     }
+
+    template <class AA>
+    struct SpHash {
+        size_t operator()(const sp<AA>& k) const { return std::hash<AA*>()(k.get()); }
+    };
 
     /**
      * Capture a subtree of the layer hierarchy, potentially ignoring the root node.
@@ -232,10 +259,12 @@ public:
      * of the buffer. The caller should pick the data space and pixel format
      * that it can consume.
      */
-    virtual status_t captureLayers(const sp<IBinder>& layerHandleBinder,
-                                   sp<GraphicBuffer>* outBuffer, const ui::Dataspace reqDataspace,
-                                   const ui::PixelFormat reqPixelFormat, const Rect& sourceCrop,
-                                   float frameScale = 1.0, bool childrenOnly = false) = 0;
+    virtual status_t captureLayers(
+            const sp<IBinder>& layerHandleBinder, sp<GraphicBuffer>* outBuffer,
+            const ui::Dataspace reqDataspace, const ui::PixelFormat reqPixelFormat,
+            const Rect& sourceCrop,
+            const std::unordered_set<sp<IBinder>, SpHash<IBinder>>& excludeHandles,
+            float frameScale = 1.0, bool childrenOnly = false) = 0;
 
     /**
      * Capture a subtree of the layer hierarchy into an sRGB buffer with RGBA_8888 pixel format,
@@ -245,7 +274,7 @@ public:
                            const Rect& sourceCrop, float frameScale = 1.0,
                            bool childrenOnly = false) {
         return captureLayers(layerHandleBinder, outBuffer, ui::Dataspace::V0_SRGB,
-                             ui::PixelFormat::RGBA_8888, sourceCrop, frameScale, childrenOnly);
+                             ui::PixelFormat::RGBA_8888, sourceCrop, {}, frameScale, childrenOnly);
     }
 
     /* Clears the frame statistics for animations.
@@ -320,17 +349,79 @@ public:
      */
     virtual status_t getProtectedContentSupport(bool* outSupported) const = 0;
 
-    virtual status_t cacheBuffer(const sp<IBinder>& token, const sp<GraphicBuffer>& buffer,
-                                 int32_t* outBufferId) = 0;
-
-    virtual status_t uncacheBuffer(const sp<IBinder>& token, int32_t bufferId) = 0;
-
     /*
      * Queries whether the given display is a wide color display.
      * Requires the ACCESS_SURFACE_FLINGER permission.
      */
     virtual status_t isWideColorDisplay(const sp<IBinder>& token,
                                         bool* outIsWideColorDisplay) const = 0;
+
+    /* Registers a listener to stream median luma updates from SurfaceFlinger.
+     *
+     * The sampling area is bounded by both samplingArea and the given stopLayerHandle
+     * (i.e., only layers behind the stop layer will be captured and sampled).
+     *
+     * Multiple listeners may be provided so long as they have independent listeners.
+     * If multiple listeners are provided, the effective sampling region for each listener will
+     * be bounded by whichever stop layer has a lower Z value.
+     *
+     * Requires the same permissions as captureLayers and captureScreen.
+     */
+    virtual status_t addRegionSamplingListener(const Rect& samplingArea,
+                                               const sp<IBinder>& stopLayerHandle,
+                                               const sp<IRegionSamplingListener>& listener) = 0;
+
+    /*
+     * Removes a listener that was streaming median luma updates from SurfaceFlinger.
+     */
+    virtual status_t removeRegionSamplingListener(const sp<IRegionSamplingListener>& listener) = 0;
+
+    /*
+     * Sets the allowed display configurations to be used.
+     * The allowedConfigs in a vector of indexes corresponding to the configurations
+     * returned from getDisplayConfigs().
+     */
+    virtual status_t setAllowedDisplayConfigs(const sp<IBinder>& displayToken,
+                                              const std::vector<int32_t>& allowedConfigs) = 0;
+
+    /*
+     * Returns the allowed display configurations currently set.
+     * The allowedConfigs in a vector of indexes corresponding to the configurations
+     * returned from getDisplayConfigs().
+     */
+    virtual status_t getAllowedDisplayConfigs(const sp<IBinder>& displayToken,
+                                              std::vector<int32_t>* outAllowedConfigs) = 0;
+    /*
+     * Gets whether brightness operations are supported on a display.
+     *
+     * displayToken
+     *      The token of the display.
+     * outSupport
+     *      An output parameter for whether brightness operations are supported.
+     *
+     * Returns NO_ERROR upon success. Otherwise,
+     *      NAME_NOT_FOUND if the display is invalid, or
+     *      BAD_VALUE      if the output parameter is invalid.
+     */
+    virtual status_t getDisplayBrightnessSupport(const sp<IBinder>& displayToken,
+                                                 bool* outSupport) const = 0;
+
+    /*
+     * Sets the brightness of a display.
+     *
+     * displayToken
+     *      The token of the display whose brightness is set.
+     * brightness
+     *      A number between 0.0f (minimum brightness) and 1.0 (maximum brightness), or -1.0f to
+     *      turn the backlight off.
+     *
+     * Returns NO_ERROR upon success. Otherwise,
+     *      NAME_NOT_FOUND    if the display is invalid, or
+     *      BAD_VALUE         if the brightness is invalid, or
+     *      INVALID_OPERATION if brightness operations are not supported.
+     */
+    virtual status_t setDisplayBrightness(const sp<IBinder>& displayToken,
+                                          float brightness) const = 0;
 };
 
 // ----------------------------------------------------------------------------
@@ -346,7 +437,7 @@ public:
         CREATE_DISPLAY_EVENT_CONNECTION,
         CREATE_DISPLAY,
         DESTROY_DISPLAY,
-        GET_BUILT_IN_DISPLAY,
+        GET_PHYSICAL_DISPLAY_TOKEN,
         SET_TRANSACTION_STATE,
         AUTHENTICATE_SURFACE,
         GET_SUPPORTED_FRAME_TIMESTAMPS,
@@ -373,10 +464,15 @@ public:
         SET_DISPLAY_CONTENT_SAMPLING_ENABLED,
         GET_DISPLAYED_CONTENT_SAMPLE,
         GET_PROTECTED_CONTENT_SUPPORT,
-        CACHE_BUFFER,
-        UNCACHE_BUFFER,
         IS_WIDE_COLOR_DISPLAY,
         GET_DISPLAY_NATIVE_PRIMARIES,
+        GET_PHYSICAL_DISPLAY_IDS,
+        ADD_REGION_SAMPLING_LISTENER,
+        REMOVE_REGION_SAMPLING_LISTENER,
+        SET_ALLOWED_DISPLAY_CONFIGS,
+        GET_ALLOWED_DISPLAY_CONFIGS,
+        GET_DISPLAY_BRIGHTNESS_SUPPORT,
+        SET_DISPLAY_BRIGHTNESS,
         // Always append new enum to the end.
     };
 

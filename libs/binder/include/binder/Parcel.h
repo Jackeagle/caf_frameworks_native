@@ -20,6 +20,8 @@
 #include <string>
 #include <vector>
 
+#include <linux/android/binder.h>
+
 #include <android-base/unique_fd.h>
 #include <cutils/native_handle.h>
 #include <utils/Errors.h>
@@ -28,7 +30,6 @@
 #include <utils/Vector.h>
 #include <utils/Flattenable.h>
 
-#include <binder/binder_kernel.h>
 #include <binder/IInterface.h>
 #include <binder/Parcelable.h>
 #include <binder/Map.h>
@@ -395,6 +396,12 @@ public:
     static size_t       getGlobalAllocSize();
     static size_t       getGlobalAllocCount();
 
+    bool                replaceCallingWorkSourceUid(uid_t uid);
+    // Returns the work source provided by the caller. This can only be trusted for trusted calling
+    // uid.
+    uid_t               readCallingWorkSourceUid();
+    void                readRequestHeaders() const;
+
 private:
     typedef void        (*release_func)(Parcel* parcel,
                                         const uint8_t* data, size_t dataSize,
@@ -429,6 +436,7 @@ private:
     void                initState();
     void                scanForFds() const;
     status_t            validateReadData(size_t len) const;
+    void                updateWorkSourceRequestHeaderPosition() const;
                         
     template<class T>
     status_t            readAligned(T *pArg) const;
@@ -476,6 +484,9 @@ private:
     size_t              mObjectsCapacity;
     mutable size_t      mNextObjectHint;
     mutable bool        mObjectsSorted;
+
+    mutable bool        mRequestHeaderPresent;
+    mutable size_t      mWorkSourceRequestHeaderPosition;
 
     mutable bool        mFdsKnown;
     mutable bool        mHasFds;

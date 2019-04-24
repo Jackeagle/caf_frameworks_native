@@ -37,10 +37,10 @@ using android::base::unique_fd;
 namespace android {
 
 TouchVideoDevice::TouchVideoDevice(int fd, std::string&& name, std::string&& devicePath,
-        uint32_t width, uint32_t height,
+        uint32_t height, uint32_t width,
         const std::array<const int16_t*, NUM_BUFFERS>& readLocations) :
         mFd(fd), mName(std::move(name)), mPath(std::move(devicePath)),
-        mWidth(width), mHeight(height),
+        mHeight(height), mWidth(width),
         mReadLocations(readLocations) {
     mFrames.reserve(MAX_QUEUE_SIZE);
 };
@@ -68,6 +68,7 @@ std::unique_ptr<TouchVideoDevice> TouchVideoDevice::create(std::string devicePat
     std::string name = reinterpret_cast<const char*>(cap.card);
 
     struct v4l2_input v4l2_input_struct;
+    v4l2_input_struct.index = 0;
     result = ioctl(fd.get(), VIDIOC_ENUMINPUT, &v4l2_input_struct);
     if (result == -1) {
         ALOGE("VIDIOC_ENUMINPUT failed: %s", strerror(errno));
@@ -87,14 +88,15 @@ std::unique_ptr<TouchVideoDevice> TouchVideoDevice::create(std::string devicePat
         ALOGE("VIDIOC_G_FMT failed: %s", strerror(errno));
         return nullptr;
     }
-    const uint32_t width = v4l2_fmt.fmt.pix.width;
     const uint32_t height = v4l2_fmt.fmt.pix.height;
-    ALOGI("Frame dimensions: width = %" PRIu32 " height = %" PRIu32, width, height);
+    const uint32_t width = v4l2_fmt.fmt.pix.width;
+    ALOGI("Frame dimensions: height = %" PRIu32 " width = %" PRIu32, height, width);
 
-    struct v4l2_requestbuffers req;
+    struct v4l2_requestbuffers req = {};
     req.count = NUM_BUFFERS;
     req.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
     req.memory = V4L2_MEMORY_MMAP;
+    // req.reserved is zeroed during initialization, which is required per v4l docs
     result = ioctl(fd.get(), VIDIOC_REQBUFS, &req);
     if (result == -1) {
         ALOGE("VIDIOC_REQBUFS failed: %s", strerror(errno));
@@ -108,6 +110,7 @@ std::unique_ptr<TouchVideoDevice> TouchVideoDevice::create(std::string devicePat
     struct v4l2_buffer buf = {};
     buf.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
     buf.memory = V4L2_MEMORY_MMAP;
+    // buf.reserved and buf.reserved2 are zeroed during initialization, required per v4l docs
     std::array<const int16_t*, NUM_BUFFERS> readLocations;
     for (size_t i = 0; i < NUM_BUFFERS; i++) {
         buf.index = i;
@@ -116,7 +119,7 @@ std::unique_ptr<TouchVideoDevice> TouchVideoDevice::create(std::string devicePat
             ALOGE("VIDIOC_QUERYBUF failed: %s", strerror(errno));
             return nullptr;
         }
-        if (buf.length != width * height * sizeof(int16_t)) {
+        if (buf.length != height * width * sizeof(int16_t)) {
             ALOGE("Unexpected value of buf.length = %i (offset = %" PRIu32 ")",
                     buf.length, buf.m.offset);
             return nullptr;
@@ -148,7 +151,7 @@ std::unique_ptr<TouchVideoDevice> TouchVideoDevice::create(std::string devicePat
     }
     // Using 'new' to access a non-public constructor.
     return std::unique_ptr<TouchVideoDevice>(new TouchVideoDevice(
-            fd.release(), std::move(name), std::move(devicePath), width, height, readLocations));
+            fd.release(), std::move(name), std::move(devicePath), height, width, readLocations));
 }
 
 size_t TouchVideoDevice::readAndQueueFrames() {
@@ -193,10 +196,10 @@ std::optional<TouchVideoFrame> TouchVideoDevice::readFrame() {
         ALOGW("The timestamp %ld.%ld was not acquired using CLOCK_MONOTONIC",
                 buf.timestamp.tv_sec, buf.timestamp.tv_usec);
     }
-    std::vector<int16_t> data(mWidth * mHeight);
+    std::vector<int16_t> data(mHeight * mWidth);
     const int16_t* readFrom = mReadLocations[buf.index];
-    std::copy(readFrom, readFrom + mWidth * mHeight, data.begin());
-    TouchVideoFrame frame(mWidth, mHeight, std::move(data), buf.timestamp);
+    std::copy(readFrom, readFrom + mHeight * mWidth, data.begin());
+    TouchVideoFrame frame(mHeight, mWidth, std::move(data), buf.timestamp);
 
     result = ioctl(mFd.get(), VIDIOC_QBUF, &buf);
     if (result == -1) {
@@ -230,7 +233,7 @@ TouchVideoDevice::~TouchVideoDevice() {
     }
     for (const int16_t* buffer : mReadLocations) {
         void* bufferAddress = static_cast<void*>(const_cast<int16_t*>(buffer));
-        result = munmap(bufferAddress, mWidth * mHeight * sizeof(int16_t));
+        result = munmap(bufferAddress,  mHeight * mWidth * sizeof(int16_t));
         if (result == -1) {
             ALOGE("%s: Couldn't unmap: [%s]", __func__, strerror(errno));
         }
@@ -238,9 +241,9 @@ TouchVideoDevice::~TouchVideoDevice() {
 }
 
 std::string TouchVideoDevice::dump() const {
-    return StringPrintf("Video device %s (%s) : width=%" PRIu32 ", height=%" PRIu32
+    return StringPrintf("Video device %s (%s) : height=%" PRIu32 ", width=%" PRIu32
             ", fd=%i, hasValidFd=%s",
-            mName.c_str(), mPath.c_str(), mWidth, mHeight, mFd.get(),
+            mName.c_str(), mPath.c_str(), mHeight, mWidth, mFd.get(),
             hasValidFd() ? "true" : "false");
 }
 

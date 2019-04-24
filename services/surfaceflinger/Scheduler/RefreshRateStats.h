@@ -20,6 +20,7 @@
 
 #include "Scheduler/RefreshRateConfigs.h"
 #include "Scheduler/SchedulerUtils.h"
+#include "TimeStats/TimeStats.h"
 
 #include "android-base/stringprintf.h"
 #include "utils/Timers.h"
@@ -40,11 +41,8 @@ class RefreshRateStats {
     static constexpr int64_t MS_PER_DAY = 24 * MS_PER_HOUR;
 
 public:
-    explicit RefreshRateStats(
-            const std::vector<std::shared_ptr<const HWC2::Display::Config>>& configs)
-          : mRefreshRateConfigs(std::make_unique<RefreshRateConfigs>(configs)),
-            mPreviousRecordedTime(systemTime()) {}
-    ~RefreshRateStats() = default;
+    RefreshRateStats(const RefreshRateConfigs& refreshRateConfigs, TimeStats& timeStats)
+          : mRefreshRateConfigs(refreshRateConfigs), mTimeStats(timeStats) {}
 
     // Sets power mode. We only collect the information when the power mode is not
     // HWC_POWER_MODE_NORMAL. When power mode is HWC_POWER_MODE_NORMAL, we collect the stats based
@@ -81,23 +79,26 @@ public:
         flushTime();
 
         std::unordered_map<std::string, int64_t> totalTime;
-        for (auto config : mRefreshRateConfigs->getRefreshRates()) {
+        for (const auto& [type, config] : mRefreshRateConfigs.getRefreshRates()) {
             int64_t totalTimeForConfig = 0;
-            if (mConfigModesTotalTime.find(config.configId) != mConfigModesTotalTime.end()) {
-                totalTimeForConfig = mConfigModesTotalTime.at(config.configId);
+            if (!config) {
+                continue;
             }
-            totalTime[config.name] = totalTimeForConfig;
+            if (mConfigModesTotalTime.find(config->configId) != mConfigModesTotalTime.end()) {
+                totalTimeForConfig = mConfigModesTotalTime.at(config->configId);
+            }
+            totalTime[config->name] = totalTimeForConfig;
         }
         return totalTime;
     }
 
     // Traverses through the map of config modes and returns how long they've been running in easy
     // to read format.
-    std::string doDump() {
+    std::string doDump() const {
         std::ostringstream stream;
         stream << "+  Refresh rate: running time in seconds\n";
-        for (auto stats : getTotalTimes()) {
-            stream << stats.first.c_str() << ": " << getDateFormatFromMs(stats.second) << "\n";
+        for (const auto& [name, time] : const_cast<RefreshRateStats*>(this)->getTotalTimes()) {
+            stream << name << ": " << getDateFormatFromMs(time) << '\n';
         }
         return stream.str();
     }
@@ -116,10 +117,19 @@ private:
     // this method was called.
     void flushTimeForMode(int mode) {
         nsecs_t currentTime = systemTime();
-        int64_t timeElapsedMs = ns2ms(currentTime - mPreviousRecordedTime);
+        nsecs_t timeElapsed = currentTime - mPreviousRecordedTime;
+        int64_t timeElapsedMs = ns2ms(timeElapsed);
         mPreviousRecordedTime = currentTime;
 
         mConfigModesTotalTime[mode] += timeElapsedMs;
+        for (const auto& [type, config] : mRefreshRateConfigs.getRefreshRates()) {
+            if (!config) {
+                continue;
+            }
+            if (config->configId == mode) {
+                mTimeStats.recordRefreshRate(config->fps, timeElapsed);
+            }
+        }
     }
 
     // Formats the time in milliseconds into easy to read format.
@@ -134,14 +144,17 @@ private:
     }
 
     // Keeps information about refresh rate configs that device has.
-    std::unique_ptr<RefreshRateConfigs> mRefreshRateConfigs;
+    const RefreshRateConfigs& mRefreshRateConfigs;
 
-    int64_t mCurrentConfigMode = 0;
+    // Aggregate refresh rate statistics for telemetry.
+    TimeStats& mTimeStats;
+
+    int64_t mCurrentConfigMode = SCREEN_OFF_CONFIG_ID;
     int32_t mCurrentPowerMode = HWC_POWER_MODE_OFF;
 
     std::unordered_map<int /* power mode */, int64_t /* duration in ms */> mConfigModesTotalTime;
 
-    nsecs_t mPreviousRecordedTime;
+    nsecs_t mPreviousRecordedTime = systemTime();
 };
 
 } // namespace scheduler

@@ -150,6 +150,14 @@ enum AHardwareBuffer_Format {
      *   OpenGL ES: GL_STENCIL_INDEX8
      */
     AHARDWAREBUFFER_FORMAT_S8_UINT                  = 0x35,
+
+    /**
+     * YUV 420 888 format.
+     * Must have an even width and height. Can be accessed in OpenGL
+     * shaders through an external sampler. Does not support mip-maps
+     * cube-maps or multi-layered textures.
+     */
+    AHARDWAREBUFFER_FORMAT_Y8Cb8Cr8_420             = 0x23,
 };
 
 /**
@@ -302,6 +310,24 @@ typedef struct AHardwareBuffer_Desc {
 } AHardwareBuffer_Desc;
 
 /**
+ * Holds data for a single image plane.
+ */
+typedef struct AHardwareBuffer_Plane {
+    void*       data;        ///< Points to first byte in plane
+    uint32_t    pixelStride; ///< Distance in bytes from the color channel of one pixel to the next
+    uint32_t    rowStride;   ///< Distance in bytes from the first value of one row of the image to
+                             ///  the first value of the next row.
+} AHardwareBuffer_Plane;
+
+/**
+ * Holds all image planes that contain the pixel data.
+ */
+typedef struct AHardwareBuffer_Planes {
+    uint32_t               planeCount; ///< Number of distinct planes
+    AHardwareBuffer_Plane  planes[4];     ///< Array of image planes
+} AHardwareBuffer_Planes;
+
+/**
  * Opaque handle for a native hardware buffer.
  */
 typedef struct AHardwareBuffer AHardwareBuffer;
@@ -323,7 +349,7 @@ int AHardwareBuffer_allocate(const AHardwareBuffer_Desc* desc,
         AHardwareBuffer** outBuffer) __INTRODUCED_IN(26);
 /**
  * Acquire a reference on the given AHardwareBuffer object.
- * 
+ *
  * This prevents the object from being deleted until the last reference
  * is removed.
  */
@@ -396,6 +422,34 @@ int AHardwareBuffer_lock(AHardwareBuffer* buffer, uint64_t usage,
         int32_t fence, const ARect* rect, void** outVirtualAddress) __INTRODUCED_IN(26);
 
 /**
+ * Lock a potentially multi-planar AHardwareBuffer for direct CPU access.
+ *
+ * This function is similar to AHardwareBuffer_lock, but can lock multi-planar
+ * formats. The locked planes are returned in the \a outPlanes argument. Note,
+ * that multi-planar should not be confused with multi-layer images, which this
+ * locking function does not support.
+ *
+ * YUV formats are always represented by three separate planes of data, one for
+ * each color plane. The order of planes in the array is guaranteed such that
+ * plane #0 is always Y, plane #1 is always U (Cb), and plane #2 is always V
+ * (Cr). All other formats are represented by a single plane.
+ *
+ * Additional information always accompanies the buffers, describing the row
+ * stride and the pixel stride for each plane.
+ *
+ * In case the buffer cannot be locked, \a outPlanes will contain zero planes.
+ *
+ * See the AHardwareBuffer_lock documentation for all other locking semantics.
+ *
+ * \return 0 on success. -EINVAL if \a buffer is NULL, the usage flags
+ * are not a combination of AHARDWAREBUFFER_USAGE_CPU_*, or the buffer
+ * has more than one layer. Error number if the lock fails for any other
+ * reason.
+ */
+int AHardwareBuffer_lockPlanes(AHardwareBuffer* buffer, uint64_t usage,
+        int32_t fence, const ARect* rect, AHardwareBuffer_Planes* outPlanes) __INTRODUCED_IN(29);
+
+/**
  * Unlock the AHardwareBuffer from direct CPU access.
  *
  * Must be called after all changes to the buffer are completed by the
@@ -452,6 +506,18 @@ int AHardwareBuffer_recvHandleFromUnixSocket(int socketFd, AHardwareBuffer** out
  */
 int AHardwareBuffer_isSupported(const AHardwareBuffer_Desc* desc) __INTRODUCED_IN(29);
 
+/**
+ * Lock an AHardwareBuffer for direct CPU access.
+ *
+ * This function is the same as the above lock function, but passes back
+ * additional information about the bytes per pixel and the bytes per stride
+ * of the locked buffer.  If the bytes per pixel or bytes per stride are unknown
+ * or variable, or if the underlying mapper implementation does not support returning
+ * additional information, then this call will fail with INVALID_OPERATION
+ */
+int AHardwareBuffer_lockAndGetInfo(AHardwareBuffer* buffer, uint64_t usage,
+        int32_t fence, const ARect* rect, void** outVirtualAddress,
+        int32_t* outBytesPerPixel, int32_t* outBytesPerStride) __INTRODUCED_IN(29);
 #endif // __ANDROID_API__ >= 29
 
 __END_DECLS

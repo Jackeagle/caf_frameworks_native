@@ -46,15 +46,9 @@ static bool isValidNameChar(char ch) {
 
 static void appendInputDeviceConfigurationFileRelativePath(std::string& path,
         const std::string& name, InputDeviceConfigurationFileType type) {
-    path.append(CONFIGURATION_FILE_DIR[type]);
-    for (size_t i = 0; i < name.length(); i++) {
-        char ch = name[i];
-        if (!isValidNameChar(ch)) {
-            ch = '_';
-        }
-        path.append(&ch, 1);
-    }
-    path.append(CONFIGURATION_FILE_EXTENSION[type]);
+    path += CONFIGURATION_FILE_DIR[type];
+    path += name;
+    path += CONFIGURATION_FILE_EXTENSION[type];
 }
 
 std::string getInputDeviceConfigurationFilePathByDeviceIdentifier(
@@ -84,7 +78,7 @@ std::string getInputDeviceConfigurationFilePathByDeviceIdentifier(
     }
 
     // Try device name.
-    return getInputDeviceConfigurationFilePathByName(deviceIdentifier.name, type);
+    return getInputDeviceConfigurationFilePathByName(deviceIdentifier.getCanonicalName(), type);
 }
 
 std::string getInputDeviceConfigurationFilePathByName(
@@ -140,6 +134,18 @@ std::string getInputDeviceConfigurationFilePathByName(
     return "";
 }
 
+// --- InputDeviceIdentifier
+
+std::string InputDeviceIdentifier::getCanonicalName() const {
+    std::string replacedName = name;
+    for (char& ch : replacedName) {
+        if (!isValidNameChar(ch)) {
+            ch = '_';
+        }
+    }
+    return replacedName;
+}
+
 
 // --- InputDeviceInfo ---
 
@@ -180,7 +186,7 @@ const InputDeviceInfo::MotionRange* InputDeviceInfo::getMotionRange(
         int32_t axis, uint32_t source) const {
     size_t numRanges = mMotionRanges.size();
     for (size_t i = 0; i < numRanges; i++) {
-        const MotionRange& range = mMotionRanges.itemAt(i);
+        const MotionRange& range = mMotionRanges[i];
         if (range.axis == axis && range.source == source) {
             return &range;
         }
@@ -195,11 +201,11 @@ void InputDeviceInfo::addSource(uint32_t source) {
 void InputDeviceInfo::addMotionRange(int32_t axis, uint32_t source, float min, float max,
         float flat, float fuzz, float resolution) {
     MotionRange range = { axis, source, min, max, flat, fuzz, resolution };
-    mMotionRanges.add(range);
+    mMotionRanges.push_back(range);
 }
 
 void InputDeviceInfo::addMotionRange(const MotionRange& range) {
-    mMotionRanges.add(range);
+    mMotionRanges.push_back(range);
 }
 
 } // namespace android

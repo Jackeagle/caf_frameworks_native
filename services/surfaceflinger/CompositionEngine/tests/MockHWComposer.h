@@ -16,9 +16,8 @@
 
 #pragma once
 
+#include <compositionengine/Output.h>
 #include <gmock/gmock.h>
-
-#include "LayerBE.h"
 
 #include "DisplayHardware/HWComposer.h"
 
@@ -41,7 +40,7 @@ public:
                  std::optional<DisplayId>(uint32_t, uint32_t, ui::PixelFormat*));
     MOCK_METHOD1(createLayer, HWC2::Layer*(DisplayId));
     MOCK_METHOD2(destroyLayer, void(DisplayId, HWC2::Layer*));
-    MOCK_METHOD2(prepare, status_t(DisplayId, std::vector<CompositionInfo>&));
+    MOCK_METHOD2(prepare, status_t(DisplayId, const compositionengine::Output&));
     MOCK_METHOD5(setClientTarget,
                  status_t(DisplayId, uint32_t, const sp<Fence>&, const sp<GraphicBuffer>&,
                           ui::Dataspace));
@@ -66,6 +65,8 @@ public:
     MOCK_METHOD4(setDisplayContentSamplingEnabled, status_t(DisplayId, bool, uint8_t, uint64_t));
     MOCK_METHOD4(getDisplayedContentSample,
                  status_t(DisplayId, uint64_t, uint64_t, DisplayedFrameStats*));
+    MOCK_METHOD2(setDisplayBrightness, status_t(DisplayId, float));
+    MOCK_METHOD2(getDisplayBrightnessSupport, status_t(DisplayId, bool*));
 
     MOCK_METHOD2(onHotplug,
                  std::optional<DisplayIdentificationInfo>(hwc2_display_t, HWC2::Connection));

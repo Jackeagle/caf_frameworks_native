@@ -59,10 +59,10 @@ PhaseOffsets::PhaseOffsets() {
     const int highFpsEarlyGlAppOffsetNs = atoi(value);
 
     // TODO(b/122905996): Define these in device.mk.
-    property_get("debug.sf.high_fps_late_app_phase_offset_ns", value, "1000000");
+    property_get("debug.sf.high_fps_late_app_phase_offset_ns", value, "2000000");
     const int highFpsLateAppOffsetNs = atoi(value);
 
-    property_get("debug.sf.high_fps_late_sf_phase_offset_ns", value, "8000000");
+    property_get("debug.sf.high_fps_late_sf_phase_offset_ns", value, "1000000");
     const int highFpsLateSfOffsetNs = atoi(value);
 
     mDefaultRefreshRateOffsets.early = {earlySfOffsetNs != -1 ? earlySfOffsetNs
@@ -76,14 +76,14 @@ PhaseOffsets::PhaseOffsets() {
     mDefaultRefreshRateOffsets.late = {sfVsyncPhaseOffsetNs, vsyncPhaseOffsetNs};
 
     mHighRefreshRateOffsets.early = {highFpsEarlySfOffsetNs != -1 ? highFpsEarlySfOffsetNs
-                                                                  : highFpsLateAppOffsetNs,
+                                                                  : highFpsLateSfOffsetNs,
                                      highFpsEarlyAppOffsetNs != -1 ? highFpsEarlyAppOffsetNs
-                                                                   : highFpsLateSfOffsetNs};
+                                                                   : highFpsLateAppOffsetNs};
     mHighRefreshRateOffsets.earlyGl = {highFpsEarlyGlSfOffsetNs != -1 ? highFpsEarlyGlSfOffsetNs
-                                                                      : highFpsLateAppOffsetNs,
+                                                                      : highFpsLateSfOffsetNs,
                                        highFpsEarlyGlAppOffsetNs != -1 ? highFpsEarlyGlAppOffsetNs
-                                                                       : highFpsLateSfOffsetNs};
-    mHighRefreshRateOffsets.late = {highFpsLateAppOffsetNs, highFpsLateSfOffsetNs};
+                                                                       : highFpsLateAppOffsetNs};
+    mHighRefreshRateOffsets.late = {highFpsLateSfOffsetNs, highFpsLateAppOffsetNs};
 }
 
 PhaseOffsets::Offsets PhaseOffsets::getCurrentOffsets() const {

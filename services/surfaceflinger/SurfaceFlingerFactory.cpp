@@ -73,8 +73,10 @@ sp<SurfaceFlinger> createSurfaceFlinger() {
             return std::make_unique<scheduler::impl::PhaseOffsets>();
         }
 
-        std::unique_ptr<Scheduler> createScheduler(std::function<void(bool)> callback) override {
-            return std::make_unique<Scheduler>(callback);
+        std::unique_ptr<Scheduler> createScheduler(
+                std::function<void(bool)> callback,
+                const scheduler::RefreshRateConfigs& refreshRateConfig) override {
+            return std::make_unique<Scheduler>(callback, refreshRateConfig);
         }
 
         std::unique_ptr<SurfaceInterceptor> createSurfaceInterceptor(
@@ -128,8 +130,8 @@ sp<SurfaceFlinger> createSurfaceFlinger() {
             return new ColorLayer(args);
         }
 
-        std::unique_ptr<TimeStats> createTimeStats() override {
-            return std::make_unique<TimeStats>();
+        std::shared_ptr<TimeStats> createTimeStats() override {
+            return std::make_shared<android::impl::TimeStats>();
         }
     };
     static Factory factory;

@@ -32,10 +32,11 @@ class GLESRenderEngine;
 
 class GLFramebuffer : public renderengine::Framebuffer {
 public:
-    explicit GLFramebuffer(const GLESRenderEngine& engine);
+    explicit GLFramebuffer(GLESRenderEngine& engine);
     ~GLFramebuffer() override;
 
-    bool setNativeWindowBuffer(ANativeWindowBuffer* nativeBuffer, bool isProtected) override;
+    bool setNativeWindowBuffer(ANativeWindowBuffer* nativeBuffer, bool isProtected,
+                               const bool useFramebufferCache) override;
     EGLImageKHR getEGLImage() const { return mEGLImage; }
     uint32_t getTextureName() const { return mTextureName; }
     uint32_t getFramebufferName() const { return mFramebufferName; }
@@ -43,8 +44,10 @@ public:
     int32_t getBufferWidth() const { return mBufferWidth; }
 
 private:
+    GLESRenderEngine& mEngine;
     EGLDisplay mEGLDisplay;
     EGLImageKHR mEGLImage;
+    bool usingFramebufferCache = false;
     uint32_t mTextureName, mFramebufferName;
 
     int32_t mBufferHeight = 0;

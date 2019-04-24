@@ -63,7 +63,8 @@ public:
     bool setTransformToDisplayInverse(bool transformToDisplayInverse) override;
     bool setCrop(const Rect& crop) override;
     bool setFrame(const Rect& frame) override;
-    bool setBuffer(const sp<GraphicBuffer>& buffer) override;
+    bool setBuffer(const sp<GraphicBuffer>& buffer, nsecs_t postTime,
+                   nsecs_t desiredPresentTime) override;
     bool setAcquireFence(const sp<Fence>& fence) override;
     bool setDataspace(ui::Dataspace dataspace) override;
     bool setHdrMetadata(const HdrMetadata& hdrMetadata) override;
@@ -82,24 +83,20 @@ public:
     }
     bool setCrop_legacy(const Rect& /*crop*/, bool /*immediate*/) override { return false; }
     bool setOverrideScalingMode(int32_t /*overrideScalingMode*/) override { return false; }
-    bool setColor(const half3& color) override;
-    bool setColorAlpha(float alpha) override;
-    bool setColorDataspace(ui::Dataspace dataspace) override;
     void deferTransactionUntil_legacy(const sp<IBinder>& /*barrierHandle*/,
                                       uint64_t /*frameNumber*/) override {}
     void deferTransactionUntil_legacy(const sp<Layer>& /*barrierLayer*/,
                                       uint64_t /*frameNumber*/) override {}
 
     Rect getBufferSize(const State& s) const override;
+    FloatRect computeSourceBounds(const FloatRect& parentBounds) const override;
+
     // -----------------------------------------------------------------------
 
     // -----------------------------------------------------------------------
     // Interface implementation for BufferLayer
     // -----------------------------------------------------------------------
     bool fenceHasSignaled() const override;
-
-protected:
-    bool useCachedBufferForClientComposition() const override;
 
 private:
     nsecs_t getDesiredPresentTime() override;
@@ -120,20 +117,19 @@ private:
     bool getAutoRefresh() const override;
     bool getSidebandStreamChanged() const override;
 
-    std::optional<Region> latchSidebandStream(bool& recomputeVisibleRegions) override;
+    bool latchSidebandStream(bool& recomputeVisibleRegions) override;
 
     bool hasFrameUpdate() const override;
 
     void setFilteringEnabled(bool enabled) override;
 
     status_t bindTextureImage() override;
-    status_t updateTexImage(bool& recomputeVisibleRegions, nsecs_t latchTime,
-                            const sp<Fence>& releaseFence) override;
+    status_t updateTexImage(bool& recomputeVisibleRegions, nsecs_t latchTime) override;
 
     status_t updateActiveBuffer() override;
     status_t updateFrameNumber(nsecs_t latchTime) override;
 
-    void setHwcLayerBuffer(DisplayId displayId) override;
+    void setHwcLayerBuffer(const sp<const DisplayDevice>& display) override;
 
 private:
     void onFirstRef() override;
@@ -154,6 +150,8 @@ private:
     bool mCurrentStateModified = false;
     bool mReleasePreviousBuffer = false;
     nsecs_t mCallbackHandleAcquireTime = -1;
+
+    nsecs_t mDesiredPresentTime = -1;
 
     // TODO(marissaw): support sticky transform for LEGACY camera mode
 };

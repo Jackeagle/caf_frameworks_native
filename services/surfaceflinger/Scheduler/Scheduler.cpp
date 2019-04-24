@@ -26,10 +26,10 @@
 
 #include <android/hardware/configstore/1.0/ISurfaceFlingerConfigs.h>
 #include <android/hardware/configstore/1.1/ISurfaceFlingerConfigs.h>
-#include <android/hardware/configstore/1.2/ISurfaceFlingerConfigs.h>
 #include <configstore/Utils.h>
 #include <cutils/properties.h>
-#include <gui/ISurfaceComposer.h>
+#include <input/InputWindow.h>
+#include <system/window.h>
 #include <ui/DisplayStatInfo.h>
 #include <utils/Timers.h>
 #include <utils/Trace.h>
@@ -40,6 +40,7 @@
 #include "EventThread.h"
 #include "IdleTimer.h"
 #include "InjectVSyncSource.h"
+#include "LayerInfo.h"
 #include "SchedulerUtils.h"
 #include "SurfaceFlingerProperties.h"
 
@@ -56,11 +57,13 @@ using namespace android::sysprop;
 
 std::atomic<int64_t> Scheduler::sNextId = 0;
 
-Scheduler::Scheduler(impl::EventControlThread::SetVSyncEnabledFunction function)
+Scheduler::Scheduler(impl::EventControlThread::SetVSyncEnabledFunction function,
+                     const scheduler::RefreshRateConfigs& refreshRateConfig)
       : mHasSyncFramework(running_without_sync_framework(true)),
         mDispSyncPresentTimeOffset(present_time_offset_from_vsync_ns(0)),
         mPrimaryHWVsyncEnabled(false),
-        mHWVsyncAvailable(false) {
+        mHWVsyncAvailable(false),
+        mRefreshRateConfigs(refreshRateConfig) {
     // Note: We create a local temporary with the real DispSync implementation
     // type temporarily so we can initialize it with the configured values,
     // before storing it for more generic use using the interface type.
@@ -69,19 +72,28 @@ Scheduler::Scheduler(impl::EventControlThread::SetVSyncEnabledFunction function)
     mPrimaryDispSync = std::move(primaryDispSync);
     mEventControlThread = std::make_unique<impl::EventControlThread>(function);
 
+    mSetIdleTimerMs = set_idle_timer_ms(0);
+
     char value[PROPERTY_VALUE_MAX];
-    property_get("debug.sf.set_idle_timer_ms", value, "30");
-    mSetIdleTimerMs = atoi(value);
+    property_get("debug.sf.set_idle_timer_ms", value, "0");
+    int int_value = atoi(value);
+    if (int_value) {
+        mSetIdleTimerMs = atoi(value);
+    }
 
     if (mSetIdleTimerMs > 0) {
         mIdleTimer =
                 std::make_unique<scheduler::IdleTimer>(std::chrono::milliseconds(mSetIdleTimerMs),
+                                                       [this] { resetTimerCallback(); },
                                                        [this] { expiredTimerCallback(); });
         mIdleTimer->start();
     }
 }
 
-Scheduler::~Scheduler() = default;
+Scheduler::~Scheduler() {
+    // Ensure the IdleTimer thread is joined before we start destroying state.
+    mIdleTimer.reset();
+}
 
 sp<Scheduler::ConnectionHandle> Scheduler::createConnection(
         const char* connectionName, int64_t phaseOffsetNs, ResyncCallback resyncCallback,
@@ -92,12 +104,13 @@ sp<Scheduler::ConnectionHandle> Scheduler::createConnection(
     std::unique_ptr<EventThread> eventThread =
             makeEventThread(connectionName, mPrimaryDispSync.get(), phaseOffsetNs,
                             std::move(interceptCallback));
-    auto connection = std::make_unique<Connection>(new ConnectionHandle(id),
-                                                   eventThread->createEventConnection(
-                                                           std::move(resyncCallback)),
-                                                   std::move(eventThread));
 
-    mConnections.insert(std::make_pair(id, std::move(connection)));
+    auto eventThreadConnection =
+            createConnectionInternal(eventThread.get(), std::move(resyncCallback));
+    mConnections.emplace(id,
+                         std::make_unique<Connection>(new ConnectionHandle(id),
+                                                      eventThreadConnection,
+                                                      std::move(eventThread)));
     return mConnections[id]->handle;
 }
 
@@ -107,14 +120,20 @@ std::unique_ptr<EventThread> Scheduler::makeEventThread(
     std::unique_ptr<VSyncSource> eventThreadSource =
             std::make_unique<DispSyncSource>(dispSync, phaseOffsetNs, true, connectionName);
     return std::make_unique<impl::EventThread>(std::move(eventThreadSource),
-                                               std::move(interceptCallback),
-                                               [this] { resetIdleTimer(); }, connectionName);
+                                               std::move(interceptCallback), connectionName);
+}
+
+sp<EventThreadConnection> Scheduler::createConnectionInternal(EventThread* eventThread,
+                                                              ResyncCallback&& resyncCallback) {
+    return eventThread->createEventConnection(std::move(resyncCallback),
+                                              [this] { resetIdleTimer(); });
 }
 
 sp<IDisplayEventConnection> Scheduler::createDisplayEventConnection(
         const sp<Scheduler::ConnectionHandle>& handle, ResyncCallback resyncCallback) {
     RETURN_VALUE_IF_INVALID(nullptr);
-    return mConnections[handle->id]->thread->createEventConnection(std::move(resyncCallback));
+    return createConnectionInternal(mConnections[handle->id]->thread.get(),
+                                    std::move(resyncCallback));
 }
 
 EventThread* Scheduler::getEventThread(const sp<Scheduler::ConnectionHandle>& handle) {
@@ -128,9 +147,9 @@ sp<EventThreadConnection> Scheduler::getEventConnection(const sp<ConnectionHandl
 }
 
 void Scheduler::hotplugReceived(const sp<Scheduler::ConnectionHandle>& handle,
-                                EventThread::DisplayType displayType, bool connected) {
+                                PhysicalDisplayId displayId, bool connected) {
     RETURN_IF_INVALID();
-    mConnections[handle->id]->thread->onHotplugReceived(displayType, connected);
+    mConnections[handle->id]->thread->onHotplugReceived(displayId, connected);
 }
 
 void Scheduler::onScreenAcquired(const sp<Scheduler::ConnectionHandle>& handle) {
@@ -141,6 +160,12 @@ void Scheduler::onScreenAcquired(const sp<Scheduler::ConnectionHandle>& handle) 
 void Scheduler::onScreenReleased(const sp<Scheduler::ConnectionHandle>& handle) {
     RETURN_IF_INVALID();
     mConnections[handle->id]->thread->onScreenReleased();
+}
+
+void Scheduler::onConfigChanged(const sp<ConnectionHandle>& handle, PhysicalDisplayId displayId,
+                                int32_t configId) {
+    RETURN_IF_INVALID();
+    mConnections[handle->id]->thread->onConfigChanged(displayId, configId);
 }
 
 void Scheduler::dump(const sp<Scheduler::ConnectionHandle>& handle, std::string& result) const {
@@ -179,18 +204,67 @@ void Scheduler::disableHardwareVsync(bool makeUnavailable) {
     }
 }
 
-void Scheduler::setVsyncPeriod(const nsecs_t period) {
-    mPrimaryDispSync->reset();
-    mPrimaryDispSync->setPeriod(period);
-    enableHardwareVsync();
+void Scheduler::resyncToHardwareVsync(bool makeAvailable, nsecs_t period) {
+    {
+        std::lock_guard<std::mutex> lock(mHWVsyncLock);
+        if (makeAvailable) {
+            mHWVsyncAvailable = makeAvailable;
+        } else if (!mHWVsyncAvailable) {
+            // Hardware vsync is not currently available, so abort the resync
+            // attempt for now
+            return;
+        }
+    }
+
+    if (period <= 0) {
+        return;
+    }
+
+    setVsyncPeriod(period);
 }
 
-void Scheduler::addResyncSample(const nsecs_t timestamp) {
+ResyncCallback Scheduler::makeResyncCallback(GetVsyncPeriod&& getVsyncPeriod) {
+    std::weak_ptr<VsyncState> ptr = mPrimaryVsyncState;
+    return [ptr, getVsyncPeriod = std::move(getVsyncPeriod)]() {
+        if (const auto vsync = ptr.lock()) {
+            vsync->resync(getVsyncPeriod);
+        }
+    };
+}
+
+void Scheduler::VsyncState::resync(const GetVsyncPeriod& getVsyncPeriod) {
+    static constexpr nsecs_t kIgnoreDelay = ms2ns(500);
+
+    const nsecs_t now = systemTime();
+    const nsecs_t last = lastResyncTime.exchange(now);
+
+    if (now - last > kIgnoreDelay) {
+        scheduler.resyncToHardwareVsync(false, getVsyncPeriod());
+    }
+}
+
+void Scheduler::setRefreshSkipCount(int count) {
+    mPrimaryDispSync->setRefreshSkipCount(count);
+}
+
+void Scheduler::setVsyncPeriod(const nsecs_t period) {
+    std::lock_guard<std::mutex> lock(mHWVsyncLock);
+    mPrimaryDispSync->setPeriod(period);
+
+    if (!mPrimaryHWVsyncEnabled) {
+        mPrimaryDispSync->beginResync();
+        mEventControlThread->setVsyncEnabled(true);
+        mPrimaryHWVsyncEnabled = true;
+    }
+}
+
+void Scheduler::addResyncSample(const nsecs_t timestamp, bool* periodChanged) {
     bool needsHwVsync = false;
+    *periodChanged = false;
     { // Scope for the lock
         std::lock_guard<std::mutex> lock(mHWVsyncLock);
         if (mPrimaryHWVsyncEnabled) {
-            needsHwVsync = mPrimaryDispSync->addResyncSample(timestamp);
+            needsHwVsync = mPrimaryDispSync->addResyncSample(timestamp, periodChanged);
         }
     }
 
@@ -213,35 +287,49 @@ void Scheduler::setIgnorePresentFences(bool ignore) {
     mPrimaryDispSync->setIgnorePresentFences(ignore);
 }
 
-void Scheduler::makeHWSyncAvailable(bool makeAvailable) {
-    std::lock_guard<std::mutex> lock(mHWVsyncLock);
-    mHWVsyncAvailable = makeAvailable;
+nsecs_t Scheduler::expectedPresentTime() {
+    return mPrimaryDispSync->expectedPresentTime();
 }
 
-void Scheduler::addFramePresentTimeForLayer(const nsecs_t framePresentTime, bool isAutoTimestamp,
-                                            const std::string layerName) {
-    // This is V1 logic. It calculates the average FPS based on the timestamp frequency
-    // regardless of which layer the timestamp came from.
-    // For now, the averages and FPS are recorded in the systrace.
-    determineTimestampAverage(isAutoTimestamp, framePresentTime);
-
-    // This is V2 logic. It calculates the average and median timestamp difference based on the
-    // individual layer history. The results are recorded in the systrace.
-    determineLayerTimestampStats(layerName, framePresentTime);
+void Scheduler::dumpPrimaryDispSync(std::string& result) const {
+    mPrimaryDispSync->dump(result);
 }
 
-void Scheduler::incrementFrameCounter() {
-    mLayerHistory.incrementCounter();
+std::unique_ptr<scheduler::LayerHistory::LayerHandle> Scheduler::registerLayer(
+        std::string const& name, int windowType) {
+    RefreshRateType refreshRateType = (windowType == InputWindowInfo::TYPE_WALLPAPER)
+            ? RefreshRateType::DEFAULT
+            : RefreshRateType::PERFORMANCE;
+
+    const auto refreshRate = mRefreshRateConfigs.getRefreshRate(refreshRateType);
+    const uint32_t fps = (refreshRate) ? refreshRate->fps : 0;
+    return mLayerHistory.createLayer(name, fps);
 }
 
-void Scheduler::setExpiredIdleTimerCallback(const ExpiredIdleTimerCallback& expiredTimerCallback) {
+void Scheduler::addLayerPresentTime(
+        const std::unique_ptr<scheduler::LayerHistory::LayerHandle>& layerHandle,
+        nsecs_t presentTime) {
+    mLayerHistory.insert(layerHandle, presentTime);
+}
+
+void Scheduler::withPrimaryDispSync(std::function<void(DispSync&)> const& fn) {
+    fn(*mPrimaryDispSync);
+}
+
+void Scheduler::updateFpsBasedOnContent() {
+    uint32_t refreshRate = std::round(mLayerHistory.getDesiredRefreshRate());
+    ATRACE_INT("ContentFPS", refreshRate);
+    if (refreshRate > 0) {
+        contentChangeRefreshRate(ContentFeatureState::CONTENT_DETECTION_ON, refreshRate);
+    } else {
+        contentChangeRefreshRate(ContentFeatureState::CONTENT_DETECTION_OFF, 0);
+    }
+}
+
+void Scheduler::setChangeRefreshRateCallback(
+        const ChangeRefreshRateCallback& changeRefreshRateCallback) {
     std::lock_guard<std::mutex> lock(mCallbackLock);
-    mExpiredTimerCallback = expiredTimerCallback;
-}
-
-void Scheduler::setResetIdleTimerCallback(const ResetIdleTimerCallback& resetTimerCallback) {
-    std::lock_guard<std::mutex> lock(mCallbackLock);
-    mResetTimerCallback = resetTimerCallback;
+    mChangeRefreshRateCallback = changeRefreshRateCallback;
 }
 
 void Scheduler::updateFrameSkipping(const int64_t skipCount) {
@@ -253,106 +341,101 @@ void Scheduler::updateFrameSkipping(const int64_t skipCount) {
     }
 }
 
-void Scheduler::determineLayerTimestampStats(const std::string layerName,
-                                             const nsecs_t framePresentTime) {
-    mLayerHistory.insert(layerName, framePresentTime);
-    std::vector<int64_t> differencesMs;
-
-    // Traverse through the layer history, and determine the differences in present times.
-    nsecs_t newestPresentTime = framePresentTime;
-    std::string differencesText = "";
-    for (int i = 1; i < mLayerHistory.getSize(); i++) {
-        std::unordered_map<std::string, nsecs_t> layers = mLayerHistory.get(i);
-        for (auto layer : layers) {
-            if (layer.first != layerName) {
-                continue;
-            }
-            int64_t differenceMs = (newestPresentTime - layer.second) / 1000000;
-            // Dismiss noise.
-            if (differenceMs > 10 && differenceMs < 60) {
-                differencesMs.push_back(differenceMs);
-            }
-            IF_ALOGV() { differencesText += (std::to_string(differenceMs) + " "); }
-            newestPresentTime = layer.second;
-        }
-    }
-    ALOGV("Layer %s timestamp intervals: %s", layerName.c_str(), differencesText.c_str());
-
-    if (!differencesMs.empty()) {
-        // Mean/Average is a good indicator for when 24fps videos are playing, because the frames
-        // come in 33, and 49 ms intervals with occasional 41ms.
-        const int64_t meanMs = scheduler::calculate_mean(differencesMs);
-        const auto tagMean = "TimestampMean_" + layerName;
-        ATRACE_INT(tagMean.c_str(), meanMs);
-
-        // Mode and median are good indicators for 30 and 60 fps videos, because the majority of
-        // frames come in 16, or 33 ms intervals.
-        const auto tagMedian = "TimestampMedian_" + layerName;
-        ATRACE_INT(tagMedian.c_str(), scheduler::calculate_median(&differencesMs));
-
-        const auto tagMode = "TimestampMode_" + layerName;
-        ATRACE_INT(tagMode.c_str(), scheduler::calculate_mode(differencesMs));
-    }
-}
-
-void Scheduler::determineTimestampAverage(bool isAutoTimestamp, const nsecs_t framePresentTime) {
-    ATRACE_INT("AutoTimestamp", isAutoTimestamp);
-
-    // Video does not have timestamp automatically set, so we discard timestamps that are
-    // coming in from other sources for now.
-    if (isAutoTimestamp) {
-        return;
-    }
-    int64_t differenceMs = (framePresentTime - mPreviousFrameTimestamp) / 1000000;
-    mPreviousFrameTimestamp = framePresentTime;
-
-    if (differenceMs < 10 || differenceMs > 100) {
-        // Dismiss noise.
-        return;
-    }
-    ATRACE_INT("TimestampDiff", differenceMs);
-
-    mTimeDifferences[mCounter % scheduler::ARRAY_SIZE] = differenceMs;
-    mCounter++;
-    int64_t mean = scheduler::calculate_mean(mTimeDifferences);
-    ATRACE_INT("AutoTimestampMean", mean);
-
-    // TODO(b/113612090): This are current numbers from trial and error while running videos
-    // from YouTube at 24, 30, and 60 fps.
-    if (mean > 14 && mean < 18) {
-        ATRACE_INT("MediaFPS", 60);
-    } else if (mean > 31 && mean < 34) {
-        ATRACE_INT("MediaFPS", 30);
-        return;
-    } else if (mean > 39 && mean < 42) {
-        ATRACE_INT("MediaFPS", 24);
-    }
-}
-
 void Scheduler::resetIdleTimer() {
     if (mIdleTimer) {
         mIdleTimer->reset();
-        ATRACE_INT("ExpiredIdleTimer", 0);
-    }
-
-    std::lock_guard<std::mutex> lock(mCallbackLock);
-    if (mResetTimerCallback) {
-        mResetTimerCallback();
     }
 }
 
+void Scheduler::resetTimerCallback() {
+    // We do not notify the applications about config changes when idle timer is reset.
+    timerChangeRefreshRate(IdleTimerState::RESET);
+    ATRACE_INT("ExpiredIdleTimer", 0);
+}
+
 void Scheduler::expiredTimerCallback() {
-    std::lock_guard<std::mutex> lock(mCallbackLock);
-    if (mExpiredTimerCallback) {
-        mExpiredTimerCallback();
-        ATRACE_INT("ExpiredIdleTimer", 1);
-    }
+    // We do not notify the applications about config changes when idle timer expires.
+    timerChangeRefreshRate(IdleTimerState::EXPIRED);
+    ATRACE_INT("ExpiredIdleTimer", 1);
 }
 
 std::string Scheduler::doDump() {
     std::ostringstream stream;
     stream << "+  Idle timer interval: " << mSetIdleTimerMs << " ms" << std::endl;
     return stream.str();
+}
+
+void Scheduler::contentChangeRefreshRate(ContentFeatureState contentFeatureState,
+                                         uint32_t refreshRate) {
+    RefreshRateType newRefreshRateType;
+    {
+        std::lock_guard<std::mutex> lock(mFeatureStateLock);
+        mCurrentContentFeatureState = contentFeatureState;
+        mContentRefreshRate = refreshRate;
+        newRefreshRateType = calculateRefreshRateType();
+    }
+    changeRefreshRate(newRefreshRateType, ConfigEvent::Changed);
+}
+
+void Scheduler::timerChangeRefreshRate(IdleTimerState idleTimerState) {
+    RefreshRateType newRefreshRateType;
+    {
+        std::lock_guard<std::mutex> lock(mFeatureStateLock);
+        mCurrentIdleTimerState = idleTimerState;
+        newRefreshRateType = calculateRefreshRateType();
+    }
+    changeRefreshRate(newRefreshRateType, ConfigEvent::None);
+}
+
+Scheduler::RefreshRateType Scheduler::calculateRefreshRateType() {
+    // First check if timer has expired as it means there is no new content on the screen
+    if (mCurrentIdleTimerState == IdleTimerState::EXPIRED) {
+        return RefreshRateType::DEFAULT;
+    }
+
+    // If content detection is off we choose performance as we don't know the content fps
+    if (mCurrentContentFeatureState == ContentFeatureState::CONTENT_DETECTION_OFF) {
+        return RefreshRateType::PERFORMANCE;
+    }
+
+    // Content detection is on, find the appropriate refresh rate
+    // Start with the smallest refresh rate which is within a margin of the content
+    RefreshRateType currRefreshRateType = RefreshRateType::PERFORMANCE;
+    constexpr float MARGIN = 0.05f;
+    auto iter = mRefreshRateConfigs.getRefreshRates().cbegin();
+    while (iter != mRefreshRateConfigs.getRefreshRates().cend()) {
+        if (iter->second->fps >= mContentRefreshRate * (1 - MARGIN)) {
+            currRefreshRateType = iter->first;
+            break;
+        }
+        ++iter;
+    }
+
+    // Some content aligns better on higher refresh rate. For example for 45fps we should choose
+    // 90Hz config. However we should still prefer a lower refresh rate if the content doesn't
+    // align well with both
+    float ratio = mRefreshRateConfigs.getRefreshRate(currRefreshRateType)->fps /
+            float(mContentRefreshRate);
+    if (std::abs(std::round(ratio) - ratio) > MARGIN) {
+        while (iter != mRefreshRateConfigs.getRefreshRates().cend()) {
+            ratio = iter->second->fps / float(mContentRefreshRate);
+
+            if (std::abs(std::round(ratio) - ratio) <= MARGIN) {
+                currRefreshRateType = iter->first;
+                break;
+            }
+            ++iter;
+        }
+    }
+
+    return currRefreshRateType;
+}
+
+void Scheduler::changeRefreshRate(RefreshRateType refreshRateType, ConfigEvent configEvent) {
+    std::lock_guard<std::mutex> lock(mCallbackLock);
+    if (mChangeRefreshRateCallback) {
+        mChangeRefreshRateCallback(refreshRateType, configEvent);
+    }
 }
 
 } // namespace android

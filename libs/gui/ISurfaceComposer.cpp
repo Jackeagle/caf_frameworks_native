@@ -26,6 +26,7 @@
 
 #include <gui/IDisplayEventConnection.h>
 #include <gui/IGraphicBufferProducer.h>
+#include <gui/IRegionSamplingListener.h>
 #include <gui/ISurfaceComposer.h>
 #include <gui/ISurfaceComposerClient.h>
 #include <gui/LayerDebugInfo.h>
@@ -67,7 +68,9 @@ public:
                                      const Vector<DisplayState>& displays, uint32_t flags,
                                      const sp<IBinder>& applyToken,
                                      const InputWindowCommands& commands,
-                                     int64_t desiredPresentTime) {
+                                     int64_t desiredPresentTime,
+                                     const cached_buffer_t& uncacheBuffer,
+                                     const std::vector<ListenerCallbacks>& listenerCallbacks) {
         Parcel data, reply;
         data.writeInterfaceToken(ISurfaceComposer::getInterfaceDescriptor());
 
@@ -85,6 +88,16 @@ public:
         data.writeStrongBinder(applyToken);
         commands.write(data);
         data.writeInt64(desiredPresentTime);
+        data.writeStrongBinder(uncacheBuffer.token);
+        data.writeUint64(uncacheBuffer.cacheId);
+
+        if (data.writeVectorSize(listenerCallbacks) == NO_ERROR) {
+            for (const auto& [listener, callbackIds] : listenerCallbacks) {
+                data.writeStrongBinder(IInterface::asBinder(listener));
+                data.writeInt64Vector(callbackIds);
+            }
+        }
+
         remote()->transact(BnSurfaceComposer::SET_TRANSACTION_STATE, data, &reply);
     }
 
@@ -96,10 +109,10 @@ public:
     }
 
     virtual status_t captureScreen(const sp<IBinder>& display, sp<GraphicBuffer>* outBuffer,
-                                   const ui::Dataspace reqDataspace,
+                                   bool& outCapturedSecureLayers, const ui::Dataspace reqDataspace,
                                    const ui::PixelFormat reqPixelFormat, Rect sourceCrop,
                                    uint32_t reqWidth, uint32_t reqHeight, bool useIdentityTransform,
-                                   ISurfaceComposer::Rotation rotation) {
+                                   ISurfaceComposer::Rotation rotation, bool captureSecureLayers) {
         Parcel data, reply;
         data.writeInterfaceToken(ISurfaceComposer::getInterfaceDescriptor());
         data.writeStrongBinder(display);
@@ -110,6 +123,7 @@ public:
         data.writeUint32(reqHeight);
         data.writeInt32(static_cast<int32_t>(useIdentityTransform));
         data.writeInt32(static_cast<int32_t>(rotation));
+        data.writeInt32(static_cast<int32_t>(captureSecureLayers));
         status_t result = remote()->transact(BnSurfaceComposer::CAPTURE_SCREEN, data, &reply);
         if (result != NO_ERROR) {
             ALOGE("captureScreen failed to transact: %d", result);
@@ -123,20 +137,27 @@ public:
 
         *outBuffer = new GraphicBuffer();
         reply.read(**outBuffer);
+        outCapturedSecureLayers = reply.readBool();
 
         return result;
     }
 
-    virtual status_t captureLayers(const sp<IBinder>& layerHandleBinder,
-                                   sp<GraphicBuffer>* outBuffer, const ui::Dataspace reqDataspace,
-                                   const ui::PixelFormat reqPixelFormat, const Rect& sourceCrop,
-                                   float frameScale, bool childrenOnly) {
+    virtual status_t captureLayers(
+            const sp<IBinder>& layerHandleBinder, sp<GraphicBuffer>* outBuffer,
+            const ui::Dataspace reqDataspace, const ui::PixelFormat reqPixelFormat,
+            const Rect& sourceCrop,
+            const std::unordered_set<sp<IBinder>, SpHash<IBinder>>& excludeLayers, float frameScale,
+            bool childrenOnly) {
         Parcel data, reply;
         data.writeInterfaceToken(ISurfaceComposer::getInterfaceDescriptor());
         data.writeStrongBinder(layerHandleBinder);
         data.writeInt32(static_cast<int32_t>(reqDataspace));
         data.writeInt32(static_cast<int32_t>(reqPixelFormat));
         data.write(sourceCrop);
+        data.writeInt32(excludeLayers.size());
+        for (auto el : excludeLayers) {
+            data.writeStrongBinder(el);
+        }
         data.writeFloat(frameScale);
         data.writeBool(childrenOnly);
         status_t result = remote()->transact(BnSurfaceComposer::CAPTURE_LAYERS, data, &reply);
@@ -275,12 +296,25 @@ public:
         remote()->transact(BnSurfaceComposer::DESTROY_DISPLAY, data, &reply);
     }
 
-    virtual sp<IBinder> getBuiltInDisplay(int32_t id)
-    {
+    virtual std::vector<PhysicalDisplayId> getPhysicalDisplayIds() const {
         Parcel data, reply;
         data.writeInterfaceToken(ISurfaceComposer::getInterfaceDescriptor());
-        data.writeInt32(id);
-        remote()->transact(BnSurfaceComposer::GET_BUILT_IN_DISPLAY, data, &reply);
+        if (remote()->transact(BnSurfaceComposer::GET_PHYSICAL_DISPLAY_IDS, data, &reply) ==
+            NO_ERROR) {
+            std::vector<PhysicalDisplayId> displayIds;
+            if (reply.readUint64Vector(&displayIds) == NO_ERROR) {
+                return displayIds;
+            }
+        }
+
+        return {};
+    }
+
+    virtual sp<IBinder> getPhysicalDisplayToken(PhysicalDisplayId displayId) const {
+        Parcel data, reply;
+        data.writeInterfaceToken(ISurfaceComposer::getInterfaceDescriptor());
+        data.writeUint64(displayId);
+        remote()->transact(BnSurfaceComposer::GET_PHYSICAL_DISPLAY_TOKEN, data, &reply);
         return reply.readStrongBinder();
     }
 
@@ -524,8 +558,8 @@ public:
             ALOGE("enableVSyncInjections failed to writeBool: %d", result);
             return result;
         }
-        result = remote()->transact(BnSurfaceComposer::ENABLE_VSYNC_INJECTIONS,
-                data, &reply, TF_ONE_WAY);
+        result = remote()->transact(BnSurfaceComposer::ENABLE_VSYNC_INJECTIONS, data, &reply,
+                                    IBinder::FLAG_ONEWAY);
         if (result != NO_ERROR) {
             ALOGE("enableVSyncInjections failed to transact: %d", result);
             return result;
@@ -545,7 +579,8 @@ public:
             ALOGE("injectVSync failed to writeInt64: %d", result);
             return result;
         }
-        result = remote()->transact(BnSurfaceComposer::INJECT_VSYNC, data, &reply, TF_ONE_WAY);
+        result = remote()->transact(BnSurfaceComposer::INJECT_VSYNC, data, &reply,
+                                    IBinder::FLAG_ONEWAY);
         if (result != NO_ERROR) {
             ALOGE("injectVSync failed to transact: %d", result);
             return result;
@@ -722,42 +757,6 @@ public:
         return error;
     }
 
-    virtual status_t cacheBuffer(const sp<IBinder>& token, const sp<GraphicBuffer>& buffer,
-                                 int32_t* outBufferId) {
-        Parcel data, reply;
-        data.writeInterfaceToken(ISurfaceComposer::getInterfaceDescriptor());
-
-        data.writeStrongBinder(token);
-        if (buffer) {
-            data.writeBool(true);
-            data.write(*buffer);
-        } else {
-            data.writeBool(false);
-        }
-
-        status_t result = remote()->transact(BnSurfaceComposer::CACHE_BUFFER, data, &reply);
-        if (result != NO_ERROR) {
-            return result;
-        }
-
-        int32_t id = -1;
-        result = reply.readInt32(&id);
-        if (result == NO_ERROR) {
-            *outBufferId = id;
-        }
-        return result;
-    }
-
-    virtual status_t uncacheBuffer(const sp<IBinder>& token, int32_t bufferId) {
-        Parcel data, reply;
-        data.writeInterfaceToken(ISurfaceComposer::getInterfaceDescriptor());
-
-        data.writeStrongBinder(token);
-        data.writeInt32(bufferId);
-
-        return remote()->transact(BnSurfaceComposer::UNCACHE_BUFFER, data, &reply);
-    }
-
     virtual status_t isWideColorDisplay(const sp<IBinder>& token,
                                         bool* outIsWideColorDisplay) const {
         Parcel data, reply;
@@ -776,6 +775,163 @@ public:
         }
         error = reply.readBool(outIsWideColorDisplay);
         return error;
+    }
+
+    virtual status_t addRegionSamplingListener(const Rect& samplingArea,
+                                               const sp<IBinder>& stopLayerHandle,
+                                               const sp<IRegionSamplingListener>& listener) {
+        Parcel data, reply;
+        status_t error = data.writeInterfaceToken(ISurfaceComposer::getInterfaceDescriptor());
+        if (error != NO_ERROR) {
+            ALOGE("addRegionSamplingListener: Failed to write interface token");
+            return error;
+        }
+        error = data.write(samplingArea);
+        if (error != NO_ERROR) {
+            ALOGE("addRegionSamplingListener: Failed to write sampling area");
+            return error;
+        }
+        error = data.writeStrongBinder(stopLayerHandle);
+        if (error != NO_ERROR) {
+            ALOGE("addRegionSamplingListener: Failed to write stop layer handle");
+            return error;
+        }
+        error = data.writeStrongBinder(IInterface::asBinder(listener));
+        if (error != NO_ERROR) {
+            ALOGE("addRegionSamplingListener: Failed to write listener");
+            return error;
+        }
+        error = remote()->transact(BnSurfaceComposer::ADD_REGION_SAMPLING_LISTENER, data, &reply);
+        if (error != NO_ERROR) {
+            ALOGE("addRegionSamplingListener: Failed to transact");
+        }
+        return error;
+    }
+
+    virtual status_t removeRegionSamplingListener(const sp<IRegionSamplingListener>& listener) {
+        Parcel data, reply;
+        status_t error = data.writeInterfaceToken(ISurfaceComposer::getInterfaceDescriptor());
+        if (error != NO_ERROR) {
+            ALOGE("removeRegionSamplingListener: Failed to write interface token");
+            return error;
+        }
+        error = data.writeStrongBinder(IInterface::asBinder(listener));
+        if (error != NO_ERROR) {
+            ALOGE("removeRegionSamplingListener: Failed to write listener");
+            return error;
+        }
+        error = remote()->transact(BnSurfaceComposer::REMOVE_REGION_SAMPLING_LISTENER, data,
+                                   &reply);
+        if (error != NO_ERROR) {
+            ALOGE("removeRegionSamplingListener: Failed to transact");
+        }
+        return error;
+    }
+
+    virtual status_t setAllowedDisplayConfigs(const sp<IBinder>& displayToken,
+                                              const std::vector<int32_t>& allowedConfigs) {
+        Parcel data, reply;
+        status_t result = data.writeInterfaceToken(ISurfaceComposer::getInterfaceDescriptor());
+        if (result != NO_ERROR) {
+            ALOGE("setAllowedDisplayConfigs failed to writeInterfaceToken: %d", result);
+            return result;
+        }
+        result = data.writeStrongBinder(displayToken);
+        if (result != NO_ERROR) {
+            ALOGE("setAllowedDisplayConfigs failed to writeStrongBinder: %d", result);
+            return result;
+        }
+        result = data.writeInt32Vector(allowedConfigs);
+        if (result != NO_ERROR) {
+            ALOGE("setAllowedDisplayConfigs failed to writeInt32Vector: %d", result);
+            return result;
+        }
+        result = remote()->transact(BnSurfaceComposer::SET_ALLOWED_DISPLAY_CONFIGS, data, &reply);
+        if (result != NO_ERROR) {
+            ALOGE("setAllowedDisplayConfigs failed to transact: %d", result);
+            return result;
+        }
+        return reply.readInt32();
+    }
+
+    virtual status_t getAllowedDisplayConfigs(const sp<IBinder>& displayToken,
+                                              std::vector<int32_t>* outAllowedConfigs) {
+        if (!outAllowedConfigs) return BAD_VALUE;
+        Parcel data, reply;
+        status_t result = data.writeInterfaceToken(ISurfaceComposer::getInterfaceDescriptor());
+        if (result != NO_ERROR) {
+            ALOGE("getAllowedDisplayConfigs failed to writeInterfaceToken: %d", result);
+            return result;
+        }
+        result = data.writeStrongBinder(displayToken);
+        if (result != NO_ERROR) {
+            ALOGE("getAllowedDisplayConfigs failed to writeStrongBinder: %d", result);
+            return result;
+        }
+        result = remote()->transact(BnSurfaceComposer::GET_ALLOWED_DISPLAY_CONFIGS, data, &reply);
+        if (result != NO_ERROR) {
+            ALOGE("getAllowedDisplayConfigs failed to transact: %d", result);
+            return result;
+        }
+        result = reply.readInt32Vector(outAllowedConfigs);
+        if (result != NO_ERROR) {
+            ALOGE("getAllowedDisplayConfigs failed to readInt32Vector: %d", result);
+            return result;
+        }
+        return reply.readInt32();
+    }
+
+    virtual status_t getDisplayBrightnessSupport(const sp<IBinder>& displayToken,
+                                                 bool* outSupport) const {
+        Parcel data, reply;
+        status_t error = data.writeInterfaceToken(ISurfaceComposer::getInterfaceDescriptor());
+        if (error != NO_ERROR) {
+            ALOGE("getDisplayBrightnessSupport: failed to write interface token: %d", error);
+            return error;
+        }
+        error = data.writeStrongBinder(displayToken);
+        if (error != NO_ERROR) {
+            ALOGE("getDisplayBrightnessSupport: failed to write display token: %d", error);
+            return error;
+        }
+        error = remote()->transact(BnSurfaceComposer::GET_DISPLAY_BRIGHTNESS_SUPPORT, data, &reply);
+        if (error != NO_ERROR) {
+            ALOGE("getDisplayBrightnessSupport: failed to transact: %d", error);
+            return error;
+        }
+        bool support;
+        error = reply.readBool(&support);
+        if (error != NO_ERROR) {
+            ALOGE("getDisplayBrightnessSupport: failed to read support: %d", error);
+            return error;
+        }
+        *outSupport = support;
+        return NO_ERROR;
+    }
+
+    virtual status_t setDisplayBrightness(const sp<IBinder>& displayToken, float brightness) const {
+        Parcel data, reply;
+        status_t error = data.writeInterfaceToken(ISurfaceComposer::getInterfaceDescriptor());
+        if (error != NO_ERROR) {
+            ALOGE("setDisplayBrightness: failed to write interface token: %d", error);
+            return error;
+        }
+        error = data.writeStrongBinder(displayToken);
+        if (error != NO_ERROR) {
+            ALOGE("setDisplayBrightness: failed to write display token: %d", error);
+            return error;
+        }
+        error = data.writeFloat(brightness);
+        if (error != NO_ERROR) {
+            ALOGE("setDisplayBrightness: failed to write brightness: %d", error);
+            return error;
+        }
+        error = remote()->transact(BnSurfaceComposer::SET_DISPLAY_BRIGHTNESS, data, &reply);
+        if (error != NO_ERROR) {
+            ALOGE("setDisplayBrightness: failed to transact: %d", error);
+            return error;
+        }
+        return NO_ERROR;
     }
 };
 
@@ -834,8 +990,23 @@ status_t BnSurfaceComposer::onTransact(
             inputWindowCommands.read(data);
 
             int64_t desiredPresentTime = data.readInt64();
+
+            cached_buffer_t uncachedBuffer;
+            uncachedBuffer.token = data.readStrongBinder();
+            uncachedBuffer.cacheId = data.readUint64();
+
+            std::vector<ListenerCallbacks> listenerCallbacks;
+            int32_t listenersSize = data.readInt32();
+            for (int32_t i = 0; i < listenersSize; i++) {
+                auto listener =
+                        interface_cast<ITransactionCompletedListener>(data.readStrongBinder());
+                std::vector<CallbackId> callbackIds;
+                data.readInt64Vector(&callbackIds);
+                listenerCallbacks.emplace_back(listener, callbackIds);
+            }
+
             setTransactionState(state, displays, stateFlags, applyToken, inputWindowCommands,
-                                desiredPresentTime);
+                                desiredPresentTime, uncachedBuffer, listenerCallbacks);
             return NO_ERROR;
         }
         case BOOT_FINISHED: {
@@ -855,13 +1026,19 @@ status_t BnSurfaceComposer::onTransact(
             uint32_t reqHeight = data.readUint32();
             bool useIdentityTransform = static_cast<bool>(data.readInt32());
             int32_t rotation = data.readInt32();
+            bool captureSecureLayers = static_cast<bool>(data.readInt32());
 
-            status_t res = captureScreen(display, &outBuffer, reqDataspace, reqPixelFormat,
-                                         sourceCrop, reqWidth, reqHeight, useIdentityTransform,
-                                         static_cast<ISurfaceComposer::Rotation>(rotation));
+            bool capturedSecureLayers = false;
+            status_t res = captureScreen(display, &outBuffer, capturedSecureLayers, reqDataspace,
+                                         reqPixelFormat, sourceCrop, reqWidth, reqHeight,
+                                         useIdentityTransform,
+                                         static_cast<ISurfaceComposer::Rotation>(rotation),
+                                         captureSecureLayers);
+
             reply->writeInt32(res);
             if (res == NO_ERROR) {
                 reply->write(*outBuffer);
+                reply->writeBool(capturedSecureLayers);
             }
             return NO_ERROR;
         }
@@ -873,11 +1050,20 @@ status_t BnSurfaceComposer::onTransact(
             sp<GraphicBuffer> outBuffer;
             Rect sourceCrop(Rect::EMPTY_RECT);
             data.read(sourceCrop);
+
+            std::unordered_set<sp<IBinder>, SpHash<IBinder>> excludeHandles;
+            int numExcludeHandles = data.readInt32();
+            excludeHandles.reserve(numExcludeHandles);
+            for (int i = 0; i < numExcludeHandles; i++) {
+                excludeHandles.emplace(data.readStrongBinder());
+            }
+
             float frameScale = data.readFloat();
             bool childrenOnly = data.readBool();
 
-            status_t res = captureLayers(layerHandleBinder, &outBuffer, reqDataspace,
-                                         reqPixelFormat, sourceCrop, frameScale, childrenOnly);
+            status_t res =
+                    captureLayers(layerHandleBinder, &outBuffer, reqDataspace, reqPixelFormat,
+                                  sourceCrop, excludeHandles, frameScale, childrenOnly);
             reply->writeInt32(res);
             if (res == NO_ERROR) {
                 reply->write(*outBuffer);
@@ -932,10 +1118,10 @@ status_t BnSurfaceComposer::onTransact(
             destroyDisplay(display);
             return NO_ERROR;
         }
-        case GET_BUILT_IN_DISPLAY: {
+        case GET_PHYSICAL_DISPLAY_TOKEN: {
             CHECK_INTERFACE(ISurfaceComposer, data, reply);
-            int32_t id = data.readInt32();
-            sp<IBinder> display(getBuiltInDisplay(id));
+            PhysicalDisplayId displayId = data.readUint64();
+            sp<IBinder> display = getPhysicalDisplayToken(displayId);
             reply->writeStrongBinder(display);
             return NO_ERROR;
         }
@@ -1238,48 +1424,6 @@ status_t BnSurfaceComposer::onTransact(
             }
             return error;
         }
-        case CACHE_BUFFER: {
-            CHECK_INTERFACE(ISurfaceComposer, data, reply);
-            sp<IBinder> token;
-            status_t result = data.readStrongBinder(&token);
-            if (result != NO_ERROR) {
-                ALOGE("cache buffer failure in reading token: %d", result);
-                return result;
-            }
-
-            sp<GraphicBuffer> buffer = new GraphicBuffer();
-            if (data.readBool()) {
-                result = data.read(*buffer);
-                if (result != NO_ERROR) {
-                    ALOGE("cache buffer failure in reading buffer: %d", result);
-                    return result;
-                }
-            }
-            int32_t bufferId = -1;
-            status_t error = cacheBuffer(token, buffer, &bufferId);
-            if (error == NO_ERROR) {
-                reply->writeInt32(bufferId);
-            }
-            return error;
-        }
-        case UNCACHE_BUFFER: {
-            CHECK_INTERFACE(ISurfaceComposer, data, reply);
-            sp<IBinder> token;
-            status_t result = data.readStrongBinder(&token);
-            if (result != NO_ERROR) {
-                ALOGE("uncache buffer failure in reading token: %d", result);
-                return result;
-            }
-
-            int32_t bufferId = -1;
-            result = data.readInt32(&bufferId);
-            if (result != NO_ERROR) {
-                ALOGE("uncache buffer failure in reading buffer id: %d", result);
-                return result;
-            }
-
-            return uncacheBuffer(token, bufferId);
-        }
         case IS_WIDE_COLOR_DISPLAY: {
             CHECK_INTERFACE(ISurfaceComposer, data, reply);
             sp<IBinder> display = nullptr;
@@ -1294,12 +1438,93 @@ status_t BnSurfaceComposer::onTransact(
             }
             return error;
         }
+        case GET_PHYSICAL_DISPLAY_IDS: {
+            CHECK_INTERFACE(ISurfaceComposer, data, reply);
+            return reply->writeUint64Vector(getPhysicalDisplayIds());
+        }
+        case ADD_REGION_SAMPLING_LISTENER: {
+            CHECK_INTERFACE(ISurfaceComposer, data, reply);
+            Rect samplingArea;
+            status_t result = data.read(samplingArea);
+            if (result != NO_ERROR) {
+                ALOGE("addRegionSamplingListener: Failed to read sampling area");
+                return result;
+            }
+            sp<IBinder> stopLayerHandle;
+            result = data.readNullableStrongBinder(&stopLayerHandle);
+            if (result != NO_ERROR) {
+                ALOGE("addRegionSamplingListener: Failed to read stop layer handle");
+                return result;
+            }
+            sp<IRegionSamplingListener> listener;
+            result = data.readNullableStrongBinder(&listener);
+            if (result != NO_ERROR) {
+                ALOGE("addRegionSamplingListener: Failed to read listener");
+                return result;
+            }
+            return addRegionSamplingListener(samplingArea, stopLayerHandle, listener);
+        }
+        case REMOVE_REGION_SAMPLING_LISTENER: {
+            CHECK_INTERFACE(ISurfaceComposer, data, reply);
+            sp<IRegionSamplingListener> listener;
+            status_t result = data.readNullableStrongBinder(&listener);
+            if (result != NO_ERROR) {
+                ALOGE("removeRegionSamplingListener: Failed to read listener");
+                return result;
+            }
+            return removeRegionSamplingListener(listener);
+        }
+        case SET_ALLOWED_DISPLAY_CONFIGS: {
+            CHECK_INTERFACE(ISurfaceComposer, data, reply);
+            sp<IBinder> displayToken = data.readStrongBinder();
+            std::vector<int32_t> allowedConfigs;
+            data.readInt32Vector(&allowedConfigs);
+            status_t result = setAllowedDisplayConfigs(displayToken, allowedConfigs);
+            reply->writeInt32(result);
+            return result;
+        }
+        case GET_ALLOWED_DISPLAY_CONFIGS: {
+            CHECK_INTERFACE(ISurfaceComposer, data, reply);
+            sp<IBinder> displayToken = data.readStrongBinder();
+            std::vector<int32_t> allowedConfigs;
+            status_t result = getAllowedDisplayConfigs(displayToken, &allowedConfigs);
+            reply->writeInt32Vector(allowedConfigs);
+            reply->writeInt32(result);
+            return result;
+        }
+        case GET_DISPLAY_BRIGHTNESS_SUPPORT: {
+            CHECK_INTERFACE(ISurfaceComposer, data, reply);
+            sp<IBinder> displayToken;
+            status_t error = data.readNullableStrongBinder(&displayToken);
+            if (error != NO_ERROR) {
+                ALOGE("getDisplayBrightnessSupport: failed to read display token: %d", error);
+                return error;
+            }
+            bool support = false;
+            error = getDisplayBrightnessSupport(displayToken, &support);
+            reply->writeBool(support);
+            return error;
+        }
+        case SET_DISPLAY_BRIGHTNESS: {
+            CHECK_INTERFACE(ISurfaceComposer, data, reply);
+            sp<IBinder> displayToken;
+            status_t error = data.readNullableStrongBinder(&displayToken);
+            if (error != NO_ERROR) {
+                ALOGE("setDisplayBrightness: failed to read display token: %d", error);
+                return error;
+            }
+            float brightness = -1.0f;
+            error = data.readFloat(&brightness);
+            if (error != NO_ERROR) {
+                ALOGE("setDisplayBrightness: failed to read brightness: %d", error);
+                return error;
+            }
+            return setDisplayBrightness(displayToken, brightness);
+        }
         default: {
             return BBinder::onTransact(code, data, reply, flags);
         }
     }
 }
 
-// ----------------------------------------------------------------------------
-
-};
+} // namespace android

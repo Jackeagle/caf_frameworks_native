@@ -19,6 +19,7 @@
 
 #include <sys/types.h>
 
+#include <compositionengine/LayerFE.h>
 #include <gui/BufferQueue.h>
 #include <gui/ISurfaceComposerClient.h>
 #include <gui/LayerState.h>
@@ -44,14 +45,13 @@
 
 #include "Client.h"
 #include "FrameTracker.h"
-#include "LayerBE.h"
 #include "LayerVector.h"
 #include "MonitoredProducer.h"
 #include "SurfaceFlinger.h"
 #include "TransactionCompletedThread.h"
 
+#include "DisplayHardware/ComposerHal.h"
 #include "DisplayHardware/HWComposer.h"
-#include "DisplayHardware/HWComposerBufferCache.h"
 #include "RenderArea.h"
 
 using namespace android::surfaceflinger;
@@ -66,7 +66,12 @@ class DisplayDevice;
 class GraphicBuffer;
 class SurfaceFlinger;
 class LayerDebugInfo;
-class LayerBE;
+
+namespace compositionengine {
+class Layer;
+class OutputLayer;
+struct LayerFECompositionState;
+}
 
 namespace impl {
 class SurfaceInterceptor;
@@ -76,8 +81,9 @@ class SurfaceInterceptor;
 
 struct LayerCreationArgs {
     LayerCreationArgs(SurfaceFlinger* flinger, const sp<Client>& client, const String8& name,
-                      uint32_t w, uint32_t h, uint32_t flags)
-          : flinger(flinger), client(client), name(name), w(w), h(h), flags(flags) {}
+                      uint32_t w, uint32_t h, uint32_t flags, LayerMetadata metadata)
+          : flinger(flinger), client(client), name(name), w(w), h(h), flags(flags),
+            metadata(std::move(metadata)) {}
 
     SurfaceFlinger* flinger;
     const sp<Client>& client;
@@ -85,15 +91,13 @@ struct LayerCreationArgs {
     uint32_t w;
     uint32_t h;
     uint32_t flags;
+    LayerMetadata metadata;
 };
 
-class Layer : public virtual RefBase {
+class Layer : public virtual compositionengine::LayerFE {
     static std::atomic<int32_t> sSequence;
 
 public:
-    friend class LayerBE;
-    LayerBE& getBE() { return mBE; }
-    LayerBE& getBE() const { return mBE; }
     mutable bool contentDirty{false};
     // regions below are in window-manager space
     Region visibleRegion;
@@ -180,6 +184,10 @@ public:
 
         bool inputInfoChanged;
         InputWindowInfo inputInfo;
+        wp<Layer> touchableRegionCrop;
+
+        // dataspace is only used by BufferStateLayer and ColorLayer
+        ui::Dataspace dataspace;
 
         // The fields below this point are only used by BufferStateLayer
         Geometry active;
@@ -192,7 +200,6 @@ public:
 
         sp<GraphicBuffer> buffer;
         sp<Fence> acquireFence;
-        ui::Dataspace dataspace;
         HdrMetadata hdrMetadata;
         Region surfaceDamageRegion;
         int32_t api;
@@ -205,11 +212,11 @@ public:
         // and the buffer state layer's children.  Z order will be set to
         // INT_MIN
         sp<Layer> bgColorLayer;
-        ui::Dataspace colorDataspace; // The dataspace of the background color layer
 
         // The deque of callback handles for this frame. The back of the deque contains the most
         // recent callback handle.
         std::deque<sp<CallbackHandle>> callbackHandles;
+        bool colorSpaceAgnostic;
     };
 
     explicit Layer(const LayerCreationArgs& args);
@@ -271,7 +278,7 @@ public:
     virtual bool setRelativeLayer(const sp<IBinder>& relativeToHandle, int32_t relativeZ);
 
     virtual bool setAlpha(float alpha);
-    virtual bool setColor(const half3& color);
+    virtual bool setColor(const half3& /*color*/) { return false; };
 
     // Set rounded corner radius for this layer and its children.
     //
@@ -287,7 +294,7 @@ public:
                                               uint64_t frameNumber);
     virtual void deferTransactionUntil_legacy(const sp<Layer>& barrierLayer, uint64_t frameNumber);
     virtual bool setOverrideScalingMode(int32_t overrideScalingMode);
-    virtual bool setMetadata(LayerMetadata data);
+    virtual bool setMetadata(const LayerMetadata& data);
     virtual bool reparentChildren(const sp<IBinder>& layer);
     virtual void setChildrenDrawingParent(const sp<Layer>& layer);
     virtual bool reparent(const sp<IBinder>& newParentHandle);
@@ -297,13 +304,17 @@ public:
     virtual bool setColorTransform(const mat4& matrix);
     virtual mat4 getColorTransform() const;
     virtual bool hasColorTransform() const;
+    virtual bool isColorSpaceAgnostic() const { return mDrawingState.colorSpaceAgnostic; }
 
     // Used only to set BufferStateLayer state
     virtual bool setTransform(uint32_t /*transform*/) { return false; };
     virtual bool setTransformToDisplayInverse(bool /*transformToDisplayInverse*/) { return false; };
     virtual bool setCrop(const Rect& /*crop*/) { return false; };
     virtual bool setFrame(const Rect& /*frame*/) { return false; };
-    virtual bool setBuffer(const sp<GraphicBuffer>& /*buffer*/) { return false; };
+    virtual bool setBuffer(const sp<GraphicBuffer>& /*buffer*/, nsecs_t /*postTime*/,
+                           nsecs_t /*desiredPresentTime*/) {
+        return false;
+    }
     virtual bool setAcquireFence(const sp<Fence>& /*fence*/) { return false; };
     virtual bool setDataspace(ui::Dataspace /*dataspace*/) { return false; };
     virtual bool setHdrMetadata(const HdrMetadata& /*hdrMetadata*/) { return false; };
@@ -314,8 +325,8 @@ public:
             const std::vector<sp<CallbackHandle>>& /*handles*/) {
         return false;
     };
-    virtual bool setColorAlpha(float /*alpha*/) { return false; };
-    virtual bool setColorDataspace(ui::Dataspace /*dataspace*/) { return false; };
+    virtual bool setBackgroundColor(const half3& color, float alpha, ui::Dataspace dataspace);
+    virtual bool setColorSpaceAgnostic(const bool agnostic);
 
     ui::Dataspace getDataSpace() const { return mCurrentDataSpace; }
 
@@ -325,6 +336,8 @@ public:
     // needed to be saturated so that they match what they are designed for
     // visually.
     bool isLegacyDataSpace() const;
+
+    virtual std::shared_ptr<compositionengine::Layer> getCompositionLayer() const;
 
     // If we have received a new buffer this frame, we will pass its surface
     // damage down to hardware composer. Otherwise, we must send a region with
@@ -345,8 +358,21 @@ public:
 
     void computeGeometry(const RenderArea& renderArea, renderengine::Mesh& mesh,
                          bool useIdentityTransform) const;
-    FloatRect computeBounds(const Region& activeTransparentRegion) const;
-    FloatRect computeBounds() const;
+    FloatRect getBounds(const Region& activeTransparentRegion) const;
+    FloatRect getBounds() const;
+
+    // Compute bounds for the layer and cache the results.
+    void computeBounds(FloatRect parentBounds, ui::Transform parentTransform);
+
+    // Returns the buffer scale transform if a scaling mode is set.
+    ui::Transform getBufferScaleTransform() const;
+
+    // Get effective layer transform, taking into account all its parent transform with any
+    // scaling if the parent scaling more is not NATIVE_WINDOW_SCALING_MODE_FREEZE.
+    ui::Transform getTransformWithScale(const ui::Transform& bufferScaleTransform) const;
+
+    // Returns the bounds of the layer without any buffer scaling.
+    FloatRect getBoundsPreScaling(const ui::Transform& bufferScaleTransform) const;
 
     int32_t getSequence() const { return sequence; }
 
@@ -383,6 +409,11 @@ public:
     bool isHiddenByPolicy() const;
 
     /*
+     * Returns whether this layer can receive input.
+     */
+    virtual bool canReceiveInput() const;
+
+    /*
      * isProtected - true if the layer may contain protected content in the
      * GRALLOC_USAGE_PROTECTED sense.
      */
@@ -393,6 +424,11 @@ public:
      */
     virtual bool isFixedSize() const { return true; }
 
+    /*
+     * usesSourceCrop - true if content should use a source crop
+     */
+    virtual bool usesSourceCrop() const { return false; }
+
     // Most layers aren't created from the main thread, and therefore need to
     // grab the SF state lock to access HWC, but ContainerLayer does, so we need
     // to avoid grabbing the lock again to avoid deadlock
@@ -400,10 +436,11 @@ public:
 
     bool isRemovedFromCurrentState() const;
 
-    void writeToProto(LayerProto* layerInfo,
-                      LayerVector::StateSet stateSet = LayerVector::StateSet::Drawing);
+    void writeToProto(LayerProto* layerInfo, LayerVector::StateSet stateSet,
+                      uint32_t traceFlags = SurfaceTracing::TRACE_ALL);
 
-    void writeToProto(LayerProto* layerInfo, DisplayId displayId);
+    void writeToProto(LayerProto* layerInfo, const sp<DisplayDevice>& displayDevice,
+                      uint32_t traceFlags = SurfaceTracing::TRACE_ALL);
 
     virtual Geometry getActiveGeometry(const Layer::State& s) const { return s.active_legacy; }
     virtual uint32_t getActiveWidth(const Layer::State& s) const { return s.active_legacy.w; }
@@ -419,31 +456,41 @@ public:
 protected:
     virtual bool prepareClientLayer(const RenderArea& renderArea, const Region& clip,
                                     bool useIdentityTransform, Region& clearRegion,
-                                    renderengine::LayerSettings& layer) = 0;
+                                    const bool supportProtectedContent,
+                                    renderengine::LayerSettings& layer);
+
+public:
+    /*
+     * compositionengine::LayerFE overrides
+     */
+    void latchCompositionState(compositionengine::LayerFECompositionState&,
+                               bool includeGeometry) const override;
+    void onLayerDisplayed(const sp<Fence>& releaseFence) override;
+    const char* getDebugName() const override;
+
+protected:
+    void latchGeometry(compositionengine::LayerFECompositionState& outState) const;
 
 public:
     virtual void setDefaultBufferSize(uint32_t /*w*/, uint32_t /*h*/) {}
 
     virtual bool isHdrY410() const { return false; }
 
-    void setGeometry(const sp<const DisplayDevice>& display, uint32_t z);
-    void forceClientComposition(DisplayId displayId);
-    bool getForceClientComposition(DisplayId displayId);
-    virtual void setPerFrameData(DisplayId displayId, const ui::Transform& transform,
-                                 const Rect& viewport, int32_t supportedPerFrameMetadata) = 0;
+    void forceClientComposition(const sp<DisplayDevice>& display);
+    bool getForceClientComposition(const sp<DisplayDevice>& display);
+    virtual void setPerFrameData(const sp<const DisplayDevice>& display,
+                                 const ui::Transform& transform, const Rect& viewport,
+                                 int32_t supportedPerFrameMetadata,
+                                 const ui::Dataspace targetDataspace) = 0;
 
     // callIntoHwc exists so we can update our local state and call
     // acceptDisplayChanges without unnecessarily updating the device's state
-    void setCompositionType(DisplayId displayId, HWC2::Composition type, bool callIntoHwc = true);
-    HWC2::Composition getCompositionType(const std::optional<DisplayId>& displayId) const;
-    void setClearClientTarget(DisplayId displayId, bool clear);
-    bool getClearClientTarget(DisplayId displayId) const;
+    void setCompositionType(const sp<const DisplayDevice>& display,
+                            Hwc2::IComposerClient::Composition type);
+    Hwc2::IComposerClient::Composition getCompositionType(
+            const sp<const DisplayDevice>& display) const;
+    bool getClearClientTarget(const sp<const DisplayDevice>& display) const;
     void updateCursorPosition(const sp<const DisplayDevice>& display);
-
-    /*
-     * called after page-flip
-     */
-    virtual void onLayerDisplayed(const sp<Fence>& releaseFence);
 
     virtual bool shouldPresentNow(nsecs_t /*expectedPresentTime*/) const { return false; }
     virtual void setTransformHint(uint32_t /*orientation*/) const { }
@@ -474,9 +521,10 @@ public:
      * false otherwise.
      */
     bool prepareClientLayer(const RenderArea& renderArea, const Region& clip, Region& clearRegion,
-                            renderengine::LayerSettings& layer);
+                            const bool supportProtectedContent, renderengine::LayerSettings& layer);
     bool prepareClientLayer(const RenderArea& renderArea, bool useIdentityTransform,
-                            Region& clearRegion, renderengine::LayerSettings& layer);
+                            Region& clearRegion, const bool supportProtectedContent,
+                            renderengine::LayerSettings& layer);
 
     /*
      * doTransaction - process the transaction. This is a good place to figure
@@ -514,8 +562,7 @@ public:
      * operation, so this should be set only if needed). Typically this is used
      * to figure out if the content or size of a surface has changed.
      */
-    virtual Region latchBuffer(bool& /*recomputeVisibleRegions*/, nsecs_t /*latchTime*/,
-                               const sp<Fence>& /*releaseFence*/) {
+    virtual bool latchBuffer(bool& /*recomputeVisibleRegions*/, nsecs_t /*latchTime*/) {
         return {};
     }
 
@@ -551,27 +598,8 @@ public:
 
     // -----------------------------------------------------------------------
 
-    bool createHwcLayer(HWComposer* hwc, DisplayId displayId);
-    bool destroyHwcLayer(DisplayId displayId);
-    void destroyHwcLayersForAllDisplays();
-    void destroyAllHwcLayersPlusChildren();
-
-    bool hasHwcLayer(DisplayId displayId) const { return getBE().mHwcLayers.count(displayId) > 0; }
-
-    HWC2::Layer* getHwcLayer(DisplayId displayId) {
-        if (!hasHwcLayer(displayId)) {
-            return nullptr;
-        }
-        return getBE().mHwcLayers[displayId].layer.get();
-    }
-
-    bool setHwcLayer(DisplayId displayId) {
-        if (!hasHwcLayer(displayId)) {
-            return false;
-        }
-        getBE().compositionInfo.hwc.hwcLayer = getBE().mHwcLayers[displayId].layer;
-        return true;
-    }
+    bool hasHwcLayer(const sp<const DisplayDevice>& displayDevice);
+    HWC2::Layer* getHwcLayer(const sp<const DisplayDevice>& displayDevice);
 
     // -----------------------------------------------------------------------
     void clearWithOpenGL(const RenderArea& renderArea) const;
@@ -584,7 +612,7 @@ public:
 
     /* always call base class first */
     static void miniDumpHeader(std::string& result);
-    void miniDump(std::string& result, DisplayId displayId) const;
+    void miniDump(std::string& result, const sp<DisplayDevice>& display) const;
     void dumpFrameStats(std::string& result) const;
     void dumpFrameEvents(std::string& result);
     void clearFrameStats();
@@ -634,7 +662,7 @@ public:
     ssize_t removeChild(const sp<Layer>& layer);
     sp<Layer> getParent() const { return mCurrentParent.promote(); }
     bool hasParent() const { return getParent() != nullptr; }
-    Rect computeScreenBounds(bool reduceTransparentRegion = true) const;
+    Rect getScreenBounds(bool reduceTransparentRegion = true) const;
     bool setChildLayer(const sp<Layer>& childLayer, int32_t z);
     bool setChildRelativeLayer(const sp<Layer>& childLayer,
             const sp<IBinder>& relativeToHandle, int32_t relativeZ);
@@ -650,6 +678,18 @@ public:
      * any buffer transformations. If the layer has no buffer then return INVALID_RECT.
      */
     virtual Rect getBufferSize(const Layer::State&) const { return Rect::INVALID_RECT; }
+
+    /**
+     * Returns the source bounds. If the bounds are not defined, it is inferred from the
+     * buffer size. Failing that, the bounds are determined from the passed in parent bounds.
+     * For the root layer, this is the display viewport size.
+     */
+    virtual FloatRect computeSourceBounds(const FloatRect& parentBounds) const {
+        return parentBounds;
+    }
+
+    compositionengine::OutputLayer* findOutputLayerForDisplay(
+            const sp<const DisplayDevice>& display) const;
 
 protected:
     // constant
@@ -678,16 +718,10 @@ protected:
     // For unit tests
     friend class TestableSurfaceFlinger;
 
-    void commitTransaction(const State& stateToCommit);
+    virtual void commitTransaction(const State& stateToCommit);
 
     uint32_t getEffectiveUsage(uint32_t usage) const;
 
-    virtual FloatRect computeCrop(const sp<const DisplayDevice>& display) const;
-    // Compute the initial crop as specified by parent layers and the
-    // SurfaceControl for this layer. Does not include buffer crop from the
-    // IGraphicBufferProducer client, as that should not affect child clipping.
-    // Returns in screen space.
-    Rect computeInitialCrop(const sp<const DisplayDevice>& display) const;
     /**
      * Setup rounded corners coordinates of this layer, taking into account the layer bounds and
      * crop coordinates, transforming them into layer space.
@@ -740,8 +774,6 @@ protected:
     void popPendingState(State* stateToCommit);
     virtual bool applyPendingStates(State* stateToCommit);
     virtual uint32_t doTransactionResize(uint32_t flags, Layer::State* stateToCommit);
-
-    void clearSyncPoints();
 
     // Returns mCurrentScaling mode (originating from the
     // Client) or mOverrideScalingMode mode (originating from
@@ -807,6 +839,7 @@ protected:
     FenceTimeline mReleaseTimeline;
 
     // main thread
+    sp<NativeHandle> mSidebandStream;
     // Active buffer fields
     sp<GraphicBuffer> mActiveBuffer;
     sp<Fence> mActiveBufferFence;
@@ -847,10 +880,16 @@ protected:
     wp<Layer> mCurrentParent;
     wp<Layer> mDrawingParent;
 
-    mutable LayerBE mBE;
-
     // Can only be accessed with the SF state lock held.
     bool mLayerDetached{false};
+    // Can only be accessed with the SF state lock held.
+    bool mChildrenChanged{false};
+
+    // Window types from WindowManager.LayoutParams
+    const int mWindowType;
+
+    // This is populated if the layer is registered with Scheduler for tracking purposes.
+    std::unique_ptr<scheduler::LayerHistory::LayerHandle> mSchedulerLayerHandle;
 
 private:
     /**
@@ -868,28 +907,38 @@ private:
     LayerVector makeChildrenTraversalList(LayerVector::StateSet stateSet,
                                           const std::vector<Layer*>& layersInTree);
     /**
-     * Retuns the child bounds in layer space cropped to its bounds as well all its parent bounds.
-     * The cropped bounds must be transformed back from parent layer space to child layer space by
-     * applying the inverse of the child's transformation.
-     */
-    FloatRect cropChildBounds(const FloatRect& childBounds) const;
-
-    /**
      * Returns the cropped buffer size or the layer crop if the layer has no buffer. Return
      * INVALID_RECT if the layer has no buffer and no crop.
      * A layer with an invalid buffer size and no crop is considered to be boundless. The layer
      * bounds are constrained by its parent bounds.
      */
     Rect getCroppedBufferSize(const Layer::State& s) const;
+
+    // Cached properties computed from drawing state
+    // Effective transform taking into account parent transforms and any parent scaling.
+    ui::Transform mEffectiveTransform;
+
+    // Bounds of the layer before any transformation is applied and before it has been cropped
+    // by its parents.
+    FloatRect mSourceBounds;
+
+    // Bounds of the layer in layer space. This is the mSourceBounds cropped by its layer crop and
+    // its parent bounds.
+    FloatRect mBounds;
+
+    // Layer bounds in screen space.
+    FloatRect mScreenBounds;
+
+    void setZOrderRelativeOf(const wp<Layer>& relativeOf);
 };
 
 } // namespace android
 
-#define RETURN_IF_NO_HWC_LAYER(displayId, ...)                                         \
+#define RETURN_IF_NO_HWC_LAYER(displayDevice, ...)                                     \
     do {                                                                               \
-        if (!hasHwcLayer(displayId)) {                                                 \
+        if (!hasHwcLayer(displayDevice)) {                                             \
             ALOGE("[%s] %s failed: no HWC layer found for display %s", mName.string(), \
-                  __FUNCTION__, to_string(displayId).c_str());                         \
+                  __FUNCTION__, displayDevice->getDebugName().c_str());                \
             return __VA_ARGS__;                                                        \
         }                                                                              \
     } while (false)

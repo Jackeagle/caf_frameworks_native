@@ -27,6 +27,7 @@
 #include <math/mat4.h>
 #include <ui/GraphicTypes.h>
 #include <ui/HdrCapabilities.h>
+#include <ui/Region.h>
 #include <utils/Log.h>
 #include <utils/StrongPointer.h>
 #include <utils/Timers.h>
@@ -37,15 +38,11 @@
 #include <unordered_set>
 #include <vector>
 
-#include "PowerAdvisor.h"
-
 namespace android {
     struct DisplayedFrameStats;
     class Fence;
     class FloatRect;
     class GraphicBuffer;
-    class Rect;
-    class Region;
     namespace Hwc2 {
         class Composer;
     }
@@ -125,7 +122,6 @@ private:
     std::unique_ptr<android::Hwc2::Composer> mComposer;
     std::unordered_set<Capability> mCapabilities;
     std::unordered_map<hwc2_display_t, std::unique_ptr<Display>> mDisplays;
-    android::Hwc2::impl::PowerAdvisor mPowerAdvisor;
     bool mRegisteredCallback = false;
 };
 
@@ -267,15 +263,15 @@ public:
     [[clang::warn_unused_result]] virtual Error presentOrValidate(
             uint32_t* outNumTypes, uint32_t* outNumRequests,
             android::sp<android::Fence>* outPresentFence, uint32_t* state) = 0;
+    [[clang::warn_unused_result]] virtual Error setDisplayBrightness(float brightness) const = 0;
 };
 
 namespace impl {
 
 class Display : public HWC2::Display {
 public:
-    Display(android::Hwc2::Composer& composer, android::Hwc2::PowerAdvisor& advisor,
-            const std::unordered_set<Capability>& capabilities, hwc2_display_t id,
-            DisplayType type);
+    Display(android::Hwc2::Composer& composer, const std::unordered_set<Capability>& capabilities,
+            hwc2_display_t id, DisplayType type);
     ~Display() override;
 
     // Required by HWC2
@@ -326,6 +322,7 @@ public:
     Error validate(uint32_t* outNumTypes, uint32_t* outNumRequests) override;
     Error presentOrValidate(uint32_t* outNumTypes, uint32_t* outNumRequests,
                             android::sp<android::Fence>* outPresentFence, uint32_t* state) override;
+    Error setDisplayBrightness(float brightness) const override;
 
     // Other Display methods
     hwc2_display_t getId() const override { return mId; }
@@ -352,7 +349,6 @@ private:
     // this HWC2::Display, so these references are guaranteed to be valid for
     // the lifetime of this object.
     android::Hwc2::Composer& mComposer;
-    android::Hwc2::PowerAdvisor& mPowerAdvisor;
     const std::unordered_set<Capability>& mCapabilities;
 
     hwc2_display_t mId;
@@ -364,52 +360,73 @@ private:
 };
 } // namespace impl
 
+class Layer {
+public:
+    virtual ~Layer();
+
+    virtual hwc2_layer_t getId() const = 0;
+
+    [[clang::warn_unused_result]] virtual Error setCursorPosition(int32_t x, int32_t y) = 0;
+    [[clang::warn_unused_result]] virtual Error setBuffer(
+            uint32_t slot, const android::sp<android::GraphicBuffer>& buffer,
+            const android::sp<android::Fence>& acquireFence) = 0;
+    [[clang::warn_unused_result]] virtual Error setSurfaceDamage(const android::Region& damage) = 0;
+
+    [[clang::warn_unused_result]] virtual Error setBlendMode(BlendMode mode) = 0;
+    [[clang::warn_unused_result]] virtual Error setColor(hwc_color_t color) = 0;
+    [[clang::warn_unused_result]] virtual Error setCompositionType(Composition type) = 0;
+    [[clang::warn_unused_result]] virtual Error setDataspace(android::ui::Dataspace dataspace) = 0;
+    [[clang::warn_unused_result]] virtual Error setPerFrameMetadata(
+            const int32_t supportedPerFrameMetadata, const android::HdrMetadata& metadata) = 0;
+    [[clang::warn_unused_result]] virtual Error setDisplayFrame(const android::Rect& frame) = 0;
+    [[clang::warn_unused_result]] virtual Error setPlaneAlpha(float alpha) = 0;
+    [[clang::warn_unused_result]] virtual Error setSidebandStream(
+            const native_handle_t* stream) = 0;
+    [[clang::warn_unused_result]] virtual Error setSourceCrop(const android::FloatRect& crop) = 0;
+    [[clang::warn_unused_result]] virtual Error setTransform(Transform transform) = 0;
+    [[clang::warn_unused_result]] virtual Error setVisibleRegion(const android::Region& region) = 0;
+    [[clang::warn_unused_result]] virtual Error setZOrder(uint32_t z) = 0;
+    [[clang::warn_unused_result]] virtual Error setInfo(uint32_t type, uint32_t appId) = 0;
+
+    // Composer HAL 2.3
+    [[clang::warn_unused_result]] virtual Error setColorTransform(const android::mat4& matrix) = 0;
+};
+
+namespace impl {
+
 // Convenience C++ class to access hwc2_device_t Layer functions directly.
-class Layer
-{
+
+class Layer : public HWC2::Layer {
 public:
     Layer(android::Hwc2::Composer& composer,
           const std::unordered_set<Capability>& capabilities,
           hwc2_display_t displayId, hwc2_layer_t layerId);
-    ~Layer();
+    ~Layer() override;
 
-    hwc2_layer_t getId() const { return mId; }
+    hwc2_layer_t getId() const override { return mId; }
 
-    // Register a listener to be notified when the layer is destroyed. When the
-    // listener function is called, the Layer will be in the process of being
-    // destroyed, so it's not safe to call methods on it.
-    void setLayerDestroyedListener(std::function<void(Layer*)> listener);
+    Error setCursorPosition(int32_t x, int32_t y) override;
+    Error setBuffer(uint32_t slot, const android::sp<android::GraphicBuffer>& buffer,
+                    const android::sp<android::Fence>& acquireFence) override;
+    Error setSurfaceDamage(const android::Region& damage) override;
 
-    [[clang::warn_unused_result]] Error setCursorPosition(int32_t x, int32_t y);
-    [[clang::warn_unused_result]] Error setBuffer(uint32_t slot,
-            const android::sp<android::GraphicBuffer>& buffer,
-            const android::sp<android::Fence>& acquireFence);
-    [[clang::warn_unused_result]] Error setSurfaceDamage(
-            const android::Region& damage);
-
-    [[clang::warn_unused_result]] Error setBlendMode(BlendMode mode);
-    [[clang::warn_unused_result]] Error setColor(hwc_color_t color);
-    [[clang::warn_unused_result]] Error setCompositionType(Composition type);
-    [[clang::warn_unused_result]] Error setDataspace(
-            android::ui::Dataspace dataspace);
-    [[clang::warn_unused_result]] Error setPerFrameMetadata(
-            const int32_t supportedPerFrameMetadata,
-            const android::HdrMetadata& metadata);
-    [[clang::warn_unused_result]] Error setDisplayFrame(
-            const android::Rect& frame);
-    [[clang::warn_unused_result]] Error setPlaneAlpha(float alpha);
-    [[clang::warn_unused_result]] Error setSidebandStream(
-            const native_handle_t* stream);
-    [[clang::warn_unused_result]] Error setSourceCrop(
-            const android::FloatRect& crop);
-    [[clang::warn_unused_result]] Error setTransform(Transform transform);
-    [[clang::warn_unused_result]] Error setVisibleRegion(
-            const android::Region& region);
-    [[clang::warn_unused_result]] Error setZOrder(uint32_t z);
-    [[clang::warn_unused_result]] Error setInfo(uint32_t type, uint32_t appId);
+    Error setBlendMode(BlendMode mode) override;
+    Error setColor(hwc_color_t color) override;
+    Error setCompositionType(Composition type) override;
+    Error setDataspace(android::ui::Dataspace dataspace) override;
+    Error setPerFrameMetadata(const int32_t supportedPerFrameMetadata,
+                              const android::HdrMetadata& metadata) override;
+    Error setDisplayFrame(const android::Rect& frame) override;
+    Error setPlaneAlpha(float alpha) override;
+    Error setSidebandStream(const native_handle_t* stream) override;
+    Error setSourceCrop(const android::FloatRect& crop) override;
+    Error setTransform(Transform transform) override;
+    Error setVisibleRegion(const android::Region& region) override;
+    Error setZOrder(uint32_t z) override;
+    Error setInfo(uint32_t type, uint32_t appId) override;
 
     // Composer HAL 2.3
-    [[clang::warn_unused_result]] Error setColorTransform(const android::mat4& matrix);
+    Error setColorTransform(const android::mat4& matrix) override;
 
 private:
     // These are references to data owned by HWC2::Device, which will outlive
@@ -420,11 +437,18 @@ private:
 
     hwc2_display_t mDisplayId;
     hwc2_layer_t mId;
+
+    // Cached HWC2 data, to ensure the same commands aren't sent to the HWC
+    // multiple times.
+    android::Region mVisibleRegion = android::Region::INVALID_REGION;
+    android::Region mDamageRegion = android::Region::INVALID_REGION;
     android::ui::Dataspace mDataSpace = android::ui::Dataspace::UNKNOWN;
     android::HdrMetadata mHdrMetadata;
-    std::function<void(Layer*)> mLayerDestroyedListener;
     android::mat4 mColorMatrix;
+    uint32_t mBufferSlot;
 };
+
+} // namespace impl
 
 } // namespace HWC2
 

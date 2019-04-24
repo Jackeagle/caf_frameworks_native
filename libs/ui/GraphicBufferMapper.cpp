@@ -53,6 +53,9 @@ GraphicBufferMapper::GraphicBufferMapper() {
     mMapper = std::make_unique<const Gralloc3Mapper>();
     if (!mMapper->isLoaded()) {
         mMapper = std::make_unique<const Gralloc2Mapper>();
+        mMapperVersion = Version::GRALLOC_2;
+    } else {
+        mMapperVersion = Version::GRALLOC_3;
     }
 
     if (!mMapper->isLoaded()) {
@@ -161,5 +164,10 @@ status_t GraphicBufferMapper::unlockAsync(buffer_handle_t handle, int *fenceFd)
     return NO_ERROR;
 }
 
+status_t GraphicBufferMapper::isSupported(uint32_t width, uint32_t height,
+                                          android::PixelFormat format, uint32_t layerCount,
+                                          uint64_t usage, bool* outSupported) {
+    return mMapper->isSupported(width, height, format, layerCount, usage, outSupported);
+}
 // ---------------------------------------------------------------------------
 }; // namespace android

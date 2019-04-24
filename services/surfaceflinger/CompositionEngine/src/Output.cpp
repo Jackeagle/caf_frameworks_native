@@ -17,11 +17,17 @@
 #include <android-base/stringprintf.h>
 #include <compositionengine/CompositionEngine.h>
 #include <compositionengine/DisplayColorProfile.h>
+#include <compositionengine/LayerFE.h>
 #include <compositionengine/RenderSurface.h>
 #include <compositionengine/impl/Output.h>
+#include <compositionengine/impl/OutputLayer.h>
 #include <ui/DebugUtils.h>
 
-namespace android::compositionengine::impl {
+namespace android::compositionengine {
+
+Output::~Output() = default;
+
+namespace impl {
 
 Output::Output(const CompositionEngine& compositionEngine)
       : mCompositionEngine(compositionEngine) {}
@@ -84,13 +90,26 @@ void Output::setLayerStackFilter(uint32_t layerStackId, bool isInternal) {
 
 void Output::setColorTransform(const mat4& transform) {
     const bool isIdentity = (transform == mat4());
-
-    mState.colorTransform =
+    const auto newColorTransform =
             isIdentity ? HAL_COLOR_TRANSFORM_IDENTITY : HAL_COLOR_TRANSFORM_ARBITRARY_MATRIX;
+
+    if (mState.colorTransform == newColorTransform) {
+        return;
+    }
+
+    mState.colorTransform = newColorTransform;
+    mState.colorTransformMat = transform;
+
+    dirtyEntireOutput();
 }
 
 void Output::setColorMode(ui::ColorMode mode, ui::Dataspace dataspace,
                           ui::RenderIntent renderIntent) {
+    if (mState.colorMode == mode && mState.dataspace == dataspace &&
+        mState.renderIntent == renderIntent) {
+        return;
+    }
+
     mState.colorMode = mode;
     mState.dataspace = dataspace;
     mState.renderIntent = renderIntent;
@@ -100,6 +119,8 @@ void Output::setColorMode(ui::ColorMode mode, ui::Dataspace dataspace,
     ALOGV("Set active color mode: %s (%d), active render intent: %s (%d)",
           decodeColorMode(mode).c_str(), mode, decodeRenderIntent(renderIntent).c_str(),
           renderIntent);
+
+    dirtyEntireOutput();
 }
 
 void Output::dump(std::string& out) const {
@@ -125,6 +146,14 @@ void Output::dumpBase(std::string& out) const {
         mRenderSurface->dump(out);
     } else {
         out.append("    No render surface!\n");
+    }
+
+    android::base::StringAppendF(&out, "\n   %zu Layers\b", mOutputLayersOrderedByZ.size());
+    for (const auto& outputLayer : mOutputLayersOrderedByZ) {
+        if (!outputLayer) {
+            continue;
+        }
+        outputLayer->dump(out);
     }
 }
 
@@ -178,8 +207,38 @@ bool Output::belongsInOutput(uint32_t layerStackId, bool internalOnly) const {
     return (layerStackId == mState.layerStackId) && (!internalOnly || mState.layerStackInternal);
 }
 
+compositionengine::OutputLayer* Output::getOutputLayerForLayer(
+        compositionengine::Layer* layer) const {
+    for (const auto& outputLayer : mOutputLayersOrderedByZ) {
+        if (outputLayer && &outputLayer->getLayer() == layer) {
+            return outputLayer.get();
+        }
+    }
+    return nullptr;
+}
+
+std::unique_ptr<compositionengine::OutputLayer> Output::getOrCreateOutputLayer(
+        std::optional<DisplayId> displayId, std::shared_ptr<compositionengine::Layer> layer,
+        sp<compositionengine::LayerFE> layerFE) {
+    for (auto& outputLayer : mOutputLayersOrderedByZ) {
+        if (outputLayer && &outputLayer->getLayer() == layer.get()) {
+            return std::move(outputLayer);
+        }
+    }
+    return createOutputLayer(mCompositionEngine, displayId, *this, layer, layerFE);
+}
+
+void Output::setOutputLayersOrderedByZ(OutputLayers&& layers) {
+    mOutputLayersOrderedByZ = std::move(layers);
+}
+
+const Output::OutputLayers& Output::getOutputLayersOrderedByZ() const {
+    return mOutputLayersOrderedByZ;
+}
+
 void Output::dirtyEntireOutput() {
     mState.dirtyRegion.set(mState.bounds);
 }
 
-} // namespace android::compositionengine::impl
+} // namespace impl
+} // namespace android::compositionengine

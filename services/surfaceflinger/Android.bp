@@ -23,7 +23,6 @@ cc_defaults {
         "android.hardware.configstore-utils",
         "android.hardware.configstore@1.0",
         "android.hardware.configstore@1.1",
-        "android.hardware.configstore@1.2",
         "android.hardware.graphics.allocator@2.0",
         "android.hardware.graphics.allocator@3.0",
         "android.hardware.graphics.common@1.2",
@@ -48,7 +47,7 @@ cc_defaults {
         "libhwbinder",
         "liblayers_proto",
         "liblog",
-	"libnativewindow",
+        "libnativewindow",
         "libpdx_default_transport",
         "libprocessgroup",
         "libprotobuf-cpp-lite",
@@ -57,8 +56,7 @@ cc_defaults {
         "libui",
         "libinput",
         "libutils",
-        "libutilscallstack",
-        "libSurfaceFlingerProperties",
+        "libSurfaceFlingerProp",
     ],
     static_libs: [
         "libcompositionengine",
@@ -128,20 +126,20 @@ filegroup {
         "DisplayHardware/FramebufferSurface.cpp",
         "DisplayHardware/HWC2.cpp",
         "DisplayHardware/HWComposer.cpp",
-        "DisplayHardware/HWComposerBufferCache.cpp",
         "DisplayHardware/PowerAdvisor.cpp",
         "DisplayHardware/VirtualDisplaySurface.cpp",
         "Effects/Daltonizer.cpp",
         "EventLog/EventLog.cpp",
         "FrameTracker.cpp",
         "Layer.cpp",
-        "LayerBE.cpp",
         "LayerProtoHelper.cpp",
         "LayerRejecter.cpp",
         "LayerStats.cpp",
         "LayerVector.cpp",
         "MonitoredProducer.cpp",
         "NativeWindowSurface.cpp",
+        "RefreshRateOverlay.cpp",
+        "RegionSamplingThread.cpp",
         "RenderArea.cpp",
         "Scheduler/DispSync.cpp",
         "Scheduler/DispSyncSource.cpp",
@@ -149,6 +147,7 @@ filegroup {
         "Scheduler/EventThread.cpp",
         "Scheduler/IdleTimer.cpp",
         "Scheduler/LayerHistory.cpp",
+        "Scheduler/LayerInfo.cpp",
         "Scheduler/MessageQueue.cpp",
         "Scheduler/Scheduler.cpp",
         "Scheduler/SchedulerUtils.cpp",
@@ -190,7 +189,6 @@ cc_defaults {
         "android.frameworks.displayservice@1.0",
         "android.hardware.configstore-utils",
         "android.hardware.configstore@1.0",
-        "android.hardware.configstore@1.2",
         "android.hardware.graphics.allocator@2.0",
         "android.hardware.graphics.allocator@3.0",
         "libbinder",
@@ -225,26 +223,8 @@ cc_binary {
     srcs: [":surfaceflinger_binary_sources"],
     shared_libs: [
         "libsurfaceflinger",
-        "libSurfaceFlingerProperties",
+        "libSurfaceFlingerProp",
     ],
-}
-
-cc_library_shared {
-    name: "libsurfaceflinger_ddmconnection",
-    defaults: ["surfaceflinger_defaults"],
-    srcs: ["DdmConnection.cpp"],
-    shared_libs: [
-        "libcutils",
-        "libdl",
-        "liblog",
-        "libprocessgroup",
-    ],
-    product_variables: {
-        // uses jni which may not be available in PDK
-        pdk: {
-            enabled: false,
-        },
-    },
 }
 
 subdirs = [
@@ -254,24 +234,32 @@ subdirs = [
 ]
 
 cc_library_shared {
-    name: "libSurfaceFlingerProperties",
+    name: "libSurfaceFlingerProp",
     srcs: [
         "SurfaceFlingerProperties.cpp",
-        "sysprop/*.sysprop",
     ],
     shared_libs: [
         "android.hardware.configstore-utils",
         "android.hardware.configstore@1.0",
         "android.hardware.configstore@1.1",
-        "android.hardware.configstore@1.2",
+        "android.hardware.graphics.common@1.2",
         "libhidlbase",
         "libhidltransport",
         "libhwbinder",
+        "libui",
         "libutils",
+        "liblog",
+    ],
+    static_libs: [
+        "SurfaceFlingerProperties",
     ],
     export_shared_lib_headers: [
+        "android.hardware.graphics.common@1.2",
         "libhidlbase",
         "libhidltransport",
         "libhwbinder",
+    ],
+    export_static_lib_headers: [
+        "SurfaceFlingerProperties",
     ],
 }
