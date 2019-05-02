@@ -46,6 +46,7 @@
 #include <utils/Trace.h>
 #include <utils/threads.h>
 
+#include "ClientCache.h"
 #include "DisplayDevice.h"
 #include "DisplayHardware/HWC2.h"
 #include "DisplayHardware/PowerAdvisor.h"
@@ -313,6 +314,8 @@ public:
         return mTransactionCompletedThread;
     }
 
+    sp<Layer> fromHandle(const sp<IBinder>& handle) REQUIRES(mStateLock);
+
 private:
     friend class BufferLayer;
     friend class BufferQueueLayer;
@@ -386,7 +389,7 @@ private:
                              const Vector<DisplayState>& displays, uint32_t flags,
                              const sp<IBinder>& applyToken,
                              const InputWindowCommands& inputWindowCommands,
-                             int64_t desiredPresentTime, const cached_buffer_t& uncacheBuffer,
+                             int64_t desiredPresentTime, const client_cache_t& uncacheBuffer,
                              const std::vector<ListenerCallbacks>& listenerCallbacks) override;
     void bootFinished() override;
     bool authenticateSurfaceTexture(
@@ -545,7 +548,7 @@ private:
                                const Vector<DisplayState>& displays, uint32_t flags,
                                const InputWindowCommands& inputWindowCommands,
                                const int64_t desiredPresentTime,
-                               const cached_buffer_t& uncacheBuffer,
+                               const client_cache_t& uncacheBuffer,
                                const std::vector<ListenerCallbacks>& listenerCallbacks,
                                const int64_t postTime, bool privileged, bool isMainThread = false)
             REQUIRES(mStateLock);
@@ -575,7 +578,8 @@ private:
      */
     status_t createLayer(const String8& name, const sp<Client>& client, uint32_t w, uint32_t h,
                          PixelFormat format, uint32_t flags, LayerMetadata metadata,
-                         sp<IBinder>* handle, sp<IGraphicBufferProducer>* gbp, sp<Layer>* parent);
+                         sp<IBinder>* handle, sp<IGraphicBufferProducer>* gbp,
+                         const sp<IBinder>& parentHandle, const sp<Layer>& parentLayer = nullptr);
 
     status_t createBufferQueueLayer(const sp<Client>& client, const String8& name, uint32_t w,
                                     uint32_t h, uint32_t flags, LayerMetadata metadata,
@@ -603,12 +607,10 @@ private:
     void markLayerPendingRemovalLocked(const sp<Layer>& layer);
 
     // add a layer to SurfaceFlinger
-    status_t addClientLayer(const sp<Client>& client,
-            const sp<IBinder>& handle,
-            const sp<IGraphicBufferProducer>& gbc,
-            const sp<Layer>& lbc,
-            const sp<Layer>& parent,
-            bool addToCurrentState);
+    status_t addClientLayer(const sp<Client>& client, const sp<IBinder>& handle,
+                            const sp<IGraphicBufferProducer>& gbc, const sp<Layer>& lbc,
+                            const sp<IBinder>& parentHandle, const sp<Layer>& parentLayer,
+                            bool addToCurrentState);
 
     // Traverse through all the layers and compute and cache its bounds.
     void computeLayerBounds();
@@ -734,8 +736,8 @@ private:
                                     nsecs_t compositeToPresentLatency);
     void rebuildLayerStacks();
 
-    ui::Dataspace getBestDataspace(const sp<const DisplayDevice>& display,
-                                   ui::Dataspace* outHdrDataSpace) const;
+    ui::Dataspace getBestDataspace(const sp<DisplayDevice>& display, ui::Dataspace* outHdrDataSpace,
+                                   bool* outIsHdrClientComposition) const;
 
     // Returns the appropriate ColorMode, Dataspace and RenderIntent for the
     // DisplayDevice. The function only returns the supported ColorMode,
@@ -981,6 +983,9 @@ private:
     std::map<wp<IBinder>, sp<DisplayDevice>> mDisplays;
     std::unordered_map<DisplayId, sp<IBinder>> mPhysicalDisplayTokens;
 
+    // protected by mStateLock
+    std::unordered_map<BBinder*, wp<Layer>> mLayersByLocalBinderToken;
+
     // don't use a lock for these, we don't care
     int mDebugRegion = 0;
     bool mDebugDisableHWC = false;
@@ -1031,7 +1036,7 @@ private:
     struct TransactionState {
         TransactionState(const Vector<ComposerState>& composerStates,
                          const Vector<DisplayState>& displayStates, uint32_t transactionFlags,
-                         int64_t desiredPresentTime, const cached_buffer_t& uncacheBuffer,
+                         int64_t desiredPresentTime, const client_cache_t& uncacheBuffer,
                          const std::vector<ListenerCallbacks>& listenerCallbacks, int64_t postTime,
                          bool privileged)
               : states(composerStates),
@@ -1047,7 +1052,7 @@ private:
         Vector<DisplayState> displays;
         uint32_t flags;
         const int64_t desiredPresentTime;
-        cached_buffer_t buffer;
+        client_cache_t buffer;
         std::vector<ListenerCallbacks> callback;
         const int64_t postTime;
         bool privileged;
@@ -1142,6 +1147,9 @@ private:
     Hwc2::impl::PowerAdvisor mPowerAdvisor;
 
     std::unique_ptr<RefreshRateOverlay> mRefreshRateOverlay;
+
+    // Flag used to set override allowed display configs from backdoor
+    bool mDebugDisplayConfigSetByBackdoor = false;
 };
 
 } // namespace android
