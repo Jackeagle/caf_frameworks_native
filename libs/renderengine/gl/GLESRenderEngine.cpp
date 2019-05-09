@@ -271,13 +271,6 @@ std::unique_ptr<GLESRenderEngine> GLESRenderEngine::create(int hwcFormat, uint32
     extensions.initWithGLStrings(glGetString(GL_VENDOR), glGetString(GL_RENDERER),
                                  glGetString(GL_VERSION), glGetString(GL_EXTENSIONS));
 
-    // In order to have protected contents in GPU composition, the OpenGL ES extension
-    // GL_EXT_protected_textures must be supported. If it's not supported, reset
-    // protected context to EGL_NO_CONTEXT to indicate that protected contents is not supported.
-    if (!extensions.hasProtectedTexture()) {
-        protectedContext = EGL_NO_CONTEXT;
-    }
-
     EGLSurface protectedDummy = EGL_NO_SURFACE;
     if (protectedContext != EGL_NO_CONTEXT && !extensions.hasSurfacelessContext()) {
         protectedDummy =
@@ -540,15 +533,13 @@ bool GLESRenderEngine::waitFence(base::unique_fd fenceFd) {
         return false;
     }
 
-    EGLint attribs[] = {EGL_SYNC_NATIVE_FENCE_FD_ANDROID, fenceFd, EGL_NONE};
+    // release the fd and transfer the ownership to EGLSync
+    EGLint attribs[] = {EGL_SYNC_NATIVE_FENCE_FD_ANDROID, fenceFd.release(), EGL_NONE};
     EGLSyncKHR sync = eglCreateSyncKHR(mEGLDisplay, EGL_SYNC_NATIVE_FENCE_ANDROID, attribs);
     if (sync == EGL_NO_SYNC_KHR) {
         ALOGE("failed to create EGL native fence sync: %#x", eglGetError());
         return false;
     }
-
-    // fenceFd is now owned by EGLSync
-    (void)fenceFd.release();
 
     // XXX: The spec draft is inconsistent as to whether this should return an
     // EGLint or void.  Ignore the return value for now, as it's not strictly
@@ -618,10 +609,6 @@ void GLESRenderEngine::bindExternalTextureImage(uint32_t texName, const Image& i
     const GLenum target = GL_TEXTURE_EXTERNAL_OES;
 
     glBindTexture(target, texName);
-    if (supportsProtectedContent()) {
-        glTexParameteri(target, GL_TEXTURE_PROTECTED_EXT,
-                        glImage.isProtected() ? GL_TRUE : GL_FALSE);
-    }
     if (glImage.getEGLImage() != EGL_NO_IMAGE_KHR) {
         glEGLImageTargetTexture2DOES(target, static_cast<GLeglImageOES>(glImage.getEGLImage()));
     }
@@ -801,10 +788,6 @@ status_t GLESRenderEngine::bindFrameBuffer(Framebuffer* framebuffer) {
 
     // Bind the texture and turn our EGLImage into a texture
     glBindTexture(GL_TEXTURE_2D, textureName);
-    if (supportsProtectedContent()) {
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_PROTECTED_EXT,
-                        mInProtectedContext ? GL_TRUE : GL_FALSE);
-    }
     glEGLImageTargetTexture2DOES(GL_TEXTURE_2D, (GLeglImageOES)eglImage);
 
     // Bind the Framebuffer to render into
@@ -1313,7 +1296,9 @@ void GLESRenderEngine::dump(std::string& result) {
     StringAppendF(&result, "GLES: %s, %s, %s\n", extensions.getVendor(), extensions.getRenderer(),
                   extensions.getVersion());
     StringAppendF(&result, "%s\n", extensions.getExtensions());
-    StringAppendF(&result, "RenderEngine is in protected context : %d\n", mInProtectedContext);
+    StringAppendF(&result, "RenderEngine supports protected context: %d\n",
+                  supportsProtectedContent());
+    StringAppendF(&result, "RenderEngine is in protected context: %d\n", mInProtectedContext);
     StringAppendF(&result, "RenderEngine program cache size for unprotected context: %zu\n",
                   cache.getSize(mEGLContext));
     StringAppendF(&result, "RenderEngine program cache size for protected context: %zu\n",

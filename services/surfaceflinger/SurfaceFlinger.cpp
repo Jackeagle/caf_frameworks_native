@@ -977,10 +977,9 @@ void SurfaceFlinger::setActiveConfigInternal() {
 bool SurfaceFlinger::performSetActiveConfig() {
     ATRACE_CALL();
     if (mCheckPendingFence) {
-        if (mPreviousPresentFence != Fence::NO_FENCE &&
-            (mPreviousPresentFence->getStatus() == Fence::Status::Unsignaled)) {
+        if (previousFrameMissed()) {
             // fence has not signaled yet. wait for the next invalidate
-            repaintEverythingForHWC();
+            mEventQueue->invalidateForHWC();
             return true;
         }
 
@@ -1031,7 +1030,7 @@ bool SurfaceFlinger::performSetActiveConfig() {
 
     // we need to submit an empty frame to HWC to start the process
     mCheckPendingFence = true;
-
+    mEventQueue->invalidateForHWC();
     return false;
 }
 
@@ -1447,10 +1446,6 @@ void SurfaceFlinger::setRefreshRateTo(RefreshRateType refreshRate, Scheduler::Co
         return;
     }
 
-    if (desiredConfigId == display->getActiveConfig()) {
-        return;
-    }
-
     setDesiredActiveConfig({refreshRate, desiredConfigId, event});
 }
 
@@ -1591,12 +1586,23 @@ void SurfaceFlinger::updateVrFlinger() {
     setTransactionFlags(eDisplayTransactionNeeded);
 }
 
+bool SurfaceFlinger::previousFrameMissed() NO_THREAD_SAFETY_ANALYSIS {
+    // We are storing the last 2 present fences. If sf's phase offset is to be
+    // woken up before the actual vsync but targeting the next vsync, we need to check
+    // fence N-2
+    const sp<Fence>& fence =
+            mVsyncModulator.getOffsets().sf < mPhaseOffsets->getOffsetThresholdForNextVsync()
+            ? mPreviousPresentFences[0]
+            : mPreviousPresentFences[1];
+
+    return fence != Fence::NO_FENCE && (fence->getStatus() == Fence::Status::Unsignaled);
+}
+
 void SurfaceFlinger::onMessageReceived(int32_t what) NO_THREAD_SAFETY_ANALYSIS {
     ATRACE_CALL();
     switch (what) {
         case MessageQueue::INVALIDATE: {
-            bool frameMissed = mPreviousPresentFence != Fence::NO_FENCE &&
-                    (mPreviousPresentFence->getStatus() == Fence::Status::Unsignaled);
+            bool frameMissed = previousFrameMissed();
             bool hwcFrameMissed = mHadDeviceComposition && frameMissed;
             bool gpuFrameMissed = mHadClientComposition && frameMissed;
             ATRACE_INT("FrameMissed", static_cast<int>(frameMissed));
@@ -1626,7 +1632,7 @@ void SurfaceFlinger::onMessageReceived(int32_t what) NO_THREAD_SAFETY_ANALYSIS {
             }
 
             // For now, only propagate backpressure when missing a hwc frame.
-            if (hwcFrameMissed) {
+            if (hwcFrameMissed && !gpuFrameMissed) {
                 if (mPropagateBackpressure) {
                     signalLayerUpdate();
                     break;
@@ -1986,9 +1992,11 @@ void SurfaceFlinger::postComposition()
     }
 
     getBE().mDisplayTimeline.updateSignalTimes();
-    mPreviousPresentFence = displayDevice ? getHwComposer().getPresentFence(*displayDevice->getId())
-                                          : Fence::NO_FENCE;
-    auto presentFenceTime = std::make_shared<FenceTime>(mPreviousPresentFence);
+    mPreviousPresentFences[1] = mPreviousPresentFences[0];
+    mPreviousPresentFences[0] = displayDevice
+            ? getHwComposer().getPresentFence(*displayDevice->getId())
+            : Fence::NO_FENCE;
+    auto presentFenceTime = std::make_shared<FenceTime>(mPreviousPresentFences[0]);
     getBE().mDisplayTimeline.push(presentFenceTime);
 
     DisplayStatInfo stats;
@@ -2079,11 +2087,17 @@ void SurfaceFlinger::postComposition()
         }
     }
 
-    mTransactionCompletedThread.addPresentFence(mPreviousPresentFence);
+    mTransactionCompletedThread.addPresentFence(mPreviousPresentFences[0]);
     mTransactionCompletedThread.sendCallbacks();
 
     if (mLumaSampling && mRegionSamplingThread) {
         mRegionSamplingThread->notifyNewContent();
+    }
+
+    // Even though ATRACE_INT64 already checks if tracing is enabled, it doesn't prevent the
+    // side-effect of getTotalSize(), so we check that again here
+    if (ATRACE_ENABLED()) {
+        ATRACE_INT64("Total Buffer Size", GraphicBufferAllocator::get().getTotalSize());
     }
 }
 
@@ -2936,6 +2950,13 @@ void SurfaceFlinger::commitTransaction()
             if (l->isRemovedFromCurrentState()) {
                 latchAndReleaseBuffer(l);
             }
+
+            // If the layer has been removed and has no parent, then it will not be reachable
+            // when traversing layers on screen. Add the layer to the offscreenLayers set to
+            // ensure we can copy its current to drawing state.
+            if (!l->getParent()) {
+                mOffscreenLayers.emplace(l.get());
+            }
         }
         mLayersPendingRemoval.clear();
     }
@@ -2949,7 +2970,17 @@ void SurfaceFlinger::commitTransaction()
         // clear the "changed" flags in current state
         mCurrentState.colorMatrixChanged = false;
 
-        mDrawingState.traverseInZOrder([](Layer* layer) { layer->commitChildList(); });
+        mDrawingState.traverseInZOrder([&](Layer* layer) {
+            layer->commitChildList();
+
+            // If the layer can be reached when traversing mDrawingState, then the layer is no
+            // longer offscreen. Remove the layer from the offscreenLayer set.
+            if (mOffscreenLayers.count(layer)) {
+                mOffscreenLayers.erase(layer);
+            }
+        });
+
+        commitOffscreenLayers();
     });
 
     mTransactionPending = false;
@@ -2974,6 +3005,18 @@ void SurfaceFlinger::withTracingLock(std::function<void()> lockedOperation) {
     // Synchronize with Tracing thread
     if (mTracingEnabled) {
         lock.unlock();
+    }
+}
+
+void SurfaceFlinger::commitOffscreenLayers() {
+    for (Layer* offscreenLayer : mOffscreenLayers) {
+        offscreenLayer->traverseInZOrder(LayerVector::StateSet::Drawing, [](Layer* layer) {
+            uint32_t trFlags = layer->getTransactionFlags(eTransactionNeeded);
+            if (!trFlags) return;
+
+            layer->doTransaction(0);
+            layer->commitChildList();
+        });
     }
 }
 
@@ -3258,8 +3301,11 @@ bool SurfaceFlinger::doComposeSurfaces(const sp<DisplayDevice>& displayDevice,
                     break;
                 }
             }
-            if (needsProtected != renderEngine.isProtected() &&
-                renderEngine.useProtectedContext(needsProtected)) {
+            if (needsProtected != renderEngine.isProtected()) {
+                renderEngine.useProtectedContext(needsProtected);
+            }
+            if (needsProtected != display->getRenderSurface()->isProtected() &&
+                needsProtected == renderEngine.isProtected()) {
                 display->getRenderSurface()->setProtected(needsProtected);
             }
         }
@@ -3477,29 +3523,42 @@ uint32_t SurfaceFlinger::setTransactionFlags(uint32_t flags,
 }
 
 bool SurfaceFlinger::flushTransactionQueues() {
-    Mutex::Autolock _l(mStateLock);
+    // to prevent onHandleDestroyed from being called while the lock is held,
+    // we must keep a copy of the transactions (specifically the composer
+    // states) around outside the scope of the lock
+    std::vector<const TransactionState> transactions;
     bool flushedATransaction = false;
+    {
+        Mutex::Autolock _l(mStateLock);
 
-    auto it = mTransactionQueues.begin();
-    while (it != mTransactionQueues.end()) {
-        auto& [applyToken, transactionQueue] = *it;
+        auto it = mTransactionQueues.begin();
+        while (it != mTransactionQueues.end()) {
+            auto& [applyToken, transactionQueue] = *it;
 
-        while (!transactionQueue.empty()) {
-            const auto&
-                    [states, displays, flags, desiredPresentTime, uncacheBuffer, listenerCallbacks,
-                     postTime, privileged] = transactionQueue.front();
-            if (!transactionIsReadyToBeApplied(desiredPresentTime, states)) {
-                setTransactionFlags(eTransactionFlushNeeded);
-                break;
+            while (!transactionQueue.empty()) {
+                const auto& transaction = transactionQueue.front();
+                if (!transactionIsReadyToBeApplied(transaction.desiredPresentTime,
+                                                   transaction.states)) {
+                    setTransactionFlags(eTransactionFlushNeeded);
+                    break;
+                }
+                transactions.push_back(transaction);
+                applyTransactionState(transaction.states, transaction.displays, transaction.flags,
+                                      mPendingInputWindowCommands, transaction.desiredPresentTime,
+                                      transaction.buffer, transaction.callback,
+                                      transaction.postTime, transaction.privileged,
+                                      /*isMainThread*/ true);
+                transactionQueue.pop();
+                flushedATransaction = true;
             }
-            applyTransactionState(states, displays, flags, mPendingInputWindowCommands,
-                                  desiredPresentTime, uncacheBuffer, listenerCallbacks, postTime,
-                                  privileged, /*isMainThread*/ true);
-            transactionQueue.pop();
-            flushedATransaction = true;
-        }
 
-        it = (transactionQueue.empty()) ? mTransactionQueues.erase(it) : std::next(it, 1);
+            if (transactionQueue.empty()) {
+                it = mTransactionQueues.erase(it);
+                mTransactionCV.broadcast();
+            } else {
+                std::next(it, 1);
+            }
+        }
     }
     return flushedATransaction;
 }
@@ -3572,7 +3631,22 @@ void SurfaceFlinger::setTransactionState(const Vector<ComposerState>& states,
     }
 
     // If its TransactionQueue already has a pending TransactionState or if it is pending
-    if (mTransactionQueues.find(applyToken) != mTransactionQueues.end() ||
+    auto itr = mTransactionQueues.find(applyToken);
+    // if this is an animation frame, wait until prior animation frame has
+    // been applied by SF
+    if (flags & eAnimation) {
+        while (itr != mTransactionQueues.end()) {
+            status_t err = mTransactionCV.waitRelative(mStateLock, s2ns(5));
+            if (CC_UNLIKELY(err != NO_ERROR)) {
+                ALOGW_IF(err == TIMED_OUT,
+                         "setTransactionState timed out "
+                         "waiting for animation frame to apply");
+                break;
+            }
+            itr = mTransactionQueues.find(applyToken);
+        }
+    }
+    if (itr != mTransactionQueues.end() ||
         !transactionIsReadyToBeApplied(desiredPresentTime, states)) {
         mTransactionQueues[applyToken].emplace(states, displays, flags, desiredPresentTime,
                                                uncacheBuffer, listenerCallbacks, postTime,
@@ -4885,6 +4959,9 @@ void SurfaceFlinger::dumpAllLocked(const DumpArgs& args, std::string& result) co
     result.append(mScheduler->doDump() + "\n");
     StringAppendF(&result, "+  Smart video mode: %s\n\n", mUseSmart90ForVideo ? "on" : "off");
     result.append(mRefreshRateStats.doDump() + "\n");
+
+    result.append(mTimeStats->miniDump());
+    result.append("\n");
 }
 
 const Vector<sp<Layer>>& SurfaceFlinger::getLayerSortedByZForHwcDisplay(DisplayId displayId) {
