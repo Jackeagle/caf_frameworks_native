@@ -1543,6 +1543,10 @@ status_t SurfaceComposerClient::setDisplayBrightness(const sp<IBinder>& displayT
     return ComposerService::getComposerService()->setDisplayBrightness(displayToken, brightness);
 }
 
+status_t SurfaceComposerClient::notifyPowerHint(int32_t hintId) {
+    return ComposerService::getComposerService()->notifyPowerHint(hintId);
+}
+
 // ----------------------------------------------------------------------------
 
 status_t ScreenshotClient::capture(const sp<IBinder>& display, const ui::Dataspace reqDataSpace,
@@ -1570,6 +1574,13 @@ status_t ScreenshotClient::capture(const sp<IBinder>& display, const ui::Dataspa
     bool ignored;
     return capture(display, reqDataSpace, reqPixelFormat, sourceCrop, reqWidth, reqHeight,
                    useIdentityTransform, rotation, false, outBuffer, ignored);
+}
+
+status_t ScreenshotClient::capture(uint64_t displayOrLayerStack, ui::Dataspace* outDataspace,
+                                   sp<GraphicBuffer>* outBuffer) {
+    sp<ISurfaceComposer> s(ComposerService::getComposerService());
+    if (s == nullptr) return NO_INIT;
+    return s->captureScreen(displayOrLayerStack, outDataspace, outBuffer);
 }
 
 status_t ScreenshotClient::captureLayers(const sp<IBinder>& layerHandle,
