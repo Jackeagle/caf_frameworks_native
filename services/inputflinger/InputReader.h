@@ -212,7 +212,8 @@ struct InputReaderConfiguration {
 private:
     DisplayViewport mInternalDisplay;
     DisplayViewport mExternalDisplay;
-    DisplayViewport mTertiaryDisplay;
+    DisplayViewport mTertiaryDisplay1;
+    DisplayViewport mTertiaryDisplay2;
     Vector<DisplayViewport> mVirtualDisplays;
 };
 
@@ -561,8 +562,8 @@ public:
     inline bool isExternal() { return mIsExternal; }
     inline void setExternal(bool external) { mIsExternal = external; }
 
-    inline bool isTertiary() { return mIsTertiary; }
-    inline void setTertiary(bool tertiary) { mIsTertiary = tertiary; }
+    inline int isTertiary() { return mIsTertiary; }
+    inline void setTertiary(int tertiary) { mIsTertiary = tertiary; }
 
     inline void setMic(bool hasMic) { mHasMic = hasMic; }
     inline bool hasMic() const { return mHasMic; }
@@ -635,7 +636,7 @@ private:
 
     uint32_t mSources;
     bool mIsExternal;
-    bool mIsTertiary;
+    int mIsTertiary;
     bool mHasMic;
     bool mDropUntilNextSync;
 
@@ -1308,7 +1309,7 @@ protected:
         DeviceType deviceType;
         bool hasAssociatedDisplay;
         bool associatedDisplayIsExternal;
-        bool associatedDisplayIsTertiary;
+        int associatedDisplayIsTertiary;
         bool orientationAware;
         bool hasButtonUnderPad;
         String8 uniqueDisplayId;

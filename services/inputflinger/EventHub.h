@@ -146,7 +146,10 @@ enum {
     INPUT_DEVICE_CLASS_EXTERNAL      = 0x80000000,
 
     /* The input device is tertiary. */
-    INPUT_DEVICE_CLASS_TERTIARY      = 0x20000000,
+    INPUT_DEVICE_CLASS_TERTIARY1      = 0x20000000,
+
+    /* The input device is tertiary. */
+    INPUT_DEVICE_CLASS_TERTIARY2      = 0x10000000,
 };
 
 /*
@@ -490,7 +493,8 @@ private:
 #ifdef TERTIARY_TOUCH
     String8 mBuiltinTouchScreenPhy;
     String8 mExternalTouchScreenPhy;
-    String8 mTertiaryTouchScreenPhy;
+    String8 mTertiaryTouchScreenPhy1;
+    String8 mTertiaryTouchScreenPhy2;
 #endif
 };
 
