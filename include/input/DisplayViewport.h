@@ -97,7 +97,8 @@ enum class ViewportType : int32_t {
     VIEWPORT_INTERNAL = 1,
     VIEWPORT_EXTERNAL = 2,
     VIEWPORT_VIRTUAL = 3,
-    VIEWPORT_TERTIARY = 4,
+    VIEWPORT_TERTIARY1 = 4,
+    VIEWPORT_TERTIARY2 = 5,
 };
 
 } // namespace android
