@@ -940,8 +940,7 @@ private:
     // debug open file counit by process
     struct {
       const char *debugCountOpenFiles = "/data/misc/wmtrace/sfopenfiles.txt";
-      int debugFileCountFd = -1;
-      int maxFilecount = 2048;
+      int lastFdcount = 2048;
     } mFileOpen;
     void printOpenFds();
 
@@ -1050,6 +1049,7 @@ private:
     volatile nsecs_t mDebugInTransaction = 0;
     bool mForceFullDamage = false;
     bool mPropagateBackpressure = true;
+    bool mPropagateBackpressureClientComposition = false;
     std::unique_ptr<SurfaceInterceptor> mInterceptor;
     SurfaceTracing mTracing{*this};
     bool mTracingEnabled = false;
