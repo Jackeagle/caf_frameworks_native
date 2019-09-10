@@ -126,6 +126,7 @@
 #include <layerproto/LayerProtoParser.h>
 #include "SurfaceFlingerProperties.h"
 #include "gralloc_priv.h"
+#include "frame_extn_intf.h"
 #include "smomo_interface.h"
 
 namespace android {
@@ -426,16 +427,36 @@ SurfaceFlinger::SurfaceFlinger(Factory& factory) : SurfaceFlinger(factory, SkipI
         ALOGW("Unable to open libdolphin.so: %s.", dlerror());
     } else {
         mDolphinInit = (bool (*) ())dlsym(mDolphinHandle, "dolphinInit");
-        mDolphinOnFrameAvailable =
-            (void (*) (bool, int, int32_t, int32_t, String8))dlsym(mDolphinHandle,
-                                                                   "dolphinOnFrameAvailable");
-        mDolphinMonitor = (bool (*) (int))dlsym(mDolphinHandle, "dolphinMonitor");
+        mDolphinMonitor = (bool (*) (int, nsecs_t))dlsym(mDolphinHandle, "dolphinMonitor");
+        mDolphinScaling = (void (*)(int, int))dlsym(mDolphinHandle, "dolphinScaling");
         mDolphinRefresh = (void (*) ())dlsym(mDolphinHandle, "dolphinRefresh");
-        if (mDolphinInit != nullptr && mDolphinOnFrameAvailable != nullptr &&
-            mDolphinMonitor != nullptr && mDolphinRefresh != nullptr) {
+        if (mDolphinInit && mDolphinMonitor && mDolphinScaling && mDolphinRefresh) {
             if (mDolphinInit()) mDolphinFuncsEnabled = true;
         }
         if (!mDolphinFuncsEnabled) dlclose(mDolphinHandle);
+    }
+
+
+    mFrameExtnLibHandle = dlopen(EXTENSION_LIBRARY_NAME, RTLD_NOW);
+    if (!mFrameExtnLibHandle) {
+        ALOGE("Unable to open libframeextension.so: %s.", dlerror());
+    } else {
+        mCreateFrameExtnFunc =
+            (bool (*) (composer::FrameExtnIntf**))(dlsym(mFrameExtnLibHandle,
+                                                                CREATE_FRAME_EXTN_INTERFACE));
+        mDestroyFrameExtnFunc =
+            (bool (*) (composer::FrameExtnIntf*))(dlsym(mFrameExtnLibHandle,
+                                                                 DESTROY_FRAME_EXTN_INTERFACE));
+        if (mCreateFrameExtnFunc && mDestroyFrameExtnFunc) {
+            mCreateFrameExtnFunc(&mFrameExtn);
+            if (!mFrameExtn) {
+                ALOGE("Frame Extension Object create failed.");
+                dlclose(mFrameExtnLibHandle);
+            }
+        } else {
+            ALOGE("Can't load libframeextension symbols: %s", dlerror());
+            dlclose(mFrameExtnLibHandle);
+        }
     }
 }
 
@@ -447,10 +468,7 @@ void SurfaceFlinger::onFirstRef()
 SurfaceFlinger::~SurfaceFlinger()
 {
     if (mDolphinFuncsEnabled) dlclose(mDolphinHandle);
-    // debug total open files
-    if (mFileOpen.debugFileCountFd >= 0) {
-        close(mFileOpen.debugFileCountFd);
-    }
+    if (mFrameExtn) dlclose(mFrameExtnLibHandle);
 
     if(mUseSmoMo) {
         mSmoMoDestroyFunc(mSmoMo);
@@ -616,13 +634,16 @@ void SurfaceFlinger::bootFinished()
         mBootStage = BootStage::FINISHED;
 
         // set the refresh rate according to the policy
-        const auto& performanceRefreshRate =
-                mRefreshRateConfigs.getRefreshRate(RefreshRateType::PERFORMANCE);
+        int maxSupportedType = (int)RefreshRateType::PERF2;
+        int minSupportedType = (int)RefreshRateType::LOW0;
 
-        if (performanceRefreshRate && isDisplayConfigAllowed(performanceRefreshRate->configId)) {
-            setRefreshRateTo(RefreshRateType::PERFORMANCE, Scheduler::ConfigEvent::None);
-        } else {
-            setRefreshRateTo(RefreshRateType::DEFAULT, Scheduler::ConfigEvent::None);
+        for (int type = maxSupportedType; type >= minSupportedType; type--) {
+            RefreshRateType refreshRateType = static_cast<RefreshRateType>(type);
+            const auto& refreshRate = mRefreshRateConfigs.getRefreshRate(refreshRateType);
+            if (refreshRate && isDisplayConfigAllowed(refreshRate->configId)) {
+                setRefreshRateTo(refreshRateType, Scheduler::ConfigEvent::None);
+                return;
+            }
         }
     }));
 }
@@ -783,9 +804,6 @@ void SurfaceFlinger::init() {
     mRefreshRateConfigs.setActiveConfig(active_config);
     mRefreshRateConfigs.populate(getHwComposer().getConfigs(*display->getId()));
     mRefreshRateStats.setConfigMode(active_config);
-
-    // debug open files count by process
-     mFileOpen.debugFileCountFd = open(mFileOpen.debugCountOpenFiles, O_WRONLY|O_CREAT,0664);
 
     if (mUseSmoMo) {
         mSmoMoLibHandle = dlopen("libsmomo.qti.so", RTLD_NOW);
@@ -1677,6 +1695,7 @@ void SurfaceFlinger::onRefreshReceived(int sequenceId, hwc2_display_t /*hwcDispl
 void SurfaceFlinger::setVsyncEnabled(bool enabled) {
     ATRACE_CALL();
     Mutex::Autolock lock(mStateLock);
+    Mutex::Autolock lockVsync(mVsyncLock);
     auto displayId = getInternalDisplayIdLocked();
     if (mNextVsyncSource) {
         // Disable current vsync source before enabling the next source
@@ -1854,13 +1873,23 @@ void SurfaceFlinger::onMessageReceived(int32_t what) NO_THREAD_SAFETY_ANALYSIS {
                             if (maxQueuedFrames < layerQueuedFrames &&
                                     !layer->visibleNonTransparentRegion.isEmpty()) {
                                 maxQueuedFrames = layerQueuedFrames;
+                                mNameLayerMax = layer->getName();
                             }
                         }
                     }
                 });
-                if(mDolphinMonitor(maxQueuedFrames)) {
+                mMaxQueuedFrames = maxQueuedFrames;
+                DisplayStatInfo stats;
+                mScheduler->getDisplayStatInfo(&stats);
+                if(mDolphinMonitor(maxQueuedFrames, stats.vsyncPeriod)) {
                     signalLayerUpdate();
+                    if (mFrameExtn) {
+                        mNumIdle++;
+                    }
                     break;
+                }
+                if (mFrameExtn) {
+                    mNumIdle++;
                 }
             }
 
@@ -1882,13 +1911,24 @@ void SurfaceFlinger::onMessageReceived(int32_t what) NO_THREAD_SAFETY_ANALYSIS {
                 // repaint
                 signalRefresh();
             }
+            if (mFrameExtn && mDolphinFuncsEnabled) {
+                if (!refreshNeeded) {
+                    mDolphinScaling(mNumIdle, mMaxQueuedFrames);
+                }
+            }
             break;
         }
         case MessageQueue::REFRESH: {
+            if (mFrameExtn) {
+                mRefreshTimeStamp = systemTime(SYSTEM_TIME_MONOTONIC);
+            }
             if (mDolphinFuncsEnabled) {
                 mDolphinRefresh();
             }
             handleMessageRefresh();
+            if (mFrameExtn) {
+                mNumIdle = 0;
+            }
             break;
         }
     }
@@ -2540,7 +2580,9 @@ sp<DisplayDevice> SurfaceFlinger::getVsyncSource() {
 
 void SurfaceFlinger::updateVsyncSource()
             NO_THREAD_SAFETY_ANALYSIS {
+    Mutex::Autolock lock(mVsyncLock);
     nsecs_t vsync = getVsyncPeriod();
+    mNextVsyncSource = getVsyncSource();
 
     if (mNextVsyncSource == NULL) {
         // Switch off vsync for the last enabled source
@@ -2854,7 +2896,6 @@ void SurfaceFlinger::processDisplayHotplugEventsLocked() {
                 mCurrentState.displays.removeItemsAt(index);
             }
             mDisplaysList.remove(getDisplayDeviceLocked(mPhysicalDisplayTokens[info->id]));
-            mNextVsyncSource = getVsyncSource();
             updateVsyncSource();
             mPhysicalDisplayTokens.erase(info->id);
         }
@@ -4803,8 +4844,6 @@ void SurfaceFlinger::setPowerModeInternal(const sp<DisplayDevice>& display, int 
 
     display->setPowerMode(mode);
 
-    mNextVsyncSource = getVsyncSource();
-
     // Dummy display created by LibSurfaceFlinger unit test
     // for setPowerModeInternal test cases.
     bool isDummyDisplay = (std::find(mDisplaysList.begin(),
@@ -5104,6 +5143,13 @@ void SurfaceFlinger::dumpMemoryAllocations(bool dump)
     if (!dump) {
         return;
     }
+
+    {
+       Mutex::Autolock lock(mLayerCountLock);
+       if (mNumLayers < 50) {
+           return;
+       }
+    }
     std::string dumpsys;
     GraphicBufferAllocator& alloc(GraphicBufferAllocator::get());
     alloc.dump(dumpsys);
@@ -5162,6 +5208,10 @@ void SurfaceFlinger::printOpenFds() {
     if (!dir) {
         return;
     }
+    int debugFileCountFd = open(mFileOpen.debugCountOpenFiles, O_WRONLY|O_CREAT|O_APPEND, 0664);
+    if (debugFileCountFd < 0) {
+        return;
+    }
     struct dirent* de;
     char timeStamp[32];
     char hms[32];
@@ -5170,13 +5220,18 @@ void SurfaceFlinger::printOpenFds() {
     struct timeval tv;
     struct tm *ptm;
     int count = 1;
+    static int maxDumpCount = 200;
+    if (!maxDumpCount--) {
+        maxDumpCount = 200;
+        lseek(debugFileCountFd, 0, SEEK_SET);
+    }
     gettimeofday(&tv, NULL);
     ptm = localtime(&tv.tv_sec);
     strftime (hms, sizeof (hms), "%H:%M:%S", ptm);
     millis = tv.tv_usec / 1000;
     snprintf(timeStamp, sizeof(timeStamp), "Timestamp: %s.%03ld\n", hms, millis);
-    write(mFileOpen.debugFileCountFd, timeStamp, strlen(timeStamp));
-    write(mFileOpen.debugFileCountFd, formatting, strlen(formatting));
+    write(debugFileCountFd, timeStamp, strlen(timeStamp));
+    write(debugFileCountFd, formatting, strlen(formatting));
     while ((de = readdir(dir))) {
         if (!strcmp(de->d_name, ".") || !strcmp(de->d_name, "..")) {
             continue;
@@ -5189,11 +5244,12 @@ void SurfaceFlinger::printOpenFds() {
              char formatString[300 +3];
              name[name_size] = '\0';
              snprintf(formatString, sizeof(formatString) - 1, "%d. %s\n", count++, name);
-             write(mFileOpen.debugFileCountFd, formatString, strlen(formatString));
+             write(debugFileCountFd, formatString, strlen(formatString));
         }
     }
     closedir(dir);
-    write(mFileOpen.debugFileCountFd, formatting, strlen(formatting));
+    write(debugFileCountFd, formatting, strlen(formatting));
+    close(debugFileCountFd);
 }
 
 void SurfaceFlinger::dumpDrawCycle(bool prePrepare) {
@@ -5204,22 +5260,14 @@ void SurfaceFlinger::dumpDrawCycle(bool prePrepare) {
     // Collect dumpsys again after commit and replace.
 
     // debug total open files count;
-    static int maxdumpCount =200;
-    if (mFileOpen.debugFileCountFd >= 0) {
-        int tmpFd = dup(mFileOpen.debugFileCountFd);
-        if (tmpFd >=0) {
-            if (tmpFd > (mFileOpen.maxFilecount + 100)) {
-                ALOGE("Total file open count =%d", tmpFd);
-                printOpenFds();
-                mFileOpen.maxFilecount = tmpFd;
-            }
-            close(tmpFd);
-            tmpFd = -1;
-        }
-        if (!maxdumpCount--) {
-            maxdumpCount =200;
-            lseek(mFileOpen.debugFileCountFd,0,SEEK_SET);
-        }
+    int tmpFd = dup(0);
+    if (tmpFd > (mFileOpen.lastFdcount + 100) && prePrepare) {
+        ALOGE("Total open file count = %d", tmpFd);
+        printOpenFds();
+        mFileOpen.lastFdcount = tmpFd;
+    }
+    if (tmpFd > 0) {
+        close(tmpFd);
     }
     if (!mFileDump.running && !mFileDump.replaceAfterCommit) {
         return;
