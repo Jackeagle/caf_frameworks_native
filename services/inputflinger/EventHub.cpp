@@ -208,7 +208,7 @@ EventHub::EventHub(void) :
 
 #ifdef TERTIARY_TOUCH
     char p[PROPERTY_VALUE_MAX];
-    property_get("persist.mtmd.display0_touch", p, "usb-xhci-hcd.0.auto-1.4/input0");
+    property_get("persist.mtmd.display0_touch", p, "usb-xhci-hcd.0.auto-1.1/input0");
     mBuiltinTouchScreenPhy.setTo(p);
     memset(p, 0, PROPERTY_VALUE_MAX);
 
@@ -217,7 +217,12 @@ EventHub::EventHub(void) :
     memset(p, 0, PROPERTY_VALUE_MAX);
 
     property_get("persist.mtmd.display2_touch", p, "usb-xhci-hcd.0.auto-1.3/input0");
-    mTertiaryTouchScreenPhy.setTo(p);
+    mTertiaryTouchScreenPhy1.setTo(p);
+    memset(p, 0, PROPERTY_VALUE_MAX);
+
+    property_get("persist.mtmd.display3_touch", p, "usb-xhci-hcd.0.auto-1.4/input0");
+    mTertiaryTouchScreenPhy2.setTo(p);
+    memset(p, 0, PROPERTY_VALUE_MAX);
 #endif
 
     mEpollFd = epoll_create(EPOLL_SIZE_HINT);
@@ -1374,7 +1379,9 @@ status_t EventHub::openDeviceLocked(const char *devicePath) {
         if ( devType == 1)
             device->classes |= INPUT_DEVICE_CLASS_EXTERNAL;
         else if ( devType == 2)
-            device->classes |= INPUT_DEVICE_CLASS_TERTIARY;
+            device->classes |= INPUT_DEVICE_CLASS_TERTIARY1;
+        else if ( devType == 3)
+            device->classes |= INPUT_DEVICE_CLASS_TERTIARY2;
     } else if (isExternalDeviceLocked(device))
         device->classes |= INPUT_DEVICE_CLASS_EXTERNAL;
 
@@ -1567,11 +1574,16 @@ uint32_t EventHub::getTouchInputDeviceType(Device* device) {
             value = 1;
         } else if (mExternalTouchScreenPhy == device->identifier.location.string()) {
             value = 1;
-        } else if (mTertiaryTouchScreenPhy.isEmpty()) {
-            mTertiaryTouchScreenPhy.setTo((const String8)device->identifier.location.string());
+        } else if (mTertiaryTouchScreenPhy1.isEmpty()) {
+            mTertiaryTouchScreenPhy1.setTo((const String8)device->identifier.location.string());
             value = 2;
-        } else if (mTertiaryTouchScreenPhy == device->identifier.location.string()) {
+        } else if (mTertiaryTouchScreenPhy1 == device->identifier.location.string()) {
             value = 2;
+        } else if (mTertiaryTouchScreenPhy2.isEmpty()) {
+            mTertiaryTouchScreenPhy2.setTo((const String8)device->identifier.location.string());
+            value = 3;
+        } else if (mTertiaryTouchScreenPhy2 == device->identifier.location.string()) {
+            value = 3;
         } else {
             ALOGV("getTouchInputDeviceClass - device id %d is not with known touch device class",
                 device->id);

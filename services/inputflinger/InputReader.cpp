@@ -270,8 +270,10 @@ bool InputReaderConfiguration::getDisplayViewport(ViewportType viewportType,
         viewport = &mExternalDisplay;
     } else if (viewportType == ViewportType::VIEWPORT_INTERNAL) {
         viewport = &mInternalDisplay;
-    } else if (viewportType == ViewportType::VIEWPORT_TERTIARY) {
-        viewport = &mTertiaryDisplay;
+    } else if (viewportType == ViewportType::VIEWPORT_TERTIARY1) {
+        viewport = &mTertiaryDisplay1;
+    } else if (viewportType == ViewportType::VIEWPORT_TERTIARY2) {
+        viewport = &mTertiaryDisplay2;
     }
 
     if (viewport != NULL && viewport->displayId >= 0) {
@@ -287,8 +289,10 @@ void InputReaderConfiguration::setPhysicalDisplayViewport(ViewportType viewportT
         mExternalDisplay = viewport;
     } else if (viewportType == ViewportType::VIEWPORT_INTERNAL) {
         mInternalDisplay = viewport;
-    } else if (viewportType == ViewportType::VIEWPORT_TERTIARY) {
-        mTertiaryDisplay = viewport;
+    } else if (viewportType == ViewportType::VIEWPORT_TERTIARY1) {
+        mTertiaryDisplay1 = viewport;
+    } else if (viewportType == ViewportType::VIEWPORT_TERTIARY2) {
+        mTertiaryDisplay2 = viewport;
     }
 }
 
@@ -302,8 +306,10 @@ void InputReaderConfiguration::dump(std::string& dump) const {
     dumpViewport(dump, mInternalDisplay);
     dump += INDENT4 "ViewportExternal:\n";
     dumpViewport(dump, mExternalDisplay);
-    dump.append(INDENT4 "ViewportTertiary:\n");
-    dumpViewport(dump, mTertiaryDisplay);
+    dump.append(INDENT4 "ViewportTertiary1:\n");
+    dumpViewport(dump, mTertiaryDisplay1);
+    dump.append(INDENT4 "ViewportTertiary2:\n");
+    dumpViewport(dump, mTertiaryDisplay2);
     dump += INDENT4 "ViewportVirtual:\n";
     for (const DisplayViewport& viewport : mVirtualDisplays) {
         dumpViewport(dump, viewport);
@@ -532,8 +538,12 @@ InputDevice* InputReader::createDeviceLocked(int32_t deviceId, int32_t controlle
     }
 
     // Tertiary display
-    if (classes & INPUT_DEVICE_CLASS_TERTIARY) {
-        device->setTertiary(true);
+    if (classes & INPUT_DEVICE_CLASS_TERTIARY1) {
+        device->setTertiary(1);
+    }
+
+    if (classes & INPUT_DEVICE_CLASS_TERTIARY2) {
+        device->setTertiary(2);
     }
 
     // Devices with mics.
@@ -1052,7 +1062,7 @@ InputDevice::InputDevice(InputReaderContext* context, int32_t id, int32_t genera
         int32_t controllerNumber, const InputDeviceIdentifier& identifier, uint32_t classes) :
         mContext(context), mId(id), mGeneration(generation), mControllerNumber(controllerNumber),
         mIdentifier(identifier), mClasses(classes),
-        mSources(0), mIsExternal(false), mIsTertiary(false), mHasMic(false), mDropUntilNextSync(false) {
+        mSources(0), mIsExternal(false), mIsTertiary(0), mHasMic(false), mDropUntilNextSync(false) {
 }
 
 InputDevice::~InputDevice() {
@@ -3399,7 +3409,7 @@ void TouchInputMapper::configureParameters() {
 
     mParameters.hasAssociatedDisplay = false;
     mParameters.associatedDisplayIsExternal = false;
-    mParameters.associatedDisplayIsTertiary = false;
+    mParameters.associatedDisplayIsTertiary = 0;
     if (mParameters.orientationAware
             || mParameters.deviceType == Parameters::DEVICE_TYPE_TOUCH_SCREEN
             || mParameters.deviceType == Parameters::DEVICE_TYPE_POINTER) {
@@ -3538,8 +3548,10 @@ void TouchInputMapper::configureSurface(nsecs_t when, bool* outResetNeeded) {
 
         if (mParameters.associatedDisplayIsExternal) {
             viewportTypeToUse = ViewportType::VIEWPORT_EXTERNAL;
-        } else if (mParameters.associatedDisplayIsTertiary) {
-            viewportTypeToUse = ViewportType::VIEWPORT_TERTIARY;
+        } else if (mParameters.associatedDisplayIsTertiary == 1) {
+            viewportTypeToUse = ViewportType::VIEWPORT_TERTIARY1;
+        } else if (mParameters.associatedDisplayIsTertiary == 2) {
+            viewportTypeToUse = ViewportType::VIEWPORT_TERTIARY2;
         } else if (!mParameters.uniqueDisplayId.isEmpty()) {
             // If the IDC file specified a unique display Id, then it expects to be linked to a
             // virtual display with the same unique ID.
