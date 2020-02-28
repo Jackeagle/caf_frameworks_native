@@ -152,8 +152,8 @@ int Surface::hook_dequeueBuffer_DEPRECATED(ANativeWindow* window,
     if (waitResult != OK) {
         ALOGE("dequeueBuffer_DEPRECATED: Fence::wait returned an error: %d",
                 waitResult);
-//        c->cancelBuffer(buf, -1);
-//        return waitResult;
+        c->cancelBuffer(buf, -1);
+        return waitResult;
     }
     *buffer = buf;
     return result;
