@@ -641,6 +641,12 @@ Error Display::setOutputBuffer(const sp<GraphicBuffer>& buffer,
     return static_cast<Error>(intError);
 }
 
+Error Display::setDisplayElapseTime(uint64_t timeStamp)
+{
+    auto intError = mComposer.setDisplayElapseTime(mId, timeStamp);
+    return static_cast<Error>(intError);
+}
+
 Error Display::setPowerMode(PowerMode mode)
 {
     auto intMode = static_cast<Hwc2::IComposerClient::PowerMode>(mode);
@@ -1040,6 +1046,20 @@ Error Layer::setInfo(uint32_t type, uint32_t appId)
 {
   auto intError = mComposer.setLayerInfo(mDisplayId, mId, type, appId);
   return static_cast<Error>(intError);
+}
+
+Error Layer::setType(uint32_t type)
+{
+    if (type == mType) {
+        return Error::None;
+    }
+    auto intError = mComposer.setLayerType(mDisplayId, mId, type);
+    Error error = static_cast<Error>(intError);
+    if (error != Error::None) {
+        return error;
+    }
+    mType = type;
+    return error;
 }
 
 // Composer HAL 2.3
